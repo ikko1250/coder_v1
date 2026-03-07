@@ -12,7 +12,6 @@ use std::sync::{Arc, OnceLock};
 
 // ─── 定数 ────────────────────────────────────────────────────────────────────
 
-const DEFAULT_PAGE_SIZE: usize = 100;
 const JAPANESE_FONT_NAME: &str = "jp_ui_font";
 const TREE_HEADERS: [&str; 6] = [
     "No",
@@ -269,14 +268,12 @@ fn load_records(path: &PathBuf) -> Result<Vec<CsvRecord>, String> {
 
 struct App {
     csv_path: PathBuf,
-    page_size: usize,
     all_records: Vec<CsvRecord>,
     filtered_indices: Vec<usize>,
     filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
     selected_filter_values: HashMap<FilterColumn, BTreeSet<String>>,
     active_filter_column: FilterColumn,
-    page_index: usize,
-    selected_row: Option<usize>, // current_page_indices 内のインデックス
+    selected_row: Option<usize>, // filtered_indices 内のインデックス
     pending_tree_scroll: Option<TreeScrollRequest>,
     error_message: Option<String>,
     // キャッシュ: 選択中レコードのセグメント
@@ -284,16 +281,14 @@ struct App {
 }
 
 impl App {
-    fn new(csv_path: PathBuf, page_size: usize) -> Self {
+    fn new(csv_path: PathBuf) -> Self {
         let mut app = Self {
             csv_path: csv_path.clone(),
-            page_size,
             all_records: Vec::new(),
             filtered_indices: Vec::new(),
             filter_options: HashMap::new(),
             selected_filter_values: HashMap::new(),
             active_filter_column: FilterColumn::MatchedCategories,
-            page_index: 0,
             selected_row: None,
             pending_tree_scroll: None,
             error_message: None,
@@ -311,11 +306,10 @@ impl App {
                 self.filter_options = build_filter_options(&self.all_records);
                 self.selected_filter_values.clear();
                 self.filtered_indices = (0..self.all_records.len()).collect();
-                self.page_index = 0;
                 self.cached_segments = None;
                 self.pending_tree_scroll = None;
                 self.set_selected_row(None);
-                self.select_first_row_on_current_page(Some(egui::Align::Min));
+                self.select_first_filtered_row(Some(egui::Align::Min));
                 self.error_message = None;
             }
             Err(e) => {
@@ -324,21 +318,8 @@ impl App {
         }
     }
 
-    fn total_pages(&self) -> usize {
-        if self.filtered_indices.is_empty() {
-            return 1;
-        }
-        (self.filtered_indices.len() + self.page_size - 1) / self.page_size
-    }
-
-    fn current_page_indices(&self) -> &[usize] {
-        let start = self.page_index * self.page_size;
-        let end = (start + self.page_size).min(self.filtered_indices.len());
-        &self.filtered_indices[start..end]
-    }
-
     fn set_selected_row(&mut self, selected_row: Option<usize>) {
-        let next = selected_row.filter(|&idx| idx < self.current_page_indices().len());
+        let next = selected_row.filter(|&idx| idx < self.filtered_indices.len());
         if self.selected_row != next {
             self.selected_row = next;
             self.cached_segments = None;
@@ -352,8 +333,8 @@ impl App {
         });
     }
 
-    fn select_first_row_on_current_page(&mut self, align: Option<egui::Align>) {
-        let next = if self.current_page_indices().is_empty() {
+    fn select_first_filtered_row(&mut self, align: Option<egui::Align>) {
+        let next = if self.filtered_indices.is_empty() {
             None
         } else {
             Some(0)
@@ -362,29 +343,8 @@ impl App {
         self.request_tree_scroll_to_selected_row(align);
     }
 
-    fn select_last_row_on_current_page(&mut self, align: Option<egui::Align>) {
-        self.set_selected_row(self.current_page_indices().len().checked_sub(1));
-        self.request_tree_scroll_to_selected_row(align);
-    }
-
-    fn go_to_previous_page(&mut self) {
-        if self.page_index > 0 {
-            self.page_index -= 1;
-            self.cached_segments = None;
-            self.select_last_row_on_current_page(Some(egui::Align::Max));
-        }
-    }
-
-    fn go_to_next_page(&mut self) {
-        if self.page_index + 1 < self.total_pages() {
-            self.page_index += 1;
-            self.cached_segments = None;
-            self.select_first_row_on_current_page(Some(egui::Align::Min));
-        }
-    }
-
     fn move_selection_up(&mut self) {
-        if self.filtered_indices.is_empty() || self.current_page_indices().is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
 
@@ -393,18 +353,14 @@ impl App {
                 self.set_selected_row(Some(idx - 1));
                 self.request_tree_scroll_to_selected_row(None);
             }
-            Some(_) if self.page_index > 0 => {
-                self.page_index -= 1;
-                self.select_last_row_on_current_page(Some(egui::Align::Max));
-            }
-            None => self.select_first_row_on_current_page(Some(egui::Align::Min)),
+            None => self.select_first_filtered_row(Some(egui::Align::Min)),
             _ => {}
         }
     }
 
     fn move_selection_down(&mut self) {
-        let current_len = self.current_page_indices().len();
-        if self.filtered_indices.is_empty() || current_len == 0 {
+        let current_len = self.filtered_indices.len();
+        if current_len == 0 {
             return;
         }
 
@@ -413,11 +369,7 @@ impl App {
                 self.set_selected_row(Some(idx + 1));
                 self.request_tree_scroll_to_selected_row(None);
             }
-            Some(_) if self.page_index + 1 < self.total_pages() => {
-                self.page_index += 1;
-                self.select_first_row_on_current_page(Some(egui::Align::Min));
-            }
-            None => self.select_first_row_on_current_page(Some(egui::Align::Min)),
+            None => self.select_first_filtered_row(Some(egui::Align::Min)),
             _ => {}
         }
     }
@@ -445,8 +397,8 @@ impl App {
     }
 
     fn selected_record(&self) -> Option<&CsvRecord> {
-        let page_idx = self.selected_row?;
-        let record_idx = *self.current_page_indices().get(page_idx)?;
+        let filtered_idx = self.selected_row?;
+        let record_idx = *self.filtered_indices.get(filtered_idx)?;
         self.all_records.get(record_idx)
     }
 
@@ -457,10 +409,9 @@ impl App {
             .enumerate()
             .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
             .collect();
-        self.page_index = 0;
         self.pending_tree_scroll = None;
         self.set_selected_row(None);
-        self.select_first_row_on_current_page(Some(egui::Align::Min));
+        self.select_first_filtered_row(Some(egui::Align::Min));
     }
 
     fn record_matches_filters(&self, record: &CsvRecord) -> bool {
@@ -587,31 +538,17 @@ impl App {
             }
 
             ui.separator();
-
-            let can_prev = self.page_index > 0;
-            if ui
-                .add_enabled(can_prev, egui::Button::new("◀ 前の100件"))
-                .clicked()
-            {
-                self.go_to_previous_page();
-            }
-
-            let can_next = self.page_index + 1 < self.total_pages();
-            if ui
-                .add_enabled(can_next, egui::Button::new("次の100件 ▶"))
-                .clicked()
-            {
-                self.go_to_next_page();
-            }
-
-            let total = self.total_pages();
-            ui.label(format!("{} / {}", self.page_index + 1, total));
-            ui.separator();
+            let selected_position = self
+                .selected_row
+                .map(|idx| idx + 1)
+                .map(|position| position.to_string())
+                .unwrap_or_else(|| "-".to_string());
             ui.label(format!(
-                "総件数: {} 件  抽出後: {} 件  表示: {} 件",
+                "総件数: {} 件  抽出後: {} 件  選択: {} / {}",
                 self.all_records.len(),
                 self.filtered_indices.len(),
-                self.current_page_indices().len()
+                selected_position,
+                self.filtered_indices.len()
             ));
         });
     }
@@ -728,7 +665,7 @@ impl App {
     }
 
     fn draw_tree(&mut self, ui: &mut Ui) {
-        let page_record_indices = self.current_page_indices();
+        let filtered_indices = &self.filtered_indices;
         let selected_row = self.selected_row;
         let pending_tree_scroll = self.pending_tree_scroll;
         let mut new_selected = selected_row;
@@ -745,7 +682,7 @@ impl App {
             .column(Column::initial(92.0).at_least(72.0).clip(true));
 
         if let Some(scroll_request) = pending_tree_scroll {
-            if scroll_request.row_index < page_record_indices.len() {
+            if scroll_request.row_index < filtered_indices.len() {
                 table = table.scroll_to_row(scroll_request.row_index, scroll_request.align);
             }
         }
@@ -759,9 +696,9 @@ impl App {
                 }
             })
             .body(|mut body| {
-                body.rows(22.0, page_record_indices.len(), |mut row| {
+                body.rows(22.0, filtered_indices.len(), |mut row| {
                     let i = row.index();
-                    let record = &self.all_records[page_record_indices[i]];
+                    let record = &self.all_records[filtered_indices[i]];
                     let is_selected = selected_row == Some(i);
 
                     let values = [
@@ -1008,12 +945,6 @@ fn main() {
         PathBuf::from("抑制区域_段落_1.0.csv")
     };
 
-    let page_size = args
-        .windows(2)
-        .find(|w| w[0] == "--page-size")
-        .and_then(|w| w[1].parse::<usize>().ok())
-        .unwrap_or(DEFAULT_PAGE_SIZE);
-
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("CSV Highlight Viewer")
@@ -1026,7 +957,7 @@ fn main() {
         options,
         Box::new(move |cc| {
             let font_setup_result = configure_japanese_font(&cc.egui_ctx);
-            let mut app = App::new(csv_path.clone(), page_size);
+            let mut app = App::new(csv_path.clone());
 
             match font_setup_result {
                 Ok(Some(_)) => {}
