@@ -1,9 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui;
+use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontData, FontDefinitions, FontFamily, RichText, ScrollArea, TextStyle, Ui};
+use egui_extras::{Column, TableBuilder};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -12,6 +14,14 @@ use std::sync::{Arc, OnceLock};
 
 const DEFAULT_PAGE_SIZE: usize = 100;
 const JAPANESE_FONT_NAME: &str = "jp_ui_font";
+const TREE_HEADERS: [&str; 6] = [
+    "No",
+    "paragraph_id",
+    "自治体",
+    "条例/規則",
+    "カテゴリ",
+    "強調token数",
+];
 
 const REQUIRED_COLUMNS: &[&str] = &[
     "paragraph_id",
@@ -68,6 +78,67 @@ struct TextSegment {
     is_hit: bool,
     #[allow(dead_code)]
     attributes: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug)]
+struct FilterOption {
+    value: String,
+    count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TreeScrollRequest {
+    row_index: usize,
+    align: Option<egui::Align>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum FilterColumn {
+    ParagraphId,
+    DocumentId,
+    MunicipalityName,
+    OrdinanceOrRule,
+    DocType,
+    SentenceCount,
+    MatchedCategories,
+    MatchedConditions,
+    MatchGroupIds,
+    MatchGroupCount,
+    AnnotatedTokenCount,
+}
+
+impl FilterColumn {
+    fn all() -> &'static [Self] {
+        &[
+            Self::MatchedCategories,
+            Self::MunicipalityName,
+            Self::OrdinanceOrRule,
+            Self::DocType,
+            Self::ParagraphId,
+            Self::DocumentId,
+            Self::SentenceCount,
+            Self::MatchedConditions,
+            Self::MatchGroupIds,
+            Self::MatchGroupCount,
+            Self::AnnotatedTokenCount,
+        ]
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ParagraphId => "paragraph_id",
+            Self::DocumentId => "document_id",
+            Self::MunicipalityName => "自治体",
+            Self::OrdinanceOrRule => "条例/規則",
+            Self::DocType => "doc_type",
+            Self::SentenceCount => "sentence_count",
+            Self::MatchedCategories => "カテゴリ",
+            Self::MatchedConditions => "conditions",
+            Self::MatchGroupIds => "match_groups",
+            Self::MatchGroupCount => "match_group_count",
+            Self::AnnotatedTokenCount => "annotated_tokens",
+        }
+    }
 }
 
 // ─── テキスト解析 ─────────────────────────────────────────────────────────────
@@ -144,10 +215,13 @@ fn load_records(path: &PathBuf) -> Result<Vec<CsvRecord>, String> {
         .map_err(|e| format!("ヘッダー読み込みエラー: {e}"))?
         .clone();
 
-    let header_names: Vec<&str> = headers.iter().collect();
+    let header_names: Vec<String> = headers
+        .iter()
+        .map(|h| h.trim_start_matches('\u{feff}').to_string())
+        .collect();
     let missing: Vec<&str> = REQUIRED_COLUMNS
         .iter()
-        .filter(|&&col| !header_names.contains(&col))
+        .filter(|&&col| !header_names.iter().any(|h| h == col))
         .copied()
         .collect();
 
@@ -160,7 +234,7 @@ fn load_records(path: &PathBuf) -> Result<Vec<CsvRecord>, String> {
 
     // 列インデックスを事前に取得
     let idx = |name: &str| -> usize {
-        header_names.iter().position(|&h| h == name).unwrap_or(0)
+        header_names.iter().position(|h| h == name).unwrap_or(0)
     };
 
     let get = |record: &csv::StringRecord, name: &str| -> String {
@@ -196,9 +270,14 @@ fn load_records(path: &PathBuf) -> Result<Vec<CsvRecord>, String> {
 struct App {
     csv_path: PathBuf,
     page_size: usize,
-    records: Vec<CsvRecord>,
+    all_records: Vec<CsvRecord>,
+    filtered_indices: Vec<usize>,
+    filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
+    selected_filter_values: HashMap<FilterColumn, BTreeSet<String>>,
+    active_filter_column: FilterColumn,
     page_index: usize,
-    selected_row: Option<usize>, // current_page_records 内のインデックス
+    selected_row: Option<usize>, // current_page_indices 内のインデックス
+    pending_tree_scroll: Option<TreeScrollRequest>,
     error_message: Option<String>,
     // キャッシュ: 選択中レコードのセグメント
     cached_segments: Option<(usize, Vec<TextSegment>)>, // (row_no, segments)
@@ -209,9 +288,14 @@ impl App {
         let mut app = Self {
             csv_path: csv_path.clone(),
             page_size,
-            records: Vec::new(),
+            all_records: Vec::new(),
+            filtered_indices: Vec::new(),
+            filter_options: HashMap::new(),
+            selected_filter_values: HashMap::new(),
+            active_filter_column: FilterColumn::MatchedCategories,
             page_index: 0,
             selected_row: None,
+            pending_tree_scroll: None,
             error_message: None,
             cached_segments: None,
         };
@@ -222,11 +306,16 @@ impl App {
     fn load_csv(&mut self, path: PathBuf) {
         match load_records(&path) {
             Ok(records) => {
-                self.records = records;
+                self.all_records = records;
                 self.csv_path = path;
+                self.filter_options = build_filter_options(&self.all_records);
+                self.selected_filter_values.clear();
+                self.filtered_indices = (0..self.all_records.len()).collect();
                 self.page_index = 0;
-                self.selected_row = if self.records.is_empty() { None } else { Some(0) };
                 self.cached_segments = None;
+                self.pending_tree_scroll = None;
+                self.set_selected_row(None);
+                self.select_first_row_on_current_page(Some(egui::Align::Min));
                 self.error_message = None;
             }
             Err(e) => {
@@ -236,21 +325,197 @@ impl App {
     }
 
     fn total_pages(&self) -> usize {
-        if self.records.is_empty() {
+        if self.filtered_indices.is_empty() {
             return 1;
         }
-        (self.records.len() + self.page_size - 1) / self.page_size
+        (self.filtered_indices.len() + self.page_size - 1) / self.page_size
     }
 
-    fn current_page_records(&self) -> &[CsvRecord] {
+    fn current_page_indices(&self) -> &[usize] {
         let start = self.page_index * self.page_size;
-        let end = (start + self.page_size).min(self.records.len());
-        &self.records[start..end]
+        let end = (start + self.page_size).min(self.filtered_indices.len());
+        &self.filtered_indices[start..end]
+    }
+
+    fn set_selected_row(&mut self, selected_row: Option<usize>) {
+        let next = selected_row.filter(|&idx| idx < self.current_page_indices().len());
+        if self.selected_row != next {
+            self.selected_row = next;
+            self.cached_segments = None;
+        }
+    }
+
+    fn request_tree_scroll_to_selected_row(&mut self, align: Option<egui::Align>) {
+        self.pending_tree_scroll = self.selected_row.map(|row_index| TreeScrollRequest {
+            row_index,
+            align,
+        });
+    }
+
+    fn select_first_row_on_current_page(&mut self, align: Option<egui::Align>) {
+        let next = if self.current_page_indices().is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.set_selected_row(next);
+        self.request_tree_scroll_to_selected_row(align);
+    }
+
+    fn select_last_row_on_current_page(&mut self, align: Option<egui::Align>) {
+        self.set_selected_row(self.current_page_indices().len().checked_sub(1));
+        self.request_tree_scroll_to_selected_row(align);
+    }
+
+    fn go_to_previous_page(&mut self) {
+        if self.page_index > 0 {
+            self.page_index -= 1;
+            self.cached_segments = None;
+            self.select_last_row_on_current_page(Some(egui::Align::Max));
+        }
+    }
+
+    fn go_to_next_page(&mut self) {
+        if self.page_index + 1 < self.total_pages() {
+            self.page_index += 1;
+            self.cached_segments = None;
+            self.select_first_row_on_current_page(Some(egui::Align::Min));
+        }
+    }
+
+    fn move_selection_up(&mut self) {
+        if self.filtered_indices.is_empty() || self.current_page_indices().is_empty() {
+            return;
+        }
+
+        match self.selected_row {
+            Some(idx) if idx > 0 => {
+                self.set_selected_row(Some(idx - 1));
+                self.request_tree_scroll_to_selected_row(None);
+            }
+            Some(_) if self.page_index > 0 => {
+                self.page_index -= 1;
+                self.select_last_row_on_current_page(Some(egui::Align::Max));
+            }
+            None => self.select_first_row_on_current_page(Some(egui::Align::Min)),
+            _ => {}
+        }
+    }
+
+    fn move_selection_down(&mut self) {
+        let current_len = self.current_page_indices().len();
+        if self.filtered_indices.is_empty() || current_len == 0 {
+            return;
+        }
+
+        match self.selected_row {
+            Some(idx) if idx + 1 < current_len => {
+                self.set_selected_row(Some(idx + 1));
+                self.request_tree_scroll_to_selected_row(None);
+            }
+            Some(_) if self.page_index + 1 < self.total_pages() => {
+                self.page_index += 1;
+                self.select_first_row_on_current_page(Some(egui::Align::Min));
+            }
+            None => self.select_first_row_on_current_page(Some(egui::Align::Min)),
+            _ => {}
+        }
+    }
+
+    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
+        if self.error_message.is_some()
+            || self.filtered_indices.is_empty()
+            || ctx.wants_keyboard_input()
+        {
+            return;
+        }
+
+        let (up_pressed, down_pressed) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+            )
+        });
+
+        if down_pressed {
+            self.move_selection_down();
+        } else if up_pressed {
+            self.move_selection_up();
+        }
     }
 
     fn selected_record(&self) -> Option<&CsvRecord> {
-        let idx = self.selected_row?;
-        self.current_page_records().get(idx)
+        let page_idx = self.selected_row?;
+        let record_idx = *self.current_page_indices().get(page_idx)?;
+        self.all_records.get(record_idx)
+    }
+
+    fn apply_filters(&mut self) {
+        self.filtered_indices = self
+            .all_records
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
+            .collect();
+        self.page_index = 0;
+        self.pending_tree_scroll = None;
+        self.set_selected_row(None);
+        self.select_first_row_on_current_page(Some(egui::Align::Min));
+    }
+
+    fn record_matches_filters(&self, record: &CsvRecord) -> bool {
+        self.selected_filter_values.iter().all(|(column, selected)| {
+            if selected.is_empty() {
+                return true;
+            }
+
+            match column {
+                FilterColumn::MatchedCategories => category_values(&record.matched_categories_text)
+                    .into_iter()
+                    .any(|value| selected.contains(&value)),
+                _ => record_filter_value(record, *column)
+                    .map(|value| selected.contains(value))
+                    .unwrap_or(false),
+            }
+        })
+    }
+
+    fn clear_filters_for_column(&mut self, column: FilterColumn) {
+        if self.selected_filter_values.remove(&column).is_some() {
+            self.apply_filters();
+        }
+    }
+
+    fn clear_all_filters(&mut self) {
+        if !self.selected_filter_values.is_empty() {
+            self.selected_filter_values.clear();
+            self.apply_filters();
+        }
+    }
+
+    fn toggle_filter_value(&mut self, column: FilterColumn, value: &str, selected: bool) {
+        let mut changed = false;
+
+        {
+            let entry = self.selected_filter_values.entry(column).or_default();
+            if selected {
+                changed = entry.insert(value.to_string());
+            } else {
+                changed = entry.remove(value);
+            }
+        }
+
+        if self
+            .selected_filter_values
+            .get(&column)
+            .is_some_and(BTreeSet::is_empty)
+        {
+            self.selected_filter_values.remove(&column);
+        }
+
+        if changed {
+            self.apply_filters();
+        }
     }
 
     fn get_segments(&mut self) -> Vec<TextSegment> {
@@ -275,6 +540,8 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_keyboard_navigation(ctx);
+
         // エラーダイアログ
         if let Some(err) = self.error_message.clone() {
             egui::Window::new("エラー")
@@ -326,9 +593,7 @@ impl App {
                 .add_enabled(can_prev, egui::Button::new("◀ 前の100件"))
                 .clicked()
             {
-                self.page_index -= 1;
-                self.selected_row = Some(0);
-                self.cached_segments = None;
+                self.go_to_previous_page();
             }
 
             let can_next = self.page_index + 1 < self.total_pages();
@@ -336,108 +601,220 @@ impl App {
                 .add_enabled(can_next, egui::Button::new("次の100件 ▶"))
                 .clicked()
             {
-                self.page_index += 1;
-                self.selected_row = Some(0);
-                self.cached_segments = None;
+                self.go_to_next_page();
             }
 
             let total = self.total_pages();
             ui.label(format!("{} / {}", self.page_index + 1, total));
             ui.separator();
             ui.label(format!(
-                "総件数: {} 件  表示: {} 件",
-                self.records.len(),
-                self.current_page_records().len()
+                "総件数: {} 件  抽出後: {} 件  表示: {} 件",
+                self.all_records.len(),
+                self.filtered_indices.len(),
+                self.current_page_indices().len()
             ));
         });
     }
 
     fn draw_body(&mut self, ui: &mut Ui) {
-        let available = ui.available_rect_before_wrap();
-        let left_width = available.width() * 0.40;
-
-        ui.horizontal(|ui| {
-            // ─── 左ペイン: ツリービュー ───────────────────────────────────────
-            ui.allocate_ui(egui::vec2(left_width, available.height()), |ui| {
+        egui::SidePanel::left("record_list_panel")
+            .resizable(true)
+            .default_width(620.0)
+            .min_width(360.0)
+            .show_inside(ui, |ui| {
+                self.draw_filters(ui);
+                ui.separator();
                 self.draw_tree(ui);
             });
 
-            ui.separator();
-
-            // ─── 右ペイン: 詳細表示 ──────────────────────────────────────────
-            ui.vertical(|ui| {
-                self.draw_detail(ui);
-            });
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            self.draw_detail(ui);
         });
     }
 
-    fn draw_tree(&mut self, ui: &mut Ui) {
-        // ヘッダー行
-        egui::Grid::new("tree_header")
-            .num_columns(6)
-            .min_col_width(0.0)
+    fn draw_filters(&mut self, ui: &mut Ui) {
+        let active_count: usize = self
+            .selected_filter_values
+            .values()
+            .map(BTreeSet::len)
+            .sum();
+
+        egui::CollapsingHeader::new(format!("Filters ({})", active_count))
+            .id_salt("filters_panel")
+            .default_open(true)
             .show(ui, |ui| {
-                ui.label(RichText::new("No").strong());
-                ui.label(RichText::new("paragraph_id").strong());
-                ui.label(RichText::new("自治体").strong());
-                ui.label(RichText::new("条例/規則").strong());
-                ui.label(RichText::new("カテゴリ").strong());
-                ui.label(RichText::new("強調token数").strong());
-                ui.end_row();
-            });
-
-        ui.separator();
-
-        let page_records: Vec<CsvRecord> = self.current_page_records().to_vec();
-        let mut new_selected = self.selected_row;
-
-        ScrollArea::vertical()
-            .id_salt("tree_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new("tree_body")
-                    .num_columns(6)
-                    .min_col_width(0.0)
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for (i, record) in page_records.iter().enumerate() {
-                            let is_selected = self.selected_row == Some(i);
-
-                            let row_no_str = record.row_no.to_string();
-                            let para_id = truncate(&record.paragraph_id, 12);
-                            let muni = truncate(&record.municipality_name, 14);
-                            let ordi = truncate(&record.ordinance_or_rule, 8);
-                            let cat = truncate(&record.matched_categories_text, 20);
-                            let tok = truncate(&record.annotated_token_count, 8);
-
-                            let response = if is_selected {
-                                ui.label(RichText::new(&row_no_str).color(Color32::WHITE).background_color(Color32::from_rgb(70, 130, 180)))
-                                    | ui.label(RichText::new(para_id).color(Color32::WHITE).background_color(Color32::from_rgb(70, 130, 180)))
-                                    | ui.label(RichText::new(muni).color(Color32::WHITE).background_color(Color32::from_rgb(70, 130, 180)))
-                                    | ui.label(RichText::new(ordi).color(Color32::WHITE).background_color(Color32::from_rgb(70, 130, 180)))
-                                    | ui.label(RichText::new(cat).color(Color32::WHITE).background_color(Color32::from_rgb(70, 130, 180)))
-                                    | ui.label(RichText::new(tok).color(Color32::WHITE).background_color(Color32::from_rgb(70, 130, 180)))
-                            } else {
-                                ui.label(&row_no_str)
-                                    | ui.label(para_id)
-                                    | ui.label(muni)
-                                    | ui.label(ordi)
-                                    | ui.label(cat)
-                                    | ui.label(tok)
-                            };
-
-                            if response.interact(egui::Sense::click()).clicked() {
-                                new_selected = Some(i);
+                ui.horizontal(|ui| {
+                    ui.label("フィルター対象:");
+                    egui::ComboBox::from_id_salt("filter_column_selector")
+                        .selected_text(self.active_filter_column.label())
+                        .show_ui(ui, |ui| {
+                            for &column in FilterColumn::all() {
+                                ui.selectable_value(
+                                    &mut self.active_filter_column,
+                                    column,
+                                    column.label(),
+                                );
                             }
+                        });
+                    ui.label(format!("適用中: {} 件", active_count));
+                    if ui.button("現在の列をクリア").clicked() {
+                        self.clear_filters_for_column(self.active_filter_column);
+                    }
+                    if ui.button("全解除").clicked() {
+                        self.clear_all_filters();
+                    }
+                });
 
-                            ui.end_row();
+                let options = self
+                    .filter_options
+                    .get(&self.active_filter_column)
+                    .cloned()
+                    .unwrap_or_default();
+
+                ScrollArea::vertical()
+                    .id_salt("filter_options_scroll")
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        if options.is_empty() {
+                            ui.label(RichText::new("候補なし").italics());
+                        } else {
+                            for option in options {
+                                let is_selected = self
+                                    .selected_filter_values
+                                    .get(&self.active_filter_column)
+                                    .is_some_and(|values| values.contains(&option.value));
+                                let mut checked = is_selected;
+                                let label = format!(
+                                    "{} ({})",
+                                    display_filter_value(&option.value),
+                                    option.count
+                                );
+                                if ui.checkbox(&mut checked, label).changed() {
+                                    self.toggle_filter_value(
+                                        self.active_filter_column,
+                                        &option.value,
+                                        checked,
+                                    );
+                                }
+                            }
                         }
                     });
+
+                if !self.selected_filter_values.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("適用中:");
+                        let active_values: Vec<(FilterColumn, String)> = self
+                            .selected_filter_values
+                            .iter()
+                            .flat_map(|(column, values)| {
+                                values
+                                    .iter()
+                                    .cloned()
+                                    .map(|value| (*column, value))
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect();
+                        for (column, value) in active_values {
+                            let button_label =
+                                format!("{}: {} ×", column.label(), display_filter_value(&value));
+                            if ui.small_button(button_label).clicked() {
+                                self.toggle_filter_value(column, &value, false);
+                            }
+                        }
+                    });
+                }
+            });
+    }
+
+    fn draw_tree(&mut self, ui: &mut Ui) {
+        let page_record_indices = self.current_page_indices();
+        let selected_row = self.selected_row;
+        let pending_tree_scroll = self.pending_tree_scroll;
+        let mut new_selected = selected_row;
+        let selected_fill = Color32::from_rgb(70, 130, 180);
+        let mut table = TableBuilder::new(ui)
+            .striped(true)
+            .resizable(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::initial(56.0).at_least(48.0).clip(true))
+            .column(Column::initial(140.0).at_least(96.0).clip(true))
+            .column(Column::initial(128.0).at_least(96.0).clip(true))
+            .column(Column::initial(120.0).at_least(88.0).clip(true))
+            .column(Column::remainder().at_least(140.0).clip(true))
+            .column(Column::initial(92.0).at_least(72.0).clip(true));
+
+        if let Some(scroll_request) = pending_tree_scroll {
+            if scroll_request.row_index < page_record_indices.len() {
+                table = table.scroll_to_row(scroll_request.row_index, scroll_request.align);
+            }
+        }
+
+        table
+            .header(24.0, |mut header| {
+                for label in TREE_HEADERS {
+                    header.col(|ui| {
+                        ui.strong(label);
+                    });
+                }
+            })
+            .body(|mut body| {
+                body.rows(22.0, page_record_indices.len(), |mut row| {
+                    let i = row.index();
+                    let record = &self.all_records[page_record_indices[i]];
+                    let is_selected = selected_row == Some(i);
+
+                    let values = [
+                        record.row_no.to_string(),
+                        record.paragraph_id.clone(),
+                        record.municipality_name.clone(),
+                        record.ordinance_or_rule.clone(),
+                        record.matched_categories_text.clone(),
+                        record.annotated_token_count.clone(),
+                    ];
+
+                    let mut row_clicked = false;
+                    for value in values {
+                        row.col(|ui| {
+                            let cell_rect = ui.max_rect();
+                            if is_selected {
+                                ui.painter().rect_filled(cell_rect, 0.0, selected_fill);
+                            }
+
+                            let cell_response = ui.interact(
+                                cell_rect,
+                                ui.id().with("cell_click"),
+                                egui::Sense::click(),
+                            );
+
+                            let rich_text = if is_selected {
+                                RichText::new(value).color(Color32::WHITE)
+                            } else {
+                                RichText::new(value)
+                            };
+
+                            let label_response = ui.add(
+                                egui::Label::new(rich_text)
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            );
+                            if (cell_response | label_response).clicked() {
+                                row_clicked = true;
+                            }
+                        });
+                    }
+
+                    if row_clicked {
+                        new_selected = Some(i);
+                    }
+                });
             });
 
         if new_selected != self.selected_row {
-            self.selected_row = new_selected;
-            self.cached_segments = None;
+            self.set_selected_row(new_selected);
+        }
+        if pending_tree_scroll.is_some() {
+            self.pending_tree_scroll = None;
         }
     }
 
@@ -467,33 +844,34 @@ impl App {
 
             // ハイライトテキスト
             let segments = self.get_segments();
+            let mut job = LayoutJob::default();
+            let normal_format = TextFormat {
+                font_id: TextStyle::Body.resolve(ui.style()),
+                color: ui.visuals().text_color(),
+                ..Default::default()
+            };
+            let hit_format = TextFormat {
+                background: Color32::from_rgb(255, 224, 138),
+                ..normal_format.clone()
+            };
+
+            for seg in &segments {
+                if seg.text.is_empty() {
+                    continue;
+                }
+                let format = if seg.is_hit {
+                    hit_format.clone()
+                } else {
+                    normal_format.clone()
+                };
+                job.append(&seg.text, 0.0, format);
+            }
 
             ScrollArea::vertical()
                 .id_salt("detail_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        ui.spacing_mut().item_spacing.x = 0.0;
-
-                        for seg in &segments {
-                            if seg.text.is_empty() {
-                                continue;
-                            }
-                            if seg.is_hit {
-                                ui.label(
-                                    RichText::new(&seg.text)
-                                        .background_color(Color32::from_rgb(255, 224, 138))
-                                        .text_style(TextStyle::Body),
-                                );
-                            } else {
-                                ui.label(
-                                    RichText::new(&seg.text)
-                                        .text_style(TextStyle::Body),
-                                );
-                            }
-                        }
-                    });
+                    ui.add(egui::Label::new(job).wrap());
                 });
         } else {
             ui.label(RichText::new("レコード未選択").italics());
@@ -503,13 +881,76 @@ impl App {
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
-fn truncate(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_string()
+fn build_filter_options(records: &[CsvRecord]) -> HashMap<FilterColumn, Vec<FilterOption>> {
+    let mut options = HashMap::new();
+
+    for &column in FilterColumn::all() {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for record in records {
+            for value in record_filter_values(record, column) {
+                *counts.entry(value).or_insert(0) += 1;
+            }
+        }
+
+        let mut column_options: Vec<FilterOption> = counts
+            .into_iter()
+            .map(|(value, count)| FilterOption { value, count })
+            .collect();
+        column_options.sort_by(|a, b| {
+            display_filter_value(&a.value)
+                .cmp(&display_filter_value(&b.value))
+                .then_with(|| a.value.cmp(&b.value))
+        });
+        options.insert(column, column_options);
+    }
+
+    options
+}
+
+fn record_filter_values(record: &CsvRecord, column: FilterColumn) -> Vec<String> {
+    match column {
+        FilterColumn::MatchedCategories => category_values(&record.matched_categories_text),
+        _ => vec![record_filter_value(record, column).unwrap_or("").trim().to_string()],
+    }
+}
+
+fn record_filter_value<'a>(record: &'a CsvRecord, column: FilterColumn) -> Option<&'a str> {
+    match column {
+        FilterColumn::ParagraphId => Some(&record.paragraph_id),
+        FilterColumn::DocumentId => Some(&record.document_id),
+        FilterColumn::MunicipalityName => Some(&record.municipality_name),
+        FilterColumn::OrdinanceOrRule => Some(&record.ordinance_or_rule),
+        FilterColumn::DocType => Some(&record.doc_type),
+        FilterColumn::SentenceCount => Some(&record.sentence_count),
+        FilterColumn::MatchedCategories => Some(&record.matched_categories_text),
+        FilterColumn::MatchedConditions => Some(&record.matched_condition_ids_text),
+        FilterColumn::MatchGroupIds => Some(&record.match_group_ids_text),
+        FilterColumn::MatchGroupCount => Some(&record.match_group_count),
+        FilterColumn::AnnotatedTokenCount => Some(&record.annotated_token_count),
+    }
+}
+
+fn category_values(raw: &str) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    for part in raw.split(|c| c == ',' || c == '、' || c == ';' || c == '\n') {
+        let trimmed = part.trim();
+        if !trimmed.is_empty() {
+            values.insert(trimmed.to_string());
+        }
+    }
+
+    if values.is_empty() {
+        values.insert(String::new());
+    }
+
+    values.into_iter().collect()
+}
+
+fn display_filter_value(value: &str) -> String {
+    if value.is_empty() {
+        "(空)".to_string()
     } else {
-        let truncated: String = chars[..max_chars].iter().collect();
-        format!("{}…", truncated)
+        value.to_string()
     }
 }
 
