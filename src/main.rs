@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod analysis_runner;
 mod app;
 mod csv_loader;
 mod db;

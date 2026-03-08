@@ -1,3 +1,7 @@
+use crate::analysis_runner::{
+    build_default_runtime_config, cleanup_job_directories, spawn_analysis_job, AnalysisJobEvent,
+    AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
+};
 use crate::csv_loader::load_records;
 use crate::db::{
     fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
@@ -11,6 +15,7 @@ use egui::{Color32, RichText, ScrollArea, TextStyle, Ui};
 use egui_extras::{Column, TableBuilder};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TreeScrollRequest {
@@ -75,6 +80,53 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
 
 const DB_VIEWER_VIEWPORT_ID: &str = "db_viewer_viewport";
 
+struct RunningAnalysisJob {
+    receiver: Receiver<AnalysisJobEvent>,
+}
+
+enum AnalysisJobStatus {
+    Idle,
+    Running { job_id: String },
+    Succeeded { summary: String },
+    Failed { summary: String },
+}
+
+struct AnalysisRuntimeState {
+    runtime: Option<AnalysisRuntimeConfig>,
+    current_job: Option<RunningAnalysisJob>,
+    status: AnalysisJobStatus,
+}
+
+impl AnalysisRuntimeState {
+    fn from_runtime(runtime: Result<AnalysisRuntimeConfig, String>) -> Self {
+        match runtime {
+            Ok(runtime) => Self {
+                runtime: Some(runtime),
+                current_job: None,
+                status: AnalysisJobStatus::Idle,
+            },
+            Err(error) => Self {
+                runtime: None,
+                current_job: None,
+                status: AnalysisJobStatus::Failed { summary: error },
+            },
+        }
+    }
+
+    fn can_start(&self) -> bool {
+        self.runtime.is_some() && self.current_job.is_none()
+    }
+
+    fn status_text(&self) -> String {
+        match &self.status {
+            AnalysisJobStatus::Idle => "分析待機中".to_string(),
+            AnalysisJobStatus::Running { job_id } => format!("分析実行中: {job_id}"),
+            AnalysisJobStatus::Succeeded { summary } => format!("分析成功: {summary}"),
+            AnalysisJobStatus::Failed { summary } => format!("分析失敗: {summary}"),
+        }
+    }
+}
+
 impl SelectionChange {
     fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
         Self {
@@ -120,6 +172,7 @@ fn build_tree_scroll_request(
 pub(crate) struct App {
     csv_path: PathBuf,
     db_viewer_state: DbViewerState,
+    analysis_runtime_state: AnalysisRuntimeState,
     all_records: Vec<CsvRecord>,
     filtered_indices: Vec<usize>,
     filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
@@ -133,9 +186,11 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(csv_path: PathBuf) -> Self {
+        let runtime = build_default_runtime_config();
         let mut app = Self {
             csv_path: csv_path.clone(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
+            analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
             all_records: Vec::new(),
             filtered_indices: Vec::new(),
             filter_options: HashMap::new(),
@@ -146,6 +201,7 @@ impl App {
             error_message: None,
             cached_segments: None,
         };
+        app.try_cleanup_analysis_jobs();
         app.load_csv(csv_path);
         app
     }
@@ -370,10 +426,104 @@ impl App {
             Vec::new()
         }
     }
+
+    fn try_cleanup_analysis_jobs(&mut self) {
+        let Some(runtime) = self.analysis_runtime_state.runtime.as_ref() else {
+            return;
+        };
+
+        if let Err(error) = cleanup_job_directories(&runtime.jobs_root) {
+            self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary: error };
+        }
+    }
+
+    fn start_analysis_job(&mut self) -> Result<(), String> {
+        if self.analysis_runtime_state.current_job.is_some() {
+            return Err("分析ジョブは既に実行中です".to_string());
+        }
+
+        let runtime = self
+            .analysis_runtime_state
+            .runtime
+            .clone()
+            .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
+
+        cleanup_job_directories(&runtime.jobs_root)?;
+
+        let (job_id, receiver) = spawn_analysis_job(AnalysisJobRequest {
+            db_path: self.db_viewer_state.db_path.clone(),
+            runtime,
+        });
+
+        self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
+        self.analysis_runtime_state.status = AnalysisJobStatus::Running { job_id };
+        Ok(())
+    }
+
+    fn poll_analysis_job(&mut self, ctx: &egui::Context) {
+        let Some(running_job) = self.analysis_runtime_state.current_job.as_ref() else {
+            return;
+        };
+
+        match running_job.receiver.try_recv() {
+            Ok(AnalysisJobEvent::Completed(result)) => {
+                self.analysis_runtime_state.current_job = None;
+                match result {
+                    Ok(success) => self.handle_analysis_success(success),
+                    Err(failure) => self.handle_analysis_failure(failure),
+                }
+                ctx.request_repaint();
+            }
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint();
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.analysis_runtime_state.current_job = None;
+                self.analysis_runtime_state.status = AnalysisJobStatus::Failed {
+                    summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
+                };
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    fn handle_analysis_success(&mut self, success: AnalysisJobSuccess) {
+        self.load_csv(success.output_csv_path);
+        let mut summary = format!(
+            "{} 件抽出 / {:.2} 秒",
+            success.meta.selected_paragraph_count, success.meta.duration_seconds
+        );
+        if !success.meta.warning_messages.is_empty() {
+            summary.push_str(&format!(
+                " / 警告 {} 件",
+                success.meta.warning_messages.len()
+            ));
+        }
+        self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    }
+
+    fn handle_analysis_failure(&mut self, failure: AnalysisJobFailure) {
+        let summary = failure.message.clone();
+        self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary };
+
+        let mut error_message = failure.message;
+        if !failure.stderr.is_empty() {
+            error_message.push_str("\n\nstderr:\n");
+            error_message.push_str(&failure.stderr);
+        }
+        if let Some(meta) = failure.meta {
+            if !meta.error_summary.trim().is_empty() {
+                error_message.push_str("\n\nmeta.errorSummary:\n");
+                error_message.push_str(&meta.error_summary);
+            }
+        }
+        self.error_message = Some(error_message);
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_analysis_job(ctx);
         self.handle_keyboard_navigation(ctx);
 
         if let Some(err) = self.error_message.clone() {
@@ -561,38 +711,78 @@ impl App {
     }
 
     fn draw_toolbar(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label("CSV:");
-            let path_str = self.csv_path.display().to_string();
-            ui.add(
-                egui::TextEdit::singleline(&mut path_str.as_str())
-                    .desired_width(600.0)
-                    .interactive(false),
-            );
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.label("CSV:");
+                let path_str = self.csv_path.display().to_string();
+                ui.add(
+                    egui::TextEdit::singleline(&mut path_str.as_str())
+                        .desired_width(600.0)
+                        .interactive(false),
+                );
 
-            if ui.button("開く").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV files", &["csv"])
-                    .add_filter("All files", &["*"])
-                    .pick_file()
-                {
-                    self.load_csv(path);
+                if ui.button("開く").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("CSV files", &["csv"])
+                        .add_filter("All files", &["*"])
+                        .pick_file()
+                    {
+                        self.load_csv(path);
+                    }
                 }
-            }
 
-            ui.separator();
-            let selected_position = self
-                .selected_row
-                .map(|idx| idx + 1)
-                .map(|position| position.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            ui.label(format!(
-                "総件数: {} 件  抽出後: {} 件  選択: {} / {}",
-                self.all_records.len(),
-                self.filtered_indices.len(),
-                selected_position,
-                self.filtered_indices.len()
-            ));
+                ui.separator();
+                let selected_position = self
+                    .selected_row
+                    .map(|idx| idx + 1)
+                    .map(|position| position.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                ui.label(format!(
+                    "総件数: {} 件  抽出後: {} 件  選択: {} / {}",
+                    self.all_records.len(),
+                    self.filtered_indices.len(),
+                    selected_position,
+                    self.filtered_indices.len()
+                ));
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                let can_start = self.analysis_runtime_state.can_start();
+                let runtime = self.analysis_runtime_state.runtime.as_ref();
+                let python_label = runtime
+                    .map(|runtime| runtime.python_label.as_str())
+                    .unwrap_or("-");
+                let filter_config_label = runtime
+                    .map(|runtime| runtime.filter_config_path.display().to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                let db_label = self.db_viewer_state.db_path.display().to_string();
+
+                if matches!(self.analysis_runtime_state.status, AnalysisJobStatus::Running { .. }) {
+                    ui.add(egui::Spinner::new());
+                }
+
+                if ui
+                    .add_enabled(can_start, egui::Button::new("分析実行"))
+                    .clicked()
+                {
+                    if let Err(error) = self.start_analysis_job() {
+                        self.error_message = Some(error);
+                    }
+                }
+
+                ui.label(format!("DB: {db_label}"));
+                ui.label(format!("条件: {filter_config_label}"));
+                ui.label(format!("Python: {python_label}"));
+
+                let status_text = self.analysis_runtime_state.status_text();
+                let status_color = match &self.analysis_runtime_state.status {
+                    AnalysisJobStatus::Idle => ui.visuals().text_color(),
+                    AnalysisJobStatus::Running { .. } => Color32::from_rgb(70, 130, 180),
+                    AnalysisJobStatus::Succeeded { .. } => Color32::from_rgb(70, 130, 70),
+                    AnalysisJobStatus::Failed { .. } => Color32::from_rgb(200, 64, 64),
+                };
+                ui.label(RichText::new(status_text).color(status_color));
+            });
         });
     }
 
