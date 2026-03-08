@@ -919,11 +919,26 @@ fn render_db_viewer_contents(
         .and_then(|name| name.to_str())
         .unwrap_or("ordinance_analysis3.db");
     let csv_text = state.csv_paragraph_text.clone().unwrap_or_default();
-    let mismatch = state
+    let comparison_label = match state.context.as_ref() {
+        Some(context) if context.center.paragraph_text != csv_text => {
+            RichText::new("CSV と DB 中心段落は不一致")
+                .color(Color32::from_rgb(200, 64, 64))
+        }
+        Some(_) => {
+            RichText::new("CSV と DB 中心段落は一致").color(Color32::from_rgb(70, 130, 70))
+        }
+        None => RichText::new("DB 中心段落未取得").italics(),
+    };
+    let body_scroll_id = state
         .context
         .as_ref()
-        .map(|context| context.center.paragraph_text != csv_text)
-        .unwrap_or(false);
+        .map(|context| format!("db_viewer_body_{}", context.center.paragraph_id))
+        .or_else(|| {
+            state
+                .source_paragraph_id
+                .map(|paragraph_id| format!("db_viewer_body_source_{}", paragraph_id))
+        })
+        .unwrap_or_else(|| "db_viewer_body_unknown".to_string());
 
     ui.label(format!("DB: {}", db_file_label));
     ui.label(format!("パス: {}", state.db_path.display()));
@@ -974,38 +989,37 @@ fn render_db_viewer_contents(
         return;
     }
 
-    ui.label(RichText::new("CSV テキスト").strong());
     ScrollArea::vertical()
-        .id_salt("db_viewer_csv_text")
-        .max_height(140.0)
-        .show(ui, |ui| {
-            ui.label(&csv_text);
-        });
-
-    ui.add_space(6.0);
-    ui.label(RichText::new("DB 中心段落").strong());
-    if let Some(context) = &state.context {
-        ui.group(|ui| {
-            ui.label(format!("paragraph_no: {}", context.center.paragraph_no));
-            ui.label(&context.center.paragraph_text);
-        });
-    }
-
-    ui.add_space(4.0);
-    let compare_label = if mismatch {
-        RichText::new("CSV と DB 中心段落は不一致").color(Color32::from_rgb(200, 64, 64))
-    } else {
-        RichText::new("CSV と DB 中心段落は一致").color(Color32::from_rgb(70, 130, 70))
-    };
-    ui.label(compare_label);
-
-    ui.separator();
-    ui.label(RichText::new("前後コンテキスト").strong());
-
-    ScrollArea::vertical()
-        .id_salt("db_viewer_context")
+        .id_salt(body_scroll_id)
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            ui.group(|ui| {
+                ui.label(comparison_label);
+            });
+
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new("CSV/DB 比較")
+                .id_salt("db_viewer_comparison_header")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("CSV テキスト").strong());
+                    ui.label(&csv_text);
+
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("DB 中心段落").strong());
+                    if let Some(context) = &state.context {
+                        ui.group(|ui| {
+                            ui.label(format!("paragraph_no: {}", context.center.paragraph_no));
+                            ui.label(&context.center.paragraph_text);
+                        });
+                    } else {
+                        ui.label(RichText::new("DB 中心段落未取得").italics());
+                    }
+                });
+
+            ui.separator();
+            ui.label(RichText::new("前後コンテキスト").strong());
+
             if let Some(context) = &state.context {
                 for paragraph in &context.paragraphs {
                     let is_center = paragraph.paragraph_id == context.center.paragraph_id;
