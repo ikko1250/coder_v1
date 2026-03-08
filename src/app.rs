@@ -1,6 +1,7 @@
 use crate::csv_loader::load_records;
+use crate::db::resolve_default_db_path;
 use crate::filter::{build_filter_options, display_filter_value};
-use crate::model::{CsvRecord, FilterColumn, FilterOption, TextSegment};
+use crate::model::{CsvRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
@@ -114,6 +115,7 @@ fn build_tree_scroll_request(
 
 pub(crate) struct App {
     csv_path: PathBuf,
+    db_viewer_state: DbViewerState,
     all_records: Vec<CsvRecord>,
     filtered_indices: Vec<usize>,
     filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
@@ -129,6 +131,7 @@ impl App {
     pub(crate) fn new(csv_path: PathBuf) -> Self {
         let mut app = Self {
             csv_path: csv_path.clone(),
+            db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             all_records: Vec::new(),
             filtered_indices: Vec::new(),
             filter_options: HashMap::new(),
@@ -148,6 +151,7 @@ impl App {
             Ok(records) => {
                 self.all_records = records;
                 self.csv_path = path;
+                self.db_viewer_state.reset_loaded_state();
                 self.filter_options = build_filter_options(&self.all_records);
                 self.selected_filter_values.clear();
                 self.filtered_indices = (0..self.all_records.len()).collect();
@@ -162,6 +166,46 @@ impl App {
                 self.error_message = Some(e);
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn db_viewer_state(&self) -> &DbViewerState {
+        &self.db_viewer_state
+    }
+
+    #[allow(dead_code)]
+    fn db_viewer_state_mut(&mut self) -> &mut DbViewerState {
+        &mut self.db_viewer_state
+    }
+
+    #[allow(dead_code)]
+    fn selected_paragraph_id_for_db(&self) -> Result<i64, String> {
+        let record = self
+            .selected_record()
+            .ok_or_else(|| "レコードが選択されていません".to_string())?;
+
+        record.paragraph_id.parse::<i64>().map_err(|error| {
+            format!(
+                "paragraph_id を数値として解釈できません: {} ({error})",
+                record.paragraph_id
+            )
+        })
+    }
+
+    #[allow(dead_code)]
+    fn prepare_db_viewer_state(&mut self) -> Result<(), String> {
+        let paragraph_id = self.selected_paragraph_id_for_db()?;
+        let csv_paragraph_text = self
+            .selected_record()
+            .map(|record| record.paragraph_text.clone())
+            .ok_or_else(|| "レコードが選択されていません".to_string())?;
+
+        self.db_viewer_state.is_open = true;
+        self.db_viewer_state.source_paragraph_id = Some(paragraph_id);
+        self.db_viewer_state.csv_paragraph_text = Some(csv_paragraph_text);
+        self.db_viewer_state.context = None;
+        self.db_viewer_state.error_message = None;
+        Ok(())
     }
 
     fn apply_selection_change(&mut self, change: SelectionChange) -> bool {

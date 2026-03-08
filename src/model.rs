@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CsvRecord {
@@ -61,4 +62,36 @@ pub(crate) struct DbParagraph {
 pub(crate) struct DbParagraphContext {
     pub(crate) center: DbParagraph,
     pub(crate) paragraphs: Vec<DbParagraph>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DbViewerState {
+    pub(crate) is_open: bool,
+    pub(crate) db_path: PathBuf,
+    pub(crate) source_paragraph_id: Option<i64>,
+    pub(crate) csv_paragraph_text: Option<String>,
+    pub(crate) context: Option<DbParagraphContext>,
+    pub(crate) error_message: Option<String>,
+}
+
+impl DbViewerState {
+    pub(crate) fn new(db_path: PathBuf) -> Self {
+        Self {
+            is_open: false,
+            db_path,
+            source_paragraph_id: None,
+            csv_paragraph_text: None,
+            context: None,
+            error_message: None,
+        }
+    }
+
+    pub(crate) fn reset_loaded_state(&mut self) {
+        self.is_open = false;
+        self.source_paragraph_id = None;
+        self.csv_paragraph_text = None;
+        self.context = None;
+        self.error_message = None;
+    }
 }

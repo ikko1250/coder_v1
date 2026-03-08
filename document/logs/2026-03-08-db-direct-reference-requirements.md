@@ -46,3 +46,14 @@
   - 既存 UI はまだ変更しない
   - DB クエリ層は次段階の UI 実装から利用する前提で追加
   - コンパイル確認は今回もユーザー側 `cargo` 実行前提
+- Step 2 実装:
+  - `src/model.rs` に `DbViewerState` を追加
+  - `DbViewerState` には、ウィンドウ開閉状態、DB パス、参照元 `paragraph_id`、CSV 段落テキスト、取得済みコンテキスト、エラーを保持する構成を採用
+  - `src/app.rs` の `App` に `db_viewer_state` フィールドを追加
+  - `App::new()` では `resolve_default_db_path()` を使って既定 DB パスを初期化
+  - `load_csv()` では CSV 切替時に DB ビューア状態をリセットするよう変更
+  - 次段階のボタン実装に備え、`selected_paragraph_id_for_db()` と `prepare_db_viewer_state()` を追加
+- Step 2 現時点の方針:
+  - UI はまだ変更しない
+  - DB ビューア状態はメイン選択から独立した状態として保持する
+  - 次段階で右ペインの `DB参照` ボタンから `prepare_db_viewer_state()` を呼ぶ前提
