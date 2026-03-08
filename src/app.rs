@@ -330,16 +330,14 @@ impl App {
     }
 
     fn toggle_filter_value(&mut self, column: FilterColumn, value: &str, selected: bool) {
-        let mut changed = false;
-
-        {
+        let changed = {
             let entry = self.selected_filter_values.entry(column).or_default();
             if selected {
-                changed = entry.insert(value.to_string());
+                entry.insert(value.to_string())
             } else {
-                changed = entry.remove(value);
+                entry.remove(value)
             }
-        }
+        };
 
         if self
             .selected_filter_values
@@ -833,7 +831,7 @@ impl App {
                     });
                 }
             })
-            .body(|mut body| {
+            .body(|body| {
                 body.rows(22.0, filtered_indices.len(), |mut row| {
                     let i = row.index();
                     let record = &self.all_records[filtered_indices[i]];

@@ -83,3 +83,8 @@
 - Step 5 現時点の方針:
   - 前後移動は現在読み込んだコンテキスト内の隣接段落番号から決定する
   - DB 側段落番号に大きな欠番があるケースは、必要なら次段階で追加調整する
+- ビルド確認フィードバック対応:
+  - ユーザー側 `cargo run` で Windows MSVC リンカが `sqlite3.lib` を見つけられず `LNK1181` で停止した
+  - 原因は `rusqlite` / `libsqlite3-sys` がシステム SQLite を探す構成だったため
+  - 対応として `Cargo.toml` の `rusqlite` に `bundled` feature を追加し、SQLite を同梱ビルドする構成へ変更
+  - あわせて `src/app.rs` の未使用代入 warning と不要な `mut` warning を解消した
