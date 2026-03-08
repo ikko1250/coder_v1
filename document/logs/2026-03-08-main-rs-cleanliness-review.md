@@ -83,3 +83,38 @@
 - 第2段階の検証状況:
   - `cargo` によるビルド確認は、前回方針どおりユーザー側実施とする
   - こちらでは差分読解ベースで、旧 `set_selected_row` / `request_tree_scroll_to_selected_row` 依存が残っていないことを確認
+- 第3段階の現状把握:
+  - `src/main.rs` には、タグ解析、CSV読込、フィルタ定義、アプリ状態、UI描画、フォント設定、エントリポイントが引き続き同居している
+  - 第1段階で列定義は spec 化され、第2段階で選択状態更新は一本化されたため、分割対象の責務境界は前より明確になっている
+  - 現時点で大きい塊は `parse_tagged_text` 周辺、`load_records` 周辺、`App` 状態管理、`draw_*` UI 群、`configure_japanese_font`、`main` に分かれている
+- 第3段階の承認用実装案:
+  - 既存挙動は維持し、ファイル分割のみを行う
+  - `src/main.rs` は最終的に起動処理と `mod` 宣言だけへ縮退させる
+  - `src/model.rs` を追加し、`CsvRecord`, `TextSegment`, `FilterOption`, `TreeScrollRequest`, `ScrollBehavior`, `SelectionChange`, `FilterColumn`, spec 群を移す
+  - `src/tagged_text.rs` を追加し、正規表現、属性パース、`parse_tagged_text` を移す
+  - `src/csv_loader.rs` を追加し、`REQUIRED_COLUMNS`, `load_records` を移す
+  - `src/filter.rs` を追加し、フィルタ候補生成、値抽出補助、ソート補助、`category_values`, `display_filter_value` を移す
+  - `src/font.rs` を追加し、日本語フォント候補列挙と `configure_japanese_font` を移す
+  - `src/app.rs` を追加し、`App` 本体、状態更新ロジック、`eframe::App` 実装、`draw_*` 群を移す
+  - 分割順は `tagged_text` → `csv_loader` → `filter` / `model` → `font` → `app` → `main.rs` 縮退とし、依存の少ない pure logic から先に切る
+  - `pub(crate)` を基本とし、公開範囲を最小化する
+  - 既存の関数名・型名・命名は維持し、無理な改名は行わない
+- 第3段階のテスト観点:
+  - `cargo build` が通ること
+  - CSV読込、フィルタ候補表示、一覧表示、詳細表示、上下キー移動、行クリックが従来通り動くこと
+  - モジュール循環参照が発生していないこと
+  - `main.rs` が起動コード中心に縮退し、ロジックが残留していないこと
+- 第3段階のコミット案:
+  - `refactor: split main into app modules`
+- 第3段階の実装結果:
+  - `src/model.rs` を追加し、`CsvRecord`, `TextSegment`, `FilterOption`, `FilterColumn` を移設
+  - `src/tagged_text.rs` を追加し、正規表現と `parse_tagged_text` 周辺を移設
+  - `src/csv_loader.rs` を追加し、`REQUIRED_COLUMNS` と `load_records` を移設
+  - `src/filter.rs` を追加し、フィルタ列 spec、候補生成、値抽出、ソート、表示補助を移設
+  - `src/font.rs` を追加し、日本語フォント候補列挙と `configure_japanese_font` を移設
+  - `src/app.rs` を追加し、`App` 本体、選択状態制御、`eframe::App` 実装、`draw_*` 群、および一覧列 spec を移設
+  - `src/main.rs` は `mod` 宣言と起動処理のみの構成へ縮退
+  - `TreeColumnSpec` は UI 依存が強いため `app.rs` に置き、`FilterColumnSpec` はフィルタ責務に合わせて `filter.rs` に配置した
+- 第3段階の検証状況:
+  - `cargo` によるコンパイル確認は、従来方針どおりユーザー側実施とする
+  - こちらでは静的確認として、主要関数・型が各モジュールへ移設され、`main.rs` からロジックが撤去されていることを確認
