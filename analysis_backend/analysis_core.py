@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 from html import escape
 from itertools import product
 import json
@@ -18,6 +19,7 @@ SURFACE_COL = "surface"
 SENTENCE_TOKEN_POSITION_COL = "sentence_token_position"
 PARAGRAPH_TOKEN_POSITION_COL = "paragraph_token_position"
 PARAGRAPH_METADATA_CHUNK_SIZE = 900
+MAX_DISTANCE_MATCH_COMBINATIONS = 10000
 
 PARAGRAPH_METADATA_SCHEMA = {
     PARAGRAPH_ID_COL: pl.Int64,
@@ -341,7 +343,12 @@ def build_tokens_with_position_df(
         .agg(pl.len().alias("sentence_token_count"))
         .sort(["paragraph_id", "sentence_no_in_paragraph"])
         .with_columns(
-            (pl.col("sentence_token_count").cum_sum().over("paragraph_id") - pl.col("sentence_token_count"))
+            (
+                pl.col("sentence_token_count")
+                .cum_sum()
+                .over("paragraph_id", order_by="sentence_no_in_paragraph")
+                - pl.col("sentence_token_count")
+            )
             .alias("sentence_offset")
         )
         .select(["paragraph_id", "sentence_no_in_paragraph", "sentence_offset"])
@@ -479,6 +486,137 @@ def _build_condition_hit_row(
     }
 
 
+def _row_position_key(row: dict[str, object], position_column: str) -> tuple[int, int, int]:
+    return (
+        int(row[position_column]),
+        int(row["sentence_id"]),
+        int(row["token_no"]),
+    )
+
+
+def _find_distance_match_groups_by_product(
+    form_row_options: list[list[dict[str, object]]],
+    position_column: str,
+    max_token_distance: int,
+) -> list[list[dict[str, object]]]:
+    candidate_groups: list[dict[str, object]] = []
+    for candidate_rows in product(*form_row_options):
+        sorted_rows = sorted(candidate_rows, key=lambda row: _row_position_key(row, position_column))
+        token_keys = [
+            (int(row["sentence_id"]), int(row["token_no"]))
+            for row in sorted_rows
+        ]
+        if len(set(token_keys)) != len(token_keys):
+            continue
+
+        positions = [int(row[position_column]) for row in sorted_rows]
+        span_width = max(positions) - min(positions)
+        if span_width > max_token_distance:
+            continue
+
+        candidate_groups.append(
+            {
+                "rows": sorted_rows,
+                "span_width": span_width,
+                "start_position": min(positions),
+                "end_position": max(positions),
+            }
+        )
+
+    candidate_groups.sort(
+        key=lambda group: (
+            int(group["span_width"]),
+            int(group["start_position"]),
+            int(group["end_position"]),
+        )
+    )
+    return [list(group["rows"]) for group in candidate_groups]
+
+
+def _find_best_distance_group(
+    form_row_options: list[list[dict[str, object]]],
+    position_column: str,
+) -> tuple[list[dict[str, object]], list[int], int] | None:
+    current_indices = [0] * len(form_row_options)
+    heap: list[tuple[int, int, int, int]] = []
+    current_max_position = -1
+
+    for form_index, option_rows in enumerate(form_row_options):
+        row = option_rows[0]
+        position, sentence_id, token_no = _row_position_key(row, position_column)
+        heapq.heappush(heap, (position, sentence_id, token_no, form_index))
+        current_max_position = max(current_max_position, position)
+
+    best_rows: list[dict[str, object]] | None = None
+    best_indices: list[int] | None = None
+    best_span_width: int | None = None
+    best_start_position: int | None = None
+    best_end_position: int | None = None
+
+    while True:
+        min_position, _sentence_id, _token_no, form_index = heapq.heappop(heap)
+        current_rows = [
+            form_row_options[idx][current_indices[idx]]
+            for idx in range(len(form_row_options))
+        ]
+        span_width = current_max_position - min_position
+        if best_rows is None or (
+            span_width,
+            min_position,
+            current_max_position,
+        ) < (
+            best_span_width,
+            best_start_position,
+            best_end_position,
+        ):
+            best_rows = [dict(row) for row in current_rows]
+            best_indices = current_indices.copy()
+            best_span_width = span_width
+            best_start_position = min_position
+            best_end_position = current_max_position
+
+        current_indices[form_index] += 1
+        if current_indices[form_index] >= len(form_row_options[form_index]):
+            break
+
+        next_row = form_row_options[form_index][current_indices[form_index]]
+        next_position, next_sentence_id, next_token_no = _row_position_key(next_row, position_column)
+        heapq.heappush(heap, (next_position, next_sentence_id, next_token_no, form_index))
+        current_max_position = max(current_max_position, next_position)
+
+    if best_rows is None or best_indices is None or best_span_width is None:
+        return None
+
+    return best_rows, best_indices, best_span_width
+
+
+def _find_distance_match_groups_greedily(
+    form_row_options: list[list[dict[str, object]]],
+    position_column: str,
+    max_token_distance: int,
+) -> list[list[dict[str, object]]]:
+    remaining_row_options = [list(option_rows) for option_rows in form_row_options]
+    matched_groups: list[list[dict[str, object]]] = []
+
+    while all(remaining_row_options):
+        best_group = _find_best_distance_group(
+            form_row_options=remaining_row_options,
+            position_column=position_column,
+        )
+        if best_group is None:
+            break
+
+        matched_rows, matched_indices, span_width = best_group
+        if span_width > max_token_distance:
+            break
+
+        matched_groups.append(sorted(matched_rows, key=lambda row: _row_position_key(row, position_column)))
+        for form_index in reversed(range(len(matched_indices))):
+            del remaining_row_options[form_index][matched_indices[form_index]]
+
+    return matched_groups
+
+
 def _find_distance_match_groups_by_unit(
     tokens_with_position_df: pl.DataFrame,
     condition_id: str,
@@ -509,55 +647,30 @@ def _find_distance_match_groups_by_unit(
         if not form_row_options:
             continue
 
-        candidate_groups: list[dict[str, object]] = []
-        for candidate_rows in product(*form_row_options):
-            sorted_rows = sorted(
-                candidate_rows,
-                key=lambda row: (
-                    int(row[position_column]),
-                    int(row["sentence_id"]),
-                    int(row["token_no"]),
-                ),
-            )
-            token_keys = [
-                (int(row["sentence_id"]), int(row["token_no"]))
-                for row in sorted_rows
-            ]
-            if len(set(token_keys)) != len(token_keys):
-                continue
-
-            positions = [int(row[position_column]) for row in sorted_rows]
-            span_width = max(positions) - min(positions)
-            if span_width > max_token_distance:
-                continue
-
-            candidate_groups.append(
-                {
-                    "start_position": min(positions),
-                    "end_position": max(positions),
-                    "span_width": span_width,
-                    "token_keys": token_keys,
-                    "rows": sorted_rows,
-                }
-            )
-
-        candidate_groups.sort(
-            key=lambda group: (
-                int(group["span_width"]),
-                int(group["start_position"]),
-                int(group["end_position"]),
-            )
-        )
-        used_token_keys: set[tuple[int, int]] = set()
         unit_id = int(unit_df.get_column(unit_column)[0])
         group_index = 1
-        for candidate_group in candidate_groups:
-            token_keys = list(candidate_group["token_keys"])
-            if any(token_key in used_token_keys for token_key in token_keys):
-                continue
+        total_combinations = 1
+        for option_rows in form_row_options:
+            total_combinations *= len(option_rows)
+            if total_combinations > MAX_DISTANCE_MATCH_COMBINATIONS:
+                break
 
+        if total_combinations > MAX_DISTANCE_MATCH_COMBINATIONS:
+            candidate_groups = _find_distance_match_groups_greedily(
+                form_row_options=form_row_options,
+                position_column=position_column,
+                max_token_distance=max_token_distance,
+            )
+        else:
+            candidate_groups = _find_distance_match_groups_by_product(
+                form_row_options=form_row_options,
+                position_column=position_column,
+                max_token_distance=max_token_distance,
+            )
+
+        for candidate_group in candidate_groups:
             match_group_id = f"{condition_id}:{unit_id}:{group_index}"
-            for matched_row in candidate_group["rows"]:
+            for matched_row in candidate_group:
                 hit_rows.append(
                     _build_condition_hit_row(
                         row=matched_row,
@@ -567,7 +680,6 @@ def _find_distance_match_groups_by_unit(
                         match_role=str(matched_row["normalized_form"]),
                     )
                 )
-            used_token_keys.update(token_keys)
             group_index += 1
 
     if not hit_rows:
@@ -1154,7 +1266,7 @@ def reconstruct_sentences_by_ids(tokens_df: pl.DataFrame, sentence_ids: list[int
         .group_by(["sentence_id", "paragraph_id"])
         .agg([
             pl.len().alias("token_count"),
-            pl.col("surface").sort_by("token_no").str.join("").alias("sentence_text"),
+            pl.col("surface").sort_by("token_no").list.join("").alias("sentence_text"),
         ])
         .sort("sentence_id")
     )
@@ -1196,14 +1308,14 @@ def reconstruct_paragraphs_by_ids(
     sentence_text_df = (
         joined_df
         .group_by(["paragraph_id", "sentence_id", "sentence_no_in_paragraph"])
-        .agg(pl.col("surface").sort_by("token_no").str.join("").alias("sentence_text"))
+        .agg(pl.col("surface").sort_by("token_no").list.join("").alias("sentence_text"))
     )
     return (
         sentence_text_df
         .group_by("paragraph_id")
         .agg([
             pl.len().alias("sentence_count"),
-            pl.col("sentence_text").sort_by("sentence_no_in_paragraph").str.join("").alias("paragraph_text"),
+            pl.col("sentence_text").sort_by("sentence_no_in_paragraph").list.join("").alias("paragraph_text"),
         ])
         .sort("paragraph_id")
     )
@@ -1277,4 +1389,3 @@ def build_reconstructed_paragraphs_export_df(
             "annotated_token_count",
         ])
     )
-
