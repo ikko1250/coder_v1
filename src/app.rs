@@ -412,6 +412,15 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn draw_db_viewer_button(&mut self, ui: &mut Ui, enabled: bool) {
+        let response = ui.add_enabled(enabled, egui::Button::new("DB参照"));
+        if response.clicked() {
+            if let Err(error) = self.prepare_db_viewer_state() {
+                self.error_message = Some(error);
+            }
+        }
+    }
+
     fn draw_toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label("CSV:");
@@ -647,6 +656,9 @@ impl App {
 
     fn draw_detail(&mut self, ui: &mut Ui) {
         if let Some(record) = self.selected_record().cloned() {
+            self.draw_db_viewer_button(ui, true);
+            ui.add_space(6.0);
+
             ui.label(
                 RichText::new(format!(
                     "{} / {} / paragraph_id={}",
@@ -700,6 +712,8 @@ impl App {
                     ui.add(egui::Label::new(job).wrap());
                 });
         } else {
+            self.draw_db_viewer_button(ui, false);
+            ui.add_space(6.0);
             ui.label(RichText::new("レコード未選択").italics());
         }
     }
