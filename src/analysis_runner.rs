@@ -256,9 +256,10 @@ fn resolve_python_command(project_root: &Path) -> Result<(OsString, Vec<OsString
         }
     }
 
+    let project_venv_root = project_root.join(".venv");
     let candidate_paths = [
-        project_root.join(".venv").join("Scripts").join("python.exe"),
-        project_root.join(".venv").join("bin").join("python"),
+        project_venv_root.join("Scripts").join("python.exe"),
+        project_venv_root.join("bin").join("python"),
     ];
 
     for path in candidate_paths {
@@ -266,6 +267,13 @@ fn resolve_python_command(project_root: &Path) -> Result<(OsString, Vec<OsString
             let display = path.display().to_string();
             return Ok((path.into_os_string(), Vec::new(), display));
         }
+    }
+
+    if project_venv_root.exists() {
+        return Err(format!(
+            "プロジェクトの .venv は見つかりましたが、この OS 用の Python 実行ファイルを確認できませんでした。\
+Windows なら .venv\\\\Scripts\\\\python.exe を作成するか、{PYTHON_PATH_ENV_KEY} で明示指定してください"
+        ));
     }
 
     if project_root.join("pyproject.toml").is_file() && command_exists("uv") {
