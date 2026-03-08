@@ -50,3 +50,36 @@
   - ローカル環境では `cargo` が Linux 側 PATH に存在せず、Windows 側 `cargo.exe` 実行は sandbox 制約で拒否された
   - その後、`cargo` による確認はユーザー側で実施する方針へ切替
   - こちらでは静的な差分確認まで実施し、コンパイル確認は未実施
+- 第2段階の現状把握:
+  - `load_csv`, `select_first_filtered_row`, `move_selection_up`, `move_selection_down`, `apply_filters`, `draw_tree` がそれぞれ `selected_row` と `pending_tree_scroll` に触れている
+  - `set_selected_row` は選択行の境界調整とキャッシュ破棄のみを担当し、スクロール要求は別メソッドで後付けしている
+  - `draw_tree` は一覧描画の途中でクリック結果を集め、描画後に `set_selected_row` を呼び、さらに `pending_tree_scroll` を `None` に戻している
+  - そのため、「選択変更」「スクロール要求発行」「スクロール要求消費」の責務境界が曖昧
+- 第2段階の承認用実装案:
+  - 既存挙動は維持し、変更対象は選択状態・スクロール要求・一覧クリック結果の反映経路に限定する
+  - `SelectionChange` と `ScrollBehavior` を導入し、選択変更時の意図を enum で表現する
+  - `apply_selection_change(...)` のような単一入口を追加し、境界チェック、`selected_row` 更新、キャッシュ破棄、スクロール要求発行をまとめる
+  - `set_selected_row`, `request_tree_scroll_to_selected_row`, `select_first_filtered_row` は統合または薄いラッパへ整理する
+  - `move_selection_up` / `move_selection_down` / `load_csv` / `apply_filters` は個別に状態を書き換えず、必ず単一入口を経由する
+  - `draw_tree` は「クリックされた行番号を返す」ことに責務を絞り、`pending_tree_scroll` の消費と `selected_row` の確定は描画外で行う
+  - 1-frame lag を避けるため、`update` 内ではキーボード入力処理とクリック反映を描画前に確定できる形に寄せるか、必要なら選択変更時に `ctx.request_repaint()` を追加する
+  - `filtered_indices` 長変更後の古い `selected_row` 残留を避けるため、単一入口内で必ず `filtered_indices.len()` による clamp / `None` 化を行う
+  - この段階ではファイル分割と UI レイアウト変更は行わない
+- 第2段階のテスト観点:
+  - CSV読込直後に先頭行が選択されること
+  - フィルタ適用後に 0 件なら `selected_row = None`、1件以上なら先頭選択になること
+  - 矢印キー上下で選択と詳細表示が同期すること
+  - 行クリックで選択と詳細表示が同期すること
+  - スクロール要求が 1 回で消費され、残留しないこと
+  - 既存の一覧ハイライトと詳細キャッシュ破棄が維持されること
+- 第2段階の実装結果:
+  - `ScrollBehavior` と `SelectionChange` を追加し、選択変更意図とスクロール意図を enum / struct で表現
+  - `apply_selection_change(...)` を追加し、境界調整、`selected_row` 更新、`cached_segments` 破棄、`pending_tree_scroll` 生成を一本化
+  - `load_csv`, `move_selection_up`, `move_selection_down`, `apply_filters` は個別の状態書き換えをやめ、単一入口経由へ変更
+  - `apply_filters` では `filtered_indices` 変更後に `cached_segments` を必ず破棄するよう維持
+  - `draw_tree` は `TreeScrollRequest` を引数で受け取り、クリックされた行番号を返すだけの責務へ変更
+  - `update` で「描画に使ったスクロール要求」を保持し、描画後にクリック結果を反映しつつ、消費済み要求だけを `None` に戻すよう整理
+  - 描画後クリックで選択が変わった場合は `ctx.request_repaint()` を呼び、1-frame lag の見え方を抑える構成とした
+- 第2段階の検証状況:
+  - `cargo` によるビルド確認は、前回方針どおりユーザー側実施とする
+  - こちらでは差分読解ベースで、旧 `set_selected_row` / `request_tree_scroll_to_selected_row` 依存が残っていないことを確認

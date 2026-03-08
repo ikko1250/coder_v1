@@ -83,6 +83,21 @@ struct TreeScrollRequest {
     align: Option<egui::Align>,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollBehavior {
+    None,
+    KeepVisible,
+    AlignMin,
+    AlignMax,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectionChange {
+    selected_row: Option<usize>,
+    scroll_behavior: ScrollBehavior,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum FilterColumn {
     ParagraphId,
@@ -123,6 +138,19 @@ struct TreeColumnSpec {
     header: &'static str,
     build_column: fn() -> Column,
     value: fn(&CsvRecord) -> String,
+}
+
+impl SelectionChange {
+    fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
+        Self {
+            selected_row,
+            scroll_behavior,
+        }
+    }
+
+    fn first_filtered_row(filtered_len: usize, scroll_behavior: ScrollBehavior) -> Self {
+        Self::new((filtered_len > 0).then_some(0), scroll_behavior)
+    }
 }
 
 const FILTER_COLUMN_ORDER: &[FilterColumn] = &[
@@ -278,6 +306,35 @@ impl FilterColumnSpec {
 
     fn compare_values(self, left: &str, right: &str) -> std::cmp::Ordering {
         compare_filter_values(left, right, self.sort_kind)
+    }
+}
+
+fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usize) -> Option<usize> {
+    match (selected_row, filtered_len) {
+        (_, 0) => None,
+        (Some(idx), len) => Some(idx.min(len - 1)),
+        (None, _) => None,
+    }
+}
+
+fn build_tree_scroll_request(
+    selected_row: Option<usize>,
+    scroll_behavior: ScrollBehavior,
+) -> Option<TreeScrollRequest> {
+    match scroll_behavior {
+        ScrollBehavior::None => None,
+        ScrollBehavior::KeepVisible => selected_row.map(|row_index| TreeScrollRequest {
+            row_index,
+            align: None,
+        }),
+        ScrollBehavior::AlignMin => selected_row.map(|row_index| TreeScrollRequest {
+            row_index,
+            align: Some(egui::Align::Min),
+        }),
+        ScrollBehavior::AlignMax => selected_row.map(|row_index| TreeScrollRequest {
+            row_index,
+            align: Some(egui::Align::Max),
+        }),
     }
 }
 
@@ -483,9 +540,10 @@ impl App {
                 self.selected_filter_values.clear();
                 self.filtered_indices = (0..self.all_records.len()).collect();
                 self.cached_segments = None;
-                self.pending_tree_scroll = None;
-                self.set_selected_row(None);
-                self.select_first_filtered_row(Some(egui::Align::Min));
+                self.apply_selection_change(SelectionChange::first_filtered_row(
+                    self.filtered_indices.len(),
+                    ScrollBehavior::AlignMin,
+                ));
                 self.error_message = None;
             }
             Err(e) => {
@@ -494,29 +552,26 @@ impl App {
         }
     }
 
-    fn set_selected_row(&mut self, selected_row: Option<usize>) {
-        let next = selected_row.filter(|&idx| idx < self.filtered_indices.len());
-        if self.selected_row != next {
+    fn apply_selection_change(&mut self, change: SelectionChange) -> bool {
+        let next = clamp_selected_row(change.selected_row, self.filtered_indices.len());
+        let selection_changed = self.selected_row != next;
+        if selection_changed {
             self.selected_row = next;
             self.cached_segments = None;
         }
+
+        let next_scroll_request = build_tree_scroll_request(next, change.scroll_behavior);
+        let scroll_changed = self.pending_tree_scroll != next_scroll_request;
+        self.pending_tree_scroll = next_scroll_request;
+
+        selection_changed || scroll_changed
     }
 
-    fn request_tree_scroll_to_selected_row(&mut self, align: Option<egui::Align>) {
-        self.pending_tree_scroll = self.selected_row.map(|row_index| TreeScrollRequest {
-            row_index,
-            align,
-        });
-    }
-
-    fn select_first_filtered_row(&mut self, align: Option<egui::Align>) {
-        let next = if self.filtered_indices.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-        self.set_selected_row(next);
-        self.request_tree_scroll_to_selected_row(align);
+    fn select_first_filtered_row(&mut self, scroll_behavior: ScrollBehavior) -> bool {
+        self.apply_selection_change(SelectionChange::first_filtered_row(
+            self.filtered_indices.len(),
+            scroll_behavior,
+        ))
     }
 
     fn move_selection_up(&mut self) {
@@ -526,10 +581,14 @@ impl App {
 
         match self.selected_row {
             Some(idx) if idx > 0 => {
-                self.set_selected_row(Some(idx - 1));
-                self.request_tree_scroll_to_selected_row(None);
+                self.apply_selection_change(SelectionChange::new(
+                    Some(idx - 1),
+                    ScrollBehavior::KeepVisible,
+                ));
             }
-            None => self.select_first_filtered_row(Some(egui::Align::Min)),
+            None => {
+                self.select_first_filtered_row(ScrollBehavior::AlignMin);
+            }
             _ => {}
         }
     }
@@ -542,10 +601,14 @@ impl App {
 
         match self.selected_row {
             Some(idx) if idx + 1 < current_len => {
-                self.set_selected_row(Some(idx + 1));
-                self.request_tree_scroll_to_selected_row(None);
+                self.apply_selection_change(SelectionChange::new(
+                    Some(idx + 1),
+                    ScrollBehavior::KeepVisible,
+                ));
             }
-            None => self.select_first_filtered_row(Some(egui::Align::Min)),
+            None => {
+                self.select_first_filtered_row(ScrollBehavior::AlignMin);
+            }
             _ => {}
         }
     }
@@ -585,9 +648,8 @@ impl App {
             .enumerate()
             .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
             .collect();
-        self.pending_tree_scroll = None;
-        self.set_selected_row(None);
-        self.select_first_filtered_row(Some(egui::Align::Min));
+        self.cached_segments = None;
+        self.select_first_filtered_row(ScrollBehavior::AlignMin);
     }
 
     fn record_matches_filters(&self, record: &CsvRecord) -> bool {
@@ -675,9 +737,24 @@ impl eframe::App for App {
             self.draw_toolbar(ui);
         });
 
+        let consumed_tree_scroll = self.pending_tree_scroll;
+        let mut clicked_row = None;
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.draw_body(ui);
+            clicked_row = self.draw_body(ui, consumed_tree_scroll);
         });
+
+        if let Some(row_index) = clicked_row {
+            if self.apply_selection_change(SelectionChange::new(
+                Some(row_index),
+                ScrollBehavior::KeepVisible,
+            )) {
+                ctx.request_repaint();
+            }
+        }
+
+        if self.pending_tree_scroll == consumed_tree_scroll {
+            self.pending_tree_scroll = None;
+        }
     }
 }
 
@@ -718,7 +795,12 @@ impl App {
         });
     }
 
-    fn draw_body(&mut self, ui: &mut Ui) {
+    fn draw_body(
+        &mut self,
+        ui: &mut Ui,
+        tree_scroll_request: Option<TreeScrollRequest>,
+    ) -> Option<usize> {
+        let mut clicked_row = None;
         egui::SidePanel::left("record_list_panel")
             .resizable(true)
             .default_width(620.0)
@@ -726,12 +808,14 @@ impl App {
             .show_inside(ui, |ui| {
                 self.draw_filters(ui);
                 ui.separator();
-                self.draw_tree(ui);
+                clicked_row = self.draw_tree(ui, tree_scroll_request);
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             self.draw_detail(ui);
         });
+
+        clicked_row
     }
 
     fn draw_filters(&mut self, ui: &mut Ui) {
@@ -829,11 +913,14 @@ impl App {
             });
     }
 
-    fn draw_tree(&mut self, ui: &mut Ui) {
+    fn draw_tree(
+        &mut self,
+        ui: &mut Ui,
+        tree_scroll_request: Option<TreeScrollRequest>,
+    ) -> Option<usize> {
         let filtered_indices = &self.filtered_indices;
         let selected_row = self.selected_row;
-        let pending_tree_scroll = self.pending_tree_scroll;
-        let mut new_selected = selected_row;
+        let mut clicked_row = None;
         let selected_fill = Color32::from_rgb(70, 130, 180);
         let mut table = TableBuilder::new(ui)
             .striped(true)
@@ -844,7 +931,7 @@ impl App {
             table = table.column((spec.build_column)());
         }
 
-        if let Some(scroll_request) = pending_tree_scroll {
+        if let Some(scroll_request) = tree_scroll_request {
             if scroll_request.row_index < filtered_indices.len() {
                 table = table.scroll_to_row(scroll_request.row_index, scroll_request.align);
             }
@@ -897,17 +984,12 @@ impl App {
                     }
 
                     if row_clicked {
-                        new_selected = Some(i);
+                        clicked_row = Some(i);
                     }
                 });
             });
 
-        if new_selected != self.selected_row {
-            self.set_selected_row(new_selected);
-        }
-        if pending_tree_scroll.is_some() {
-            self.pending_tree_scroll = None;
-        }
+        clicked_row
     }
 
     fn draw_detail(&mut self, ui: &mut Ui) {
