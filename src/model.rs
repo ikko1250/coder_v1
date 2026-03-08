@@ -46,3 +46,19 @@ pub(crate) enum FilterColumn {
     MatchGroupCount,
     AnnotatedTokenCount,
 }
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DbParagraph {
+    pub(crate) paragraph_id: i64,
+    pub(crate) document_id: i64,
+    pub(crate) paragraph_no: i64,
+    pub(crate) paragraph_text: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DbParagraphContext {
+    pub(crate) center: DbParagraph,
+    pub(crate) paragraphs: Vec<DbParagraph>,
+}

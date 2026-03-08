@@ -2,6 +2,7 @@
 
 mod app;
 mod csv_loader;
+mod db;
 mod filter;
 mod font;
 mod model;
