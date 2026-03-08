@@ -88,3 +88,25 @@
   - 原因は `rusqlite` / `libsqlite3-sys` がシステム SQLite を探す構成だったため
   - 対応として `Cargo.toml` の `rusqlite` に `bundled` feature を追加し、SQLite を同梱ビルドする構成へ変更
   - あわせて `src/app.rs` の未使用代入 warning と不要な `mut` warning を解消した
+- 現時点の到達点:
+  - 右ペインから `DB参照` ボタンで別ウィンドウを開ける
+  - DB 中心段落、CSV テキスト、前後 5 段落、前後移動を利用できる
+  - 初期スコープとして想定した MVP はおおむね成立
+- 次作業候補:
+  - 欠番 paragraph_no に対する前後移動の堅牢化
+  - DB ウィンドウ内 UI の磨き込み（差分表示、ヘッダ整理、状態表示）
+  - 参照処理の非同期化やキャッシュなど性能改善
+  - DB パス設定の外出し
+  - `cargo test` 相当の最低限の検証導線整備
+- UI 方針見直し:
+  - 現状の DB 参照は `egui::Window` による親ウィンドウ内の疑似ウィンドウであり、操作感としては入れ子表示になっている
+  - `eframe` native は `egui` の viewport 機能により複数のネイティブウィンドウを扱えるため、DB 参照は外部ウィンドウへ切り替える方が自然
+  - 実装方式としては `Context::show_viewport_immediate` を優先候補とする
+  - 理由は、現在の DB ビューア状態が `App` 内にあり、まずは単純な即時型 viewport の方が導入コストが低いため
+  - なお docs 上では viewport は毎フレーム呼び出しが必要で、埋め込み fallback の可能性もあるため、必要なら既存 `egui::Window` を fallback として残す
+- 外部ウィンドウ化実装:
+  - `src/app.rs` の DB ビューア描画を `egui::Window` から `Context::show_viewport_immediate` ベースへ置換
+  - viewport には `ViewportBuilder::with_inner_size([760.0, 820.0])` を設定
+  - OS 側の閉じる要求は `input.viewport().close_requested()` を監視し、`db_viewer_state.is_open = false` へ反映する構成にした
+  - `self` の借用衝突を避けるため、描画には `db_viewer_state` のスナップショットを使用し、操作結果だけを後段で反映する構成にした
+  - `ViewportClass::Embedded` の場合は fallback として既存の `egui::Window` 描画を利用する

@@ -73,6 +73,8 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
     },
 ];
 
+const DB_VIEWER_VIEWPORT_ID: &str = "db_viewer_viewport";
+
 impl SelectionChange {
     fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
         Self {
@@ -497,147 +499,60 @@ impl App {
             return;
         }
 
+        let snapshot = self.db_viewer_state.clone();
         let previous_location = self.previous_db_viewer_location();
         let next_location = self.next_db_viewer_location();
-
-        let state = &self.db_viewer_state;
-        let db_file_label = state
-            .db_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("ordinance_analysis3.db")
-            .to_string();
-        let csv_text = state.csv_paragraph_text.clone().unwrap_or_default();
-        let mismatch = state
-            .context
-            .as_ref()
-            .map(|context| context.center.paragraph_text != csv_text)
-            .unwrap_or(false);
-        let context = state.context.clone();
-        let error_message = state.error_message.clone();
-        let mut is_open = state.is_open;
         let mut requested_location = None;
+        let mut close_requested = false;
+        let viewport_id = egui::ViewportId::from_hash_of(DB_VIEWER_VIEWPORT_ID);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("DB コンテキスト参照")
+            .with_inner_size([760.0, 820.0])
+            .with_resizable(true);
 
-        egui::Window::new("DB コンテキスト参照")
-            .open(&mut is_open)
-            .default_width(760.0)
-            .default_height(820.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.label(format!("DB: {}", db_file_label));
-                ui.label(format!("パス: {}", state.db_path.display()));
+        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
+            close_requested = viewport_ctx.input(|input| input.viewport().close_requested());
 
-                if let Some(context) = &context {
-                    ui.label(format!(
-                        "paragraph_id: {} / document_id: {} / paragraph_no: {}",
-                        context.center.paragraph_id,
-                        context.center.document_id,
-                        context.center.paragraph_no
-                    ));
-                } else if let Some(paragraph_id) = state.source_paragraph_id {
-                    ui.label(format!("paragraph_id: {}", paragraph_id));
-                }
+            match class {
+                egui::ViewportClass::Embedded => {
+                    let mut fallback_open = true;
+                    egui::Window::new("DB コンテキスト参照")
+                        .open(&mut fallback_open)
+                        .default_width(760.0)
+                        .default_height(820.0)
+                        .resizable(true)
+                        .show(viewport_ctx, |ui| {
+                            render_db_viewer_contents(
+                                ui,
+                                &snapshot,
+                                previous_location,
+                                next_location,
+                                &mut requested_location,
+                            );
+                        });
 
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            previous_location.is_some(),
-                            egui::Button::new("◀ 前へ"),
-                        )
-                        .clicked()
-                    {
-                        requested_location = previous_location;
+                    if !fallback_open {
+                        close_requested = true;
                     }
-
-                    let center_label = context
-                        .as_ref()
-                        .map(|context| format!("中心段落番号: {}", context.center.paragraph_no))
-                        .unwrap_or_else(|| "中心段落番号: -".to_string());
-                    ui.label(center_label);
-
-                    if ui
-                        .add_enabled(next_location.is_some(), egui::Button::new("次へ ▶"))
-                        .clicked()
-                    {
-                        requested_location = next_location;
-                    }
-                });
-
-                ui.separator();
-
-                if let Some(error) = &error_message {
-                    ui.colored_label(Color32::from_rgb(200, 64, 64), error);
-                    return;
                 }
-
-                ui.label(RichText::new("CSV テキスト").strong());
-                ScrollArea::vertical()
-                    .id_salt("db_viewer_csv_text")
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        ui.label(&csv_text);
-                    });
-
-                ui.add_space(6.0);
-                ui.label(RichText::new("DB 中心段落").strong());
-                if let Some(context) = &context {
-                    ui.group(|ui| {
-                        ui.label(format!("paragraph_no: {}", context.center.paragraph_no));
-                        ui.label(&context.center.paragraph_text);
+                _ => {
+                    egui::CentralPanel::default().show(viewport_ctx, |ui| {
+                        render_db_viewer_contents(
+                            ui,
+                            &snapshot,
+                            previous_location,
+                            next_location,
+                            &mut requested_location,
+                        );
                     });
                 }
+            }
+        });
 
-                ui.add_space(4.0);
-                let compare_label = if mismatch {
-                    RichText::new("CSV と DB 中心段落は不一致")
-                        .color(Color32::from_rgb(200, 64, 64))
-                } else {
-                    RichText::new("CSV と DB 中心段落は一致")
-                        .color(Color32::from_rgb(70, 130, 70))
-                };
-                ui.label(compare_label);
-
-                ui.separator();
-                ui.label(RichText::new("前後コンテキスト").strong());
-
-                ScrollArea::vertical()
-                    .id_salt("db_viewer_context")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if let Some(context) = &context {
-                            for paragraph in &context.paragraphs {
-                                let is_center =
-                                    paragraph.paragraph_id == context.center.paragraph_id;
-                                if is_center {
-                                    ui.group(|ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "段落 {} (中心)",
-                                                paragraph.paragraph_no
-                                            ))
-                                            .strong()
-                                            .color(Color32::from_rgb(200, 120, 40)),
-                                        );
-                                        ui.label(&paragraph.paragraph_text);
-                                    });
-                                } else {
-                                    ui.label(
-                                        RichText::new(format!("段落 {}", paragraph.paragraph_no))
-                                            .strong(),
-                                    );
-                                    ui.label(&paragraph.paragraph_text);
-                                }
-                                ui.add_space(8.0);
-                            }
-                        } else {
-                            ui.label(RichText::new("DB コンテキスト未取得").italics());
-                        }
-                    });
-            });
-
-        self.db_viewer_state.is_open = is_open;
+        if close_requested {
+            self.db_viewer_state.is_open = false;
+            return;
+        }
 
         if let Some((document_id, paragraph_no)) = requested_location {
             self.load_db_viewer_context_for_location(document_id, paragraph_no);
@@ -989,4 +904,130 @@ fn tree_category_value(record: &CsvRecord) -> String {
 
 fn tree_annotated_token_count_value(record: &CsvRecord) -> String {
     record.annotated_token_count.clone()
+}
+
+fn render_db_viewer_contents(
+    ui: &mut Ui,
+    state: &DbViewerState,
+    previous_location: Option<(i64, i64)>,
+    next_location: Option<(i64, i64)>,
+    requested_location: &mut Option<(i64, i64)>,
+) {
+    let db_file_label = state
+        .db_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("ordinance_analysis3.db");
+    let csv_text = state.csv_paragraph_text.clone().unwrap_or_default();
+    let mismatch = state
+        .context
+        .as_ref()
+        .map(|context| context.center.paragraph_text != csv_text)
+        .unwrap_or(false);
+
+    ui.label(format!("DB: {}", db_file_label));
+    ui.label(format!("パス: {}", state.db_path.display()));
+
+    if let Some(context) = &state.context {
+        ui.label(format!(
+            "paragraph_id: {} / document_id: {} / paragraph_no: {}",
+            context.center.paragraph_id,
+            context.center.document_id,
+            context.center.paragraph_no
+        ));
+    } else if let Some(paragraph_id) = state.source_paragraph_id {
+        ui.label(format!("paragraph_id: {}", paragraph_id));
+    }
+
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                previous_location.is_some(),
+                egui::Button::new("◀ 前へ"),
+            )
+            .clicked()
+        {
+            *requested_location = previous_location;
+        }
+
+        let center_label = state
+            .context
+            .as_ref()
+            .map(|context| format!("中心段落番号: {}", context.center.paragraph_no))
+            .unwrap_or_else(|| "中心段落番号: -".to_string());
+        ui.label(center_label);
+
+        if ui
+            .add_enabled(next_location.is_some(), egui::Button::new("次へ ▶"))
+            .clicked()
+        {
+            *requested_location = next_location;
+        }
+    });
+
+    ui.separator();
+
+    if let Some(error) = &state.error_message {
+        ui.colored_label(Color32::from_rgb(200, 64, 64), error);
+        return;
+    }
+
+    ui.label(RichText::new("CSV テキスト").strong());
+    ScrollArea::vertical()
+        .id_salt("db_viewer_csv_text")
+        .max_height(140.0)
+        .show(ui, |ui| {
+            ui.label(&csv_text);
+        });
+
+    ui.add_space(6.0);
+    ui.label(RichText::new("DB 中心段落").strong());
+    if let Some(context) = &state.context {
+        ui.group(|ui| {
+            ui.label(format!("paragraph_no: {}", context.center.paragraph_no));
+            ui.label(&context.center.paragraph_text);
+        });
+    }
+
+    ui.add_space(4.0);
+    let compare_label = if mismatch {
+        RichText::new("CSV と DB 中心段落は不一致").color(Color32::from_rgb(200, 64, 64))
+    } else {
+        RichText::new("CSV と DB 中心段落は一致").color(Color32::from_rgb(70, 130, 70))
+    };
+    ui.label(compare_label);
+
+    ui.separator();
+    ui.label(RichText::new("前後コンテキスト").strong());
+
+    ScrollArea::vertical()
+        .id_salt("db_viewer_context")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if let Some(context) = &state.context {
+                for paragraph in &context.paragraphs {
+                    let is_center = paragraph.paragraph_id == context.center.paragraph_id;
+                    if is_center {
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(format!("段落 {} (中心)", paragraph.paragraph_no))
+                                    .strong()
+                                    .color(Color32::from_rgb(200, 120, 40)),
+                            );
+                            ui.label(&paragraph.paragraph_text);
+                        });
+                    } else {
+                        ui.label(
+                            RichText::new(format!("段落 {}", paragraph.paragraph_no)).strong(),
+                        );
+                        ui.label(&paragraph.paragraph_text);
+                    }
+                    ui.add_space(8.0);
+                }
+            } else {
+                ui.label(RichText::new("DB コンテキスト未取得").italics());
+            }
+        });
 }
