@@ -1,0 +1,62 @@
+{
+    "condition_match_logic": "any",
+    "max_reconstructed_paragraphs": 10000,
+    "cooccurrence_conditions": [
+        {
+            "condition_id": "suppress_area",
+            "categories": ["概念:抑制区域"],
+            "forms": ["抑制", "区域"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        },
+        {
+            "condition_id": "suppress_district",
+            "categories": ["概念:抑制区域"],
+            "forms": ["抑制", "地区"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        },
+        {
+            "condition_id": "restrict_area",
+            "categories": ["概念:抑制区域"],
+            "forms": ["制限", "区域"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        },
+        {
+            "condition_id": "restrict_district",
+            "categories": ["概念:抑制区域"],
+            "forms": ["制限", "地区"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        },
+        {
+            "condition_id": "preserve_area",
+            "categories": ["概念:抑制区域"],
+            "forms": ["保全", "区域"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        },
+        {
+            "condition_id": "preserve_district",
+            "categories": ["概念:抑制区域_保全"],
+            "forms": ["保全", "地区"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        },
+        {
+            "condition_id": "potential_lv1",
+            "categories": ["概念:抑制区域_保全"],
+            "forms": ["保全", "地区"],
+            "form_match_logic": "all",
+            "max_token_distance": 5,
+            "search_scope": "sentence"
+        }
+    ]
+}
