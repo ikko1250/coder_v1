@@ -1,6 +1,7 @@
 use crate::analysis_runner::{
-    build_default_runtime_config, cleanup_job_directories, spawn_analysis_job, AnalysisJobEvent,
+    build_runtime_config, cleanup_job_directories, spawn_analysis_job, AnalysisJobEvent,
     AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
+    AnalysisRuntimeOverrides,
 };
 use crate::csv_loader::load_records;
 use crate::db::{
@@ -128,6 +129,22 @@ impl AnalysisRuntimeState {
     }
 }
 
+#[derive(Default)]
+struct AnalysisRequestState {
+    python_path_override: Option<PathBuf>,
+    filter_config_path_override: Option<PathBuf>,
+    settings_window_open: bool,
+}
+
+impl AnalysisRequestState {
+    fn runtime_overrides(&self) -> AnalysisRuntimeOverrides {
+        AnalysisRuntimeOverrides {
+            python_path: self.python_path_override.clone(),
+            filter_config_path: self.filter_config_path_override.clone(),
+        }
+    }
+}
+
 impl SelectionChange {
     fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
         Self {
@@ -173,6 +190,7 @@ fn build_tree_scroll_request(
 pub(crate) struct App {
     csv_path: PathBuf,
     db_viewer_state: DbViewerState,
+    analysis_request_state: AnalysisRequestState,
     analysis_runtime_state: AnalysisRuntimeState,
     all_records: Vec<CsvRecord>,
     filtered_indices: Vec<usize>,
@@ -187,10 +205,12 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(csv_path: PathBuf) -> Self {
-        let runtime = build_default_runtime_config();
+        let analysis_request_state = AnalysisRequestState::default();
+        let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let mut app = Self {
             csv_path: csv_path.clone(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
+            analysis_request_state,
             analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
             all_records: Vec::new(),
             filtered_indices: Vec::new(),
@@ -438,6 +458,16 @@ impl App {
         }
     }
 
+    fn refresh_analysis_runtime(&mut self) {
+        if self.analysis_runtime_state.current_job.is_some() {
+            return;
+        }
+
+        let runtime = build_runtime_config(&self.analysis_request_state.runtime_overrides());
+        self.analysis_runtime_state = AnalysisRuntimeState::from_runtime(runtime);
+        self.try_cleanup_analysis_jobs();
+    }
+
     fn start_analysis_job(&mut self) -> Result<(), String> {
         if self.analysis_runtime_state.current_job.is_some() {
             return Err("分析ジョブは既に実行中です".to_string());
@@ -550,6 +580,7 @@ impl eframe::App for App {
         });
 
         self.draw_db_viewer_window(ctx);
+        self.draw_analysis_settings_window(ctx);
 
         if let Some(row_index) = clicked_row {
             if self.apply_selection_change(SelectionChange::new(
@@ -749,6 +780,7 @@ impl App {
 
             ui.horizontal_wrapped(|ui| {
                 let can_start = self.analysis_runtime_state.can_start();
+                let settings_enabled = self.analysis_runtime_state.current_job.is_none();
                 let python_label = self
                     .analysis_runtime_state
                     .runtime
@@ -776,6 +808,13 @@ impl App {
                     }
                 }
 
+                if ui
+                    .add_enabled(settings_enabled, egui::Button::new("分析設定"))
+                    .clicked()
+                {
+                    self.analysis_request_state.settings_window_open = true;
+                }
+
                 ui.label(format!("DB: {db_label}"));
                 ui.label(format!("条件: {filter_config_label}"));
                 ui.label(format!("Python: {python_label}"));
@@ -790,6 +829,137 @@ impl App {
                 ui.label(RichText::new(status_text).color(status_color));
             });
         });
+    }
+
+    fn draw_analysis_settings_window(&mut self, ctx: &egui::Context) {
+        if !self.analysis_request_state.settings_window_open {
+            return;
+        }
+
+        let mut window_open = self.analysis_request_state.settings_window_open;
+        let mut selected_python_path = None;
+        let mut selected_filter_config_path = None;
+        let mut clear_python_override = false;
+        let mut clear_filter_config_override = false;
+        let settings_enabled = self.analysis_runtime_state.current_job.is_none();
+        let python_override_label = self
+            .analysis_request_state
+            .python_path_override
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "自動解決".to_string());
+        let filter_override_label = self
+            .analysis_request_state
+            .filter_config_path_override
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "既定値 (asset/cooccurrence-conditions.json)".to_string());
+        let resolved_python_label = self
+            .analysis_runtime_state
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.python_label.clone())
+            .unwrap_or_else(|| "-".to_string());
+        let resolved_filter_label = self
+            .analysis_runtime_state
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.filter_config_path.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let status_text = self.analysis_runtime_state.status_text();
+
+        egui::Window::new("分析設定")
+            .open(&mut window_open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("分析実行に使う Python と条件 JSON を切り替えます。");
+                ui.label("この設定は現在のセッション内だけで有効です。");
+                ui.separator();
+
+                ui.label("Python 実行ファイル");
+                ui.horizontal(|ui| {
+                    let mut label = python_override_label.clone();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut label)
+                            .desired_width(460.0)
+                            .interactive(false),
+                    );
+                    if ui
+                        .add_enabled(settings_enabled, egui::Button::new("選択"))
+                        .clicked()
+                    {
+                        selected_python_path = rfd::FileDialog::new()
+                            .add_filter("Python", &["exe"])
+                            .add_filter("All files", &["*"])
+                            .pick_file();
+                    }
+                    if ui
+                        .add_enabled(settings_enabled, egui::Button::new("自動解決"))
+                        .clicked()
+                    {
+                        clear_python_override = true;
+                    }
+                });
+                ui.label(format!("現在の解決結果: {resolved_python_label}"));
+                ui.separator();
+
+                ui.label("条件 JSON");
+                ui.horizontal(|ui| {
+                    let mut label = filter_override_label.clone();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut label)
+                            .desired_width(460.0)
+                            .interactive(false),
+                    );
+                    if ui
+                        .add_enabled(settings_enabled, egui::Button::new("選択"))
+                        .clicked()
+                    {
+                        selected_filter_config_path = rfd::FileDialog::new()
+                            .add_filter("JSON files", &["json"])
+                            .add_filter("All files", &["*"])
+                            .pick_file();
+                    }
+                    if ui
+                        .add_enabled(settings_enabled, egui::Button::new("既定値"))
+                        .clicked()
+                    {
+                        clear_filter_config_override = true;
+                    }
+                });
+                ui.label(format!("現在の解決結果: {resolved_filter_label}"));
+                ui.separator();
+
+                ui.label(format!("状態: {status_text}"));
+                if !settings_enabled {
+                    ui.label("分析ジョブ実行中は設定を変更できません。");
+                }
+            });
+
+        self.analysis_request_state.settings_window_open = window_open;
+
+        let mut runtime_changed = false;
+        if let Some(path) = selected_python_path {
+            self.analysis_request_state.python_path_override = Some(path);
+            runtime_changed = true;
+        }
+        if clear_python_override {
+            self.analysis_request_state.python_path_override = None;
+            runtime_changed = true;
+        }
+        if let Some(path) = selected_filter_config_path {
+            self.analysis_request_state.filter_config_path_override = Some(path);
+            runtime_changed = true;
+        }
+        if clear_filter_config_override {
+            self.analysis_request_state.filter_config_path_override = None;
+            runtime_changed = true;
+        }
+
+        if runtime_changed {
+            self.refresh_analysis_runtime();
+            ctx.request_repaint();
+        }
     }
 
     fn draw_body(

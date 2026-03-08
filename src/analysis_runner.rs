@@ -14,6 +14,12 @@ const DEFAULT_JOBS_RELATIVE_PATH: &str = "runtime/jobs";
 const JOB_HISTORY_KEEP_COUNT: usize = 5;
 const PYTHON_PATH_ENV_KEY: &str = "CSV_VIEWER_PYTHON";
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AnalysisRuntimeOverrides {
+    pub(crate) python_path: Option<PathBuf>,
+    pub(crate) filter_config_path: Option<PathBuf>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnalysisRuntimeConfig {
     pub(crate) python_command: OsString,
@@ -68,19 +74,22 @@ pub(crate) struct AnalysisMeta {
 }
 
 pub(crate) fn build_default_runtime_config() -> Result<AnalysisRuntimeConfig, String> {
+    build_runtime_config(&AnalysisRuntimeOverrides::default())
+}
+
+pub(crate) fn build_runtime_config(
+    overrides: &AnalysisRuntimeOverrides,
+) -> Result<AnalysisRuntimeConfig, String> {
     let script_path = resolve_project_file(DEFAULT_SCRIPT_RELATIVE_PATH)
         .ok_or_else(|| format!("分析スクリプトが見つかりません: {DEFAULT_SCRIPT_RELATIVE_PATH}"))?;
-    let filter_config_path = resolve_project_file(DEFAULT_FILTER_CONFIG_RELATIVE_PATH).ok_or_else(|| {
-        format!(
-            "条件 JSON が見つかりません: {DEFAULT_FILTER_CONFIG_RELATIVE_PATH}"
-        )
-    })?;
     let project_root = script_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    let filter_config_path = resolve_filter_config_path(overrides)?;
     let jobs_root = project_root.join(DEFAULT_JOBS_RELATIVE_PATH);
-    let (python_command, python_args, python_label) = resolve_python_command(&project_root)?;
+    let (python_command, python_args, python_label) =
+        resolve_python_command(&project_root, overrides)?;
 
     Ok(AnalysisRuntimeConfig {
         python_command,
@@ -248,7 +257,41 @@ fn build_job_id() -> String {
     format!("job-{millis}")
 }
 
-fn resolve_python_command(project_root: &Path) -> Result<(OsString, Vec<OsString>, String), String> {
+fn resolve_filter_config_path(overrides: &AnalysisRuntimeOverrides) -> Result<PathBuf, String> {
+    if let Some(path) = overrides.filter_config_path.as_ref() {
+        if path.is_file() {
+            return Ok(path.clone());
+        }
+
+        return Err(format!(
+            "条件 JSON が見つかりません: {}",
+            path.display()
+        ));
+    }
+
+    resolve_project_file(DEFAULT_FILTER_CONFIG_RELATIVE_PATH).ok_or_else(|| {
+        format!(
+            "条件 JSON が見つかりません: {DEFAULT_FILTER_CONFIG_RELATIVE_PATH}"
+        )
+    })
+}
+
+fn resolve_python_command(
+    project_root: &Path,
+    overrides: &AnalysisRuntimeOverrides,
+) -> Result<(OsString, Vec<OsString>, String), String> {
+    if let Some(path) = overrides.python_path.as_ref() {
+        if path.is_file() {
+            let display = path.display().to_string();
+            return Ok((path.clone().into_os_string(), Vec::new(), display));
+        }
+
+        return Err(format!(
+            "Python 実行ファイルが見つかりません: {}",
+            path.display()
+        ));
+    }
+
     if let Ok(value) = env::var(PYTHON_PATH_ENV_KEY) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
