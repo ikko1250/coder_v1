@@ -13,14 +13,6 @@ use std::sync::{Arc, OnceLock};
 // ─── 定数 ────────────────────────────────────────────────────────────────────
 
 const JAPANESE_FONT_NAME: &str = "jp_ui_font";
-const TREE_HEADERS: [&str; 6] = [
-    "No",
-    "paragraph_id",
-    "自治体",
-    "条例/規則",
-    "カテゴリ",
-    "強調token数",
-];
 
 const REQUIRED_COLUMNS: &[&str] = &[
     "paragraph_id",
@@ -106,37 +98,221 @@ enum FilterColumn {
     AnnotatedTokenCount,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum FilterValueKind {
+    Single(fn(&CsvRecord) -> String),
+    Multi(fn(&CsvRecord) -> Vec<String>),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FilterSortKind {
+    Text,
+    Numeric,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FilterColumnSpec {
+    column: FilterColumn,
+    label: &'static str,
+    value_kind: FilterValueKind,
+    sort_kind: FilterSortKind,
+}
+
+#[derive(Clone, Copy)]
+struct TreeColumnSpec {
+    header: &'static str,
+    build_column: fn() -> Column,
+    value: fn(&CsvRecord) -> String,
+}
+
+const FILTER_COLUMN_ORDER: &[FilterColumn] = &[
+    FilterColumn::MatchedCategories,
+    FilterColumn::MunicipalityName,
+    FilterColumn::OrdinanceOrRule,
+    FilterColumn::DocType,
+    FilterColumn::ParagraphId,
+    FilterColumn::DocumentId,
+    FilterColumn::SentenceCount,
+    FilterColumn::MatchedConditions,
+    FilterColumn::MatchGroupIds,
+    FilterColumn::MatchGroupCount,
+    FilterColumn::AnnotatedTokenCount,
+];
+
+const FILTER_COLUMN_SPECS: &[FilterColumnSpec] = &[
+    FilterColumnSpec {
+        column: FilterColumn::MatchedCategories,
+        label: "カテゴリ",
+        value_kind: FilterValueKind::Multi(record_matched_categories_values),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::MunicipalityName,
+        label: "自治体",
+        value_kind: FilterValueKind::Single(record_municipality_name_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::OrdinanceOrRule,
+        label: "条例/規則",
+        value_kind: FilterValueKind::Single(record_ordinance_or_rule_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::DocType,
+        label: "doc_type",
+        value_kind: FilterValueKind::Single(record_doc_type_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::ParagraphId,
+        label: "paragraph_id",
+        value_kind: FilterValueKind::Single(record_paragraph_id_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::DocumentId,
+        label: "document_id",
+        value_kind: FilterValueKind::Single(record_document_id_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::SentenceCount,
+        label: "sentence_count",
+        value_kind: FilterValueKind::Single(record_sentence_count_value),
+        sort_kind: FilterSortKind::Numeric,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::MatchedConditions,
+        label: "conditions",
+        value_kind: FilterValueKind::Single(record_matched_condition_ids_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::MatchGroupIds,
+        label: "match_groups",
+        value_kind: FilterValueKind::Single(record_match_group_ids_value),
+        sort_kind: FilterSortKind::Text,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::MatchGroupCount,
+        label: "match_group_count",
+        value_kind: FilterValueKind::Single(record_match_group_count_value),
+        sort_kind: FilterSortKind::Numeric,
+    },
+    FilterColumnSpec {
+        column: FilterColumn::AnnotatedTokenCount,
+        label: "annotated_tokens",
+        value_kind: FilterValueKind::Single(record_annotated_token_count_value),
+        sort_kind: FilterSortKind::Numeric,
+    },
+];
+
+const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
+    TreeColumnSpec {
+        header: "No",
+        build_column: build_tree_row_no_column,
+        value: tree_row_no_value,
+    },
+    TreeColumnSpec {
+        header: "paragraph_id",
+        build_column: build_tree_paragraph_id_column,
+        value: tree_paragraph_id_value,
+    },
+    TreeColumnSpec {
+        header: "自治体",
+        build_column: build_tree_municipality_column,
+        value: tree_municipality_value,
+    },
+    TreeColumnSpec {
+        header: "条例/規則",
+        build_column: build_tree_ordinance_column,
+        value: tree_ordinance_value,
+    },
+    TreeColumnSpec {
+        header: "カテゴリ",
+        build_column: build_tree_category_column,
+        value: tree_category_value,
+    },
+    TreeColumnSpec {
+        header: "強調token数",
+        build_column: build_tree_annotated_token_count_column,
+        value: tree_annotated_token_count_value,
+    },
+];
+
 impl FilterColumn {
     fn all() -> &'static [Self] {
-        &[
-            Self::MatchedCategories,
-            Self::MunicipalityName,
-            Self::OrdinanceOrRule,
-            Self::DocType,
-            Self::ParagraphId,
-            Self::DocumentId,
-            Self::SentenceCount,
-            Self::MatchedConditions,
-            Self::MatchGroupIds,
-            Self::MatchGroupCount,
-            Self::AnnotatedTokenCount,
-        ]
+        FILTER_COLUMN_ORDER
     }
 
     fn label(self) -> &'static str {
-        match self {
-            Self::ParagraphId => "paragraph_id",
-            Self::DocumentId => "document_id",
-            Self::MunicipalityName => "自治体",
-            Self::OrdinanceOrRule => "条例/規則",
-            Self::DocType => "doc_type",
-            Self::SentenceCount => "sentence_count",
-            Self::MatchedCategories => "カテゴリ",
-            Self::MatchedConditions => "conditions",
-            Self::MatchGroupIds => "match_groups",
-            Self::MatchGroupCount => "match_group_count",
-            Self::AnnotatedTokenCount => "annotated_tokens",
+        self.spec().label
+    }
+
+    fn spec(self) -> &'static FilterColumnSpec {
+        FILTER_COLUMN_SPECS
+            .iter()
+            .find(|spec| spec.column == self)
+            .expect("missing FilterColumnSpec")
+    }
+}
+
+impl FilterColumnSpec {
+    fn values(self, record: &CsvRecord) -> Vec<String> {
+        match self.value_kind {
+            FilterValueKind::Single(extract) => vec![extract(record)],
+            FilterValueKind::Multi(extract) => extract(record),
         }
+    }
+
+    fn matches(self, record: &CsvRecord, selected: &BTreeSet<String>) -> bool {
+        if selected.is_empty() {
+            return true;
+        }
+
+        self.values(record)
+            .into_iter()
+            .any(|value| selected.contains(&value))
+    }
+
+    fn compare_values(self, left: &str, right: &str) -> std::cmp::Ordering {
+        compare_filter_values(left, right, self.sort_kind)
+    }
+}
+
+fn compare_filter_values(left: &str, right: &str, sort_kind: FilterSortKind) -> std::cmp::Ordering {
+    match sort_kind {
+        FilterSortKind::Text => display_filter_value(left)
+            .cmp(&display_filter_value(right))
+            .then_with(|| left.cmp(right)),
+        FilterSortKind::Numeric => compare_numeric_filter_values(left, right),
+    }
+}
+
+fn compare_numeric_filter_values(left: &str, right: &str) -> std::cmp::Ordering {
+    let left_trimmed = left.trim();
+    let right_trimmed = right.trim();
+
+    match (left_trimmed.is_empty(), right_trimmed.is_empty()) {
+        (true, true) => return std::cmp::Ordering::Equal,
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        (false, false) => {}
+    }
+
+    match (
+        left_trimmed.parse::<i64>(),
+        right_trimmed.parse::<i64>(),
+    ) {
+        (Ok(left_value), Ok(right_value)) => left_value
+            .cmp(&right_value)
+            .then_with(|| left_trimmed.cmp(right_trimmed)),
+        (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+        (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+        (Err(_), Err(_)) => display_filter_value(left_trimmed)
+            .cmp(&display_filter_value(right_trimmed))
+            .then_with(|| left_trimmed.cmp(right_trimmed)),
     }
 }
 
@@ -416,18 +592,7 @@ impl App {
 
     fn record_matches_filters(&self, record: &CsvRecord) -> bool {
         self.selected_filter_values.iter().all(|(column, selected)| {
-            if selected.is_empty() {
-                return true;
-            }
-
-            match column {
-                FilterColumn::MatchedCategories => category_values(&record.matched_categories_text)
-                    .into_iter()
-                    .any(|value| selected.contains(&value)),
-                _ => record_filter_value(record, *column)
-                    .map(|value| selected.contains(value))
-                    .unwrap_or(false),
-            }
+            column.spec().matches(record, selected)
         })
     }
 
@@ -673,13 +838,11 @@ impl App {
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(56.0).at_least(48.0).clip(true))
-            .column(Column::initial(140.0).at_least(96.0).clip(true))
-            .column(Column::initial(128.0).at_least(96.0).clip(true))
-            .column(Column::initial(120.0).at_least(88.0).clip(true))
-            .column(Column::remainder().at_least(140.0).clip(true))
-            .column(Column::initial(92.0).at_least(72.0).clip(true));
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+
+        for spec in TREE_COLUMN_SPECS {
+            table = table.column((spec.build_column)());
+        }
 
         if let Some(scroll_request) = pending_tree_scroll {
             if scroll_request.row_index < filtered_indices.len() {
@@ -689,9 +852,9 @@ impl App {
 
         table
             .header(24.0, |mut header| {
-                for label in TREE_HEADERS {
+                for spec in TREE_COLUMN_SPECS {
                     header.col(|ui| {
-                        ui.strong(label);
+                        ui.strong(spec.header);
                     });
                 }
             })
@@ -701,17 +864,9 @@ impl App {
                     let record = &self.all_records[filtered_indices[i]];
                     let is_selected = selected_row == Some(i);
 
-                    let values = [
-                        record.row_no.to_string(),
-                        record.paragraph_id.clone(),
-                        record.municipality_name.clone(),
-                        record.ordinance_or_rule.clone(),
-                        record.matched_categories_text.clone(),
-                        record.annotated_token_count.clone(),
-                    ];
-
                     let mut row_clicked = false;
-                    for value in values {
+                    for spec in TREE_COLUMN_SPECS {
+                        let value = (spec.value)(record);
                         row.col(|ui| {
                             let cell_rect = ui.max_rect();
                             if is_selected {
@@ -818,13 +973,109 @@ impl App {
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
+fn normalize_single_filter_value(value: &str) -> String {
+    value.trim().to_string()
+}
+
+fn record_paragraph_id_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.paragraph_id)
+}
+
+fn record_document_id_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.document_id)
+}
+
+fn record_municipality_name_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.municipality_name)
+}
+
+fn record_ordinance_or_rule_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.ordinance_or_rule)
+}
+
+fn record_doc_type_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.doc_type)
+}
+
+fn record_sentence_count_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.sentence_count)
+}
+
+fn record_matched_categories_values(record: &CsvRecord) -> Vec<String> {
+    category_values(&record.matched_categories_text)
+}
+
+fn record_matched_condition_ids_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.matched_condition_ids_text)
+}
+
+fn record_match_group_ids_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.match_group_ids_text)
+}
+
+fn record_match_group_count_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.match_group_count)
+}
+
+fn record_annotated_token_count_value(record: &CsvRecord) -> String {
+    normalize_single_filter_value(&record.annotated_token_count)
+}
+
+fn build_tree_row_no_column() -> Column {
+    Column::initial(56.0).at_least(48.0).clip(true)
+}
+
+fn build_tree_paragraph_id_column() -> Column {
+    Column::initial(140.0).at_least(96.0).clip(true)
+}
+
+fn build_tree_municipality_column() -> Column {
+    Column::initial(128.0).at_least(96.0).clip(true)
+}
+
+fn build_tree_ordinance_column() -> Column {
+    Column::initial(120.0).at_least(88.0).clip(true)
+}
+
+fn build_tree_category_column() -> Column {
+    Column::remainder().at_least(140.0).clip(true)
+}
+
+fn build_tree_annotated_token_count_column() -> Column {
+    Column::initial(92.0).at_least(72.0).clip(true)
+}
+
+fn tree_row_no_value(record: &CsvRecord) -> String {
+    record.row_no.to_string()
+}
+
+fn tree_paragraph_id_value(record: &CsvRecord) -> String {
+    record.paragraph_id.clone()
+}
+
+fn tree_municipality_value(record: &CsvRecord) -> String {
+    record.municipality_name.clone()
+}
+
+fn tree_ordinance_value(record: &CsvRecord) -> String {
+    record.ordinance_or_rule.clone()
+}
+
+fn tree_category_value(record: &CsvRecord) -> String {
+    record.matched_categories_text.clone()
+}
+
+fn tree_annotated_token_count_value(record: &CsvRecord) -> String {
+    record.annotated_token_count.clone()
+}
+
 fn build_filter_options(records: &[CsvRecord]) -> HashMap<FilterColumn, Vec<FilterOption>> {
     let mut options = HashMap::new();
 
-    for &column in FilterColumn::all() {
+    for spec in FILTER_COLUMN_SPECS {
         let mut counts: HashMap<String, usize> = HashMap::new();
         for record in records {
-            for value in record_filter_values(record, column) {
+            for value in spec.values(record) {
                 *counts.entry(value).or_insert(0) += 1;
             }
         }
@@ -833,38 +1084,11 @@ fn build_filter_options(records: &[CsvRecord]) -> HashMap<FilterColumn, Vec<Filt
             .into_iter()
             .map(|(value, count)| FilterOption { value, count })
             .collect();
-        column_options.sort_by(|a, b| {
-            display_filter_value(&a.value)
-                .cmp(&display_filter_value(&b.value))
-                .then_with(|| a.value.cmp(&b.value))
-        });
-        options.insert(column, column_options);
+        column_options.sort_by(|a, b| spec.compare_values(&a.value, &b.value));
+        options.insert(spec.column, column_options);
     }
 
     options
-}
-
-fn record_filter_values(record: &CsvRecord, column: FilterColumn) -> Vec<String> {
-    match column {
-        FilterColumn::MatchedCategories => category_values(&record.matched_categories_text),
-        _ => vec![record_filter_value(record, column).unwrap_or("").trim().to_string()],
-    }
-}
-
-fn record_filter_value<'a>(record: &'a CsvRecord, column: FilterColumn) -> Option<&'a str> {
-    match column {
-        FilterColumn::ParagraphId => Some(&record.paragraph_id),
-        FilterColumn::DocumentId => Some(&record.document_id),
-        FilterColumn::MunicipalityName => Some(&record.municipality_name),
-        FilterColumn::OrdinanceOrRule => Some(&record.ordinance_or_rule),
-        FilterColumn::DocType => Some(&record.doc_type),
-        FilterColumn::SentenceCount => Some(&record.sentence_count),
-        FilterColumn::MatchedCategories => Some(&record.matched_categories_text),
-        FilterColumn::MatchedConditions => Some(&record.matched_condition_ids_text),
-        FilterColumn::MatchGroupIds => Some(&record.match_group_ids_text),
-        FilterColumn::MatchGroupCount => Some(&record.match_group_count),
-        FilterColumn::AnnotatedTokenCount => Some(&record.annotated_token_count),
-    }
 }
 
 fn category_values(raw: &str) -> Vec<String> {
