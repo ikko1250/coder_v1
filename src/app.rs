@@ -16,6 +16,7 @@ use egui_extras::{Column, TableBuilder};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TreeScrollRequest {
@@ -475,7 +476,7 @@ impl App {
                 ctx.request_repaint();
             }
             Err(TryRecvError::Empty) => {
-                ctx.request_repaint();
+                ctx.request_repaint_after(Duration::from_millis(100));
             }
             Err(TryRecvError::Disconnected) => {
                 self.analysis_runtime_state.current_job = None;
