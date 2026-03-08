@@ -1,5 +1,7 @@
 use crate::csv_loader::load_records;
-use crate::db::{fetch_paragraph_context, resolve_default_db_path};
+use crate::db::{
+    fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
+};
 use crate::filter::{build_filter_options, display_filter_value};
 use crate::model::{CsvRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
@@ -451,12 +453,56 @@ impl App {
         }
     }
 
+    fn load_db_viewer_context_for_location(&mut self, document_id: i64, paragraph_no: i64) {
+        match fetch_paragraph_context_by_location(
+            &self.db_viewer_state.db_path,
+            document_id,
+            paragraph_no,
+        ) {
+            Ok(context) => {
+                self.db_viewer_state.context = Some(context);
+                self.db_viewer_state.error_message = None;
+            }
+            Err(error) => {
+                self.db_viewer_state.context = None;
+                self.db_viewer_state.error_message = Some(error);
+            }
+        }
+    }
+
+    fn previous_db_viewer_location(&self) -> Option<(i64, i64)> {
+        let context = self.db_viewer_state.context.as_ref()?;
+        let previous_paragraph_no = context
+            .paragraphs
+            .iter()
+            .filter(|paragraph| paragraph.paragraph_no < context.center.paragraph_no)
+            .map(|paragraph| paragraph.paragraph_no)
+            .max()?;
+
+        Some((context.center.document_id, previous_paragraph_no))
+    }
+
+    fn next_db_viewer_location(&self) -> Option<(i64, i64)> {
+        let context = self.db_viewer_state.context.as_ref()?;
+        let next_paragraph_no = context
+            .paragraphs
+            .iter()
+            .filter(|paragraph| paragraph.paragraph_no > context.center.paragraph_no)
+            .map(|paragraph| paragraph.paragraph_no)
+            .min()?;
+
+        Some((context.center.document_id, next_paragraph_no))
+    }
+
     fn draw_db_viewer_window(&mut self, ctx: &egui::Context) {
         if !self.db_viewer_state.is_open {
             return;
         }
 
-        let state = &mut self.db_viewer_state;
+        let previous_location = self.previous_db_viewer_location();
+        let next_location = self.next_db_viewer_location();
+
+        let state = &self.db_viewer_state;
         let db_file_label = state
             .db_path
             .file_name()
@@ -469,7 +515,10 @@ impl App {
             .as_ref()
             .map(|context| context.center.paragraph_text != csv_text)
             .unwrap_or(false);
+        let context = state.context.clone();
+        let error_message = state.error_message.clone();
         let mut is_open = state.is_open;
+        let mut requested_location = None;
 
         egui::Window::new("DB コンテキスト参照")
             .open(&mut is_open)
@@ -480,7 +529,7 @@ impl App {
                 ui.label(format!("DB: {}", db_file_label));
                 ui.label(format!("パス: {}", state.db_path.display()));
 
-                if let Some(context) = &state.context {
+                if let Some(context) = &context {
                     ui.label(format!(
                         "paragraph_id: {} / document_id: {} / paragraph_no: {}",
                         context.center.paragraph_id,
@@ -493,7 +542,34 @@ impl App {
 
                 ui.separator();
 
-                if let Some(error) = &state.error_message {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            previous_location.is_some(),
+                            egui::Button::new("◀ 前へ"),
+                        )
+                        .clicked()
+                    {
+                        requested_location = previous_location;
+                    }
+
+                    let center_label = context
+                        .as_ref()
+                        .map(|context| format!("中心段落番号: {}", context.center.paragraph_no))
+                        .unwrap_or_else(|| "中心段落番号: -".to_string());
+                    ui.label(center_label);
+
+                    if ui
+                        .add_enabled(next_location.is_some(), egui::Button::new("次へ ▶"))
+                        .clicked()
+                    {
+                        requested_location = next_location;
+                    }
+                });
+
+                ui.separator();
+
+                if let Some(error) = &error_message {
                     ui.colored_label(Color32::from_rgb(200, 64, 64), error);
                     return;
                 }
@@ -508,7 +584,7 @@ impl App {
 
                 ui.add_space(6.0);
                 ui.label(RichText::new("DB 中心段落").strong());
-                if let Some(context) = &state.context {
+                if let Some(context) = &context {
                     ui.group(|ui| {
                         ui.label(format!("paragraph_no: {}", context.center.paragraph_no));
                         ui.label(&context.center.paragraph_text);
@@ -532,7 +608,7 @@ impl App {
                     .id_salt("db_viewer_context")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if let Some(context) = &state.context {
+                        if let Some(context) = &context {
                             for paragraph in &context.paragraphs {
                                 let is_center =
                                     paragraph.paragraph_id == context.center.paragraph_id;
@@ -563,7 +639,12 @@ impl App {
                     });
             });
 
-        state.is_open = is_open;
+        self.db_viewer_state.is_open = is_open;
+
+        if let Some((document_id, paragraph_no)) = requested_location {
+            self.load_db_viewer_context_for_location(document_id, paragraph_no);
+            ctx.request_repaint();
+        }
     }
 
     fn draw_toolbar(&mut self, ui: &mut Ui) {

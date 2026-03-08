@@ -49,6 +49,33 @@ pub(crate) fn fetch_paragraph_context(
     Ok(DbParagraphContext { center, paragraphs })
 }
 
+pub(crate) fn fetch_paragraph_context_by_location(
+    db_path: &Path,
+    document_id: i64,
+    paragraph_no: i64,
+) -> Result<DbParagraphContext, String> {
+    let connection = open_read_only_connection(db_path)?;
+    let paragraphs = fetch_context_paragraphs_with_connection(
+        &connection,
+        document_id,
+        paragraph_no,
+        DEFAULT_CONTEXT_RADIUS,
+    )?;
+
+    let center = paragraphs
+        .iter()
+        .find(|paragraph| paragraph.paragraph_no == paragraph_no)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "document_id={} / paragraph_no={} の中心段落取得に失敗しました",
+                document_id, paragraph_no
+            )
+        })?;
+
+    Ok(DbParagraphContext { center, paragraphs })
+}
+
 pub(crate) fn fetch_context_paragraphs(
     db_path: &Path,
     document_id: i64,
