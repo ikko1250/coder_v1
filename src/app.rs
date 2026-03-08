@@ -1,5 +1,5 @@
 use crate::csv_loader::load_records;
-use crate::db::resolve_default_db_path;
+use crate::db::{fetch_paragraph_context, resolve_default_db_path};
 use crate::filter::{build_filter_options, display_filter_value};
 use crate::model::{CsvRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
@@ -396,6 +396,8 @@ impl eframe::App for App {
             clicked_row = self.draw_body(ui, consumed_tree_scroll);
         });
 
+        self.draw_db_viewer_window(ctx);
+
         if let Some(row_index) = clicked_row {
             if self.apply_selection_change(SelectionChange::new(
                 Some(row_index),
@@ -415,10 +417,153 @@ impl App {
     fn draw_db_viewer_button(&mut self, ui: &mut Ui, enabled: bool) {
         let response = ui.add_enabled(enabled, egui::Button::new("DB参照"));
         if response.clicked() {
-            if let Err(error) = self.prepare_db_viewer_state() {
+            if let Err(error) = self.open_db_viewer_for_selected_record() {
                 self.error_message = Some(error);
             }
         }
+    }
+
+    fn open_db_viewer_for_selected_record(&mut self) -> Result<(), String> {
+        self.prepare_db_viewer_state()?;
+        self.load_db_viewer_context();
+        Ok(())
+    }
+
+    fn load_db_viewer_context(&mut self) {
+        let Some(paragraph_id) = self.db_viewer_state.source_paragraph_id else {
+            self.db_viewer_state.context = None;
+            self.db_viewer_state.error_message = Some("参照元 paragraph_id が未設定です".to_string());
+            self.db_viewer_state.is_open = true;
+            return;
+        };
+
+        match fetch_paragraph_context(&self.db_viewer_state.db_path, paragraph_id) {
+            Ok(context) => {
+                self.db_viewer_state.context = Some(context);
+                self.db_viewer_state.error_message = None;
+                self.db_viewer_state.is_open = true;
+            }
+            Err(error) => {
+                self.db_viewer_state.context = None;
+                self.db_viewer_state.error_message = Some(error);
+                self.db_viewer_state.is_open = true;
+            }
+        }
+    }
+
+    fn draw_db_viewer_window(&mut self, ctx: &egui::Context) {
+        if !self.db_viewer_state.is_open {
+            return;
+        }
+
+        let state = &mut self.db_viewer_state;
+        let db_file_label = state
+            .db_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("ordinance_analysis3.db")
+            .to_string();
+        let csv_text = state.csv_paragraph_text.clone().unwrap_or_default();
+        let mismatch = state
+            .context
+            .as_ref()
+            .map(|context| context.center.paragraph_text != csv_text)
+            .unwrap_or(false);
+        let mut is_open = state.is_open;
+
+        egui::Window::new("DB コンテキスト参照")
+            .open(&mut is_open)
+            .default_width(760.0)
+            .default_height(820.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.label(format!("DB: {}", db_file_label));
+                ui.label(format!("パス: {}", state.db_path.display()));
+
+                if let Some(context) = &state.context {
+                    ui.label(format!(
+                        "paragraph_id: {} / document_id: {} / paragraph_no: {}",
+                        context.center.paragraph_id,
+                        context.center.document_id,
+                        context.center.paragraph_no
+                    ));
+                } else if let Some(paragraph_id) = state.source_paragraph_id {
+                    ui.label(format!("paragraph_id: {}", paragraph_id));
+                }
+
+                ui.separator();
+
+                if let Some(error) = &state.error_message {
+                    ui.colored_label(Color32::from_rgb(200, 64, 64), error);
+                    return;
+                }
+
+                ui.label(RichText::new("CSV テキスト").strong());
+                ScrollArea::vertical()
+                    .id_salt("db_viewer_csv_text")
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        ui.label(&csv_text);
+                    });
+
+                ui.add_space(6.0);
+                ui.label(RichText::new("DB 中心段落").strong());
+                if let Some(context) = &state.context {
+                    ui.group(|ui| {
+                        ui.label(format!("paragraph_no: {}", context.center.paragraph_no));
+                        ui.label(&context.center.paragraph_text);
+                    });
+                }
+
+                ui.add_space(4.0);
+                let compare_label = if mismatch {
+                    RichText::new("CSV と DB 中心段落は不一致")
+                        .color(Color32::from_rgb(200, 64, 64))
+                } else {
+                    RichText::new("CSV と DB 中心段落は一致")
+                        .color(Color32::from_rgb(70, 130, 70))
+                };
+                ui.label(compare_label);
+
+                ui.separator();
+                ui.label(RichText::new("前後コンテキスト").strong());
+
+                ScrollArea::vertical()
+                    .id_salt("db_viewer_context")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if let Some(context) = &state.context {
+                            for paragraph in &context.paragraphs {
+                                let is_center =
+                                    paragraph.paragraph_id == context.center.paragraph_id;
+                                if is_center {
+                                    ui.group(|ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "段落 {} (中心)",
+                                                paragraph.paragraph_no
+                                            ))
+                                            .strong()
+                                            .color(Color32::from_rgb(200, 120, 40)),
+                                        );
+                                        ui.label(&paragraph.paragraph_text);
+                                    });
+                                } else {
+                                    ui.label(
+                                        RichText::new(format!("段落 {}", paragraph.paragraph_no))
+                                            .strong(),
+                                    );
+                                    ui.label(&paragraph.paragraph_text);
+                                }
+                                ui.add_space(8.0);
+                            }
+                        } else {
+                            ui.label(RichText::new("DB コンテキスト未取得").italics());
+                        }
+                    });
+            });
+
+        state.is_open = is_open;
     }
 
     fn draw_toolbar(&mut self, ui: &mut Ui) {
