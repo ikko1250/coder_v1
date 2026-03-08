@@ -17,7 +17,9 @@ const PYTHON_PATH_ENV_KEY: &str = "CSV_VIEWER_PYTHON";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnalysisRuntimeConfig {
     pub(crate) python_command: OsString,
+    pub(crate) python_args: Vec<OsString>,
     pub(crate) python_label: String,
+    pub(crate) project_root: PathBuf,
     pub(crate) script_path: PathBuf,
     pub(crate) filter_config_path: PathBuf,
     pub(crate) jobs_root: PathBuf,
@@ -78,11 +80,13 @@ pub(crate) fn build_default_runtime_config() -> Result<AnalysisRuntimeConfig, St
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let jobs_root = project_root.join(DEFAULT_JOBS_RELATIVE_PATH);
-    let (python_command, python_label) = resolve_python_command()?;
+    let (python_command, python_args, python_label) = resolve_python_command(&project_root)?;
 
     Ok(AnalysisRuntimeConfig {
         python_command,
+        python_args,
         python_label,
+        project_root,
         script_path,
         filter_config_path,
         jobs_root,
@@ -153,7 +157,10 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
         }));
     }
 
-    let output = Command::new(&request.runtime.python_command)
+    let mut command = Command::new(&request.runtime.python_command);
+    command
+        .current_dir(&request.runtime.project_root)
+        .args(&request.runtime.python_args)
         .arg(&request.runtime.script_path)
         .arg("--job-id")
         .arg(&job_id)
@@ -166,8 +173,9 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
         .arg("--output-csv-path")
         .arg(&output_csv_path)
         .arg("--output-meta-json-path")
-        .arg(&output_meta_json_path)
-        .output();
+        .arg(&output_meta_json_path);
+
+    let output = command.output();
 
     let output = match output {
         Ok(output) => output,
@@ -240,34 +248,44 @@ fn build_job_id() -> String {
     format!("job-{millis}")
 }
 
-fn resolve_python_command() -> Result<(OsString, String), String> {
-    let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+fn resolve_python_command(project_root: &Path) -> Result<(OsString, Vec<OsString>, String), String> {
+    if let Ok(value) = env::var(PYTHON_PATH_ENV_KEY) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok((OsString::from(trimmed), Vec::new(), trimmed.to_string()));
+        }
+    }
+
     let candidate_paths = [
-        current_dir.join(".venv").join("Scripts").join("python.exe"),
-        current_dir.join(".venv").join("bin").join("python"),
+        project_root.join(".venv").join("Scripts").join("python.exe"),
+        project_root.join(".venv").join("bin").join("python"),
     ];
 
     for path in candidate_paths {
         if path.is_file() {
             let display = path.display().to_string();
-            return Ok((path.into_os_string(), display));
+            return Ok((path.into_os_string(), Vec::new(), display));
         }
     }
 
-    if let Ok(value) = env::var(PYTHON_PATH_ENV_KEY) {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Ok((OsString::from(trimmed), trimmed.to_string()));
-        }
+    if project_root.join("pyproject.toml").is_file() && command_exists("uv") {
+        return Ok((
+            OsString::from("uv"),
+            vec![OsString::from("run"), OsString::from("python")],
+            "uv run python".to_string(),
+        ));
     }
 
     for candidate in ["python3", "python"] {
         if command_exists(candidate) {
-            return Ok((OsString::from(candidate), candidate.to_string()));
+            return Ok((OsString::from(candidate), Vec::new(), candidate.to_string()));
         }
     }
 
-    Err("Python 実行系が見つかりません。.venv または CSV_VIEWER_PYTHON を確認してください".to_string())
+    Err(
+        "Python 実行系が見つかりません。.venv、CSV_VIEWER_PYTHON、または uv を確認してください"
+            .to_string(),
+    )
 }
 
 fn command_exists(command: &str) -> bool {
