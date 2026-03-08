@@ -748,11 +748,16 @@ impl App {
 
             ui.horizontal_wrapped(|ui| {
                 let can_start = self.analysis_runtime_state.can_start();
-                let runtime = self.analysis_runtime_state.runtime.as_ref();
-                let python_label = runtime
-                    .map(|runtime| runtime.python_label.as_str())
-                    .unwrap_or("-");
-                let filter_config_label = runtime
+                let python_label = self
+                    .analysis_runtime_state
+                    .runtime
+                    .as_ref()
+                    .map(|runtime| runtime.python_label.clone())
+                    .unwrap_or_else(|| "-".to_string());
+                let filter_config_label = self
+                    .analysis_runtime_state
+                    .runtime
+                    .as_ref()
                     .map(|runtime| runtime.filter_config_path.display().to_string())
                     .unwrap_or_else(|| "-".to_string());
                 let db_label = self.db_viewer_state.db_path.display().to_string();
