@@ -3,7 +3,12 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "ConditionHitResult",
+    "DistanceMatchingMode",
     "FilterConfig",
+    "MatchingWarning",
+    "NormalizedCondition",
+    "TargetSelectionResult",
     "build_condition_hit_tokens_df",
     "build_reconstructed_paragraphs_export_df",
     "build_rendered_paragraphs_df",
@@ -22,6 +27,14 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in __all__:
-        module = import_module(".analysis_core", __name__)
+        module_name = ".condition_model" if name in {
+            "ConditionHitResult",
+            "DistanceMatchingMode",
+            "FilterConfig",
+            "MatchingWarning",
+            "NormalizedCondition",
+            "TargetSelectionResult",
+        } else ".analysis_core"
+        module = import_module(module_name, __name__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,17 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import is_dataclass
 from pathlib import Path
 import unittest
 
 import polars as pl
 
+import analysis_backend
 import analysis_backend.analysis_core as analysis_core
+import analysis_backend.condition_model as condition_model
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class AnalysisCoreContractTests(unittest.TestCase):
+    def test_condition_models_are_exported_via_package_api(self) -> None:
+        self.assertIs(analysis_backend.FilterConfig, condition_model.FilterConfig)
+        self.assertIs(analysis_backend.MatchingWarning, condition_model.MatchingWarning)
+        self.assertIs(analysis_backend.ConditionHitResult, condition_model.ConditionHitResult)
+        self.assertIs(analysis_backend.TargetSelectionResult, condition_model.TargetSelectionResult)
+
+        self.assertTrue(is_dataclass(condition_model.FilterConfig))
+        self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
+        self.assertTrue(is_dataclass(condition_model.MatchingWarning))
+        self.assertTrue(is_dataclass(condition_model.ConditionHitResult))
+        self.assertTrue(is_dataclass(condition_model.TargetSelectionResult))
+
     def test_load_filter_config_reads_asset_file(self) -> None:
         config = analysis_core.load_filter_config(
             PROJECT_ROOT / "asset" / "cooccurrence-conditions.json"
@@ -20,10 +35,22 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(config.condition_match_logic, "any")
         self.assertEqual(config.max_reconstructed_paragraphs, 10000)
         self.assertEqual(config.loaded_condition_count, 7)
+        self.assertEqual(config.distance_matching_mode, "auto-approx")
+        self.assertEqual(config.distance_match_combination_cap, 10000)
+        self.assertEqual(config.distance_match_strict_safety_limit, 1000000)
         self.assertEqual(
             config.cooccurrence_conditions[0]["condition_id"],
             "suppress_area",
         )
+
+    def test_condition_hit_result_defaults_to_empty_warning_messages(self) -> None:
+        result = condition_model.ConditionHitResult(
+            condition_hit_tokens_df=pl.DataFrame(schema={"paragraph_id": pl.Int64}),
+            requested_mode="auto-approx",
+            used_mode="strict",
+        )
+
+        self.assertEqual(result.warning_messages, [])
 
     def test_render_tagged_token_escapes_attributes(self) -> None:
         tagged_fragment, html_fragment, condition_ids, categories, match_group_ids, increment = (

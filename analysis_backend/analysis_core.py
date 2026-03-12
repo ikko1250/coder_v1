@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import heapq
 from html import escape
 from itertools import product
@@ -9,6 +8,8 @@ from pathlib import Path
 import sqlite3
 
 import polars as pl
+
+from .condition_model import FilterConfig
 
 PARAGRAPH_ID_COL = "paragraph_id"
 SENTENCE_ID_COL = "sentence_id"
@@ -92,15 +93,6 @@ RENDERED_PARAGRAPH_SCHEMA = {
     "match_group_count": pl.UInt32,
     "annotated_token_count": pl.UInt32,
 }
-
-
-@dataclass(frozen=True)
-class FilterConfig:
-    condition_match_logic: str
-    cooccurrence_conditions: list[dict[str, object]]
-    loaded_condition_count: int
-    max_reconstructed_paragraphs: int
-
 
 def load_filter_config(filter_config_path: Path) -> FilterConfig:
     if not filter_config_path.exists():
