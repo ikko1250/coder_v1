@@ -138,6 +138,48 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertIn("condition_id", condition_hit_tokens_df.columns)
         self.assertIn("match_group_id", condition_hit_tokens_df.columns)
 
+    def test_select_target_ids_by_cooccurrence_conditions_keeps_tuple_contract(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1],
+                "sentence_id": [11, 11, 11],
+                "token_no": [0, 1, 2],
+                "normalized_form": ["抑制", "区域", "指定"],
+                "surface": ["抑制", "区域", "指定"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11],
+                "paragraph_id": [1],
+                "sentence_no_in_paragraph": [1],
+            }
+        )
+
+        result = analysis_core.select_target_ids_by_cooccurrence_conditions(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            cooccurrence_conditions=[
+                {
+                    "condition_id": "suppress_area",
+                    "categories": ["概念:抑制区域"],
+                    "forms": ["抑制", "区域"],
+                    "form_match_logic": "all",
+                    "max_token_distance": 5,
+                    "search_scope": "sentence",
+                }
+            ],
+        )
+
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 5)
+        candidate_tokens_df, condition_eval_df, paragraph_match_summary_df, target_paragraph_ids, target_sentence_ids = result
+        self.assertIsInstance(candidate_tokens_df, pl.DataFrame)
+        self.assertIsInstance(condition_eval_df, pl.DataFrame)
+        self.assertIsInstance(paragraph_match_summary_df, pl.DataFrame)
+        self.assertEqual(target_paragraph_ids, [1])
+        self.assertEqual(target_sentence_ids, [11])
+
     def test_build_reconstructed_paragraphs_export_df_keeps_required_columns(self) -> None:
         reconstructed_paragraphs_df = pl.DataFrame(
             {
@@ -184,6 +226,60 @@ class AnalysisCoreContractTests(unittest.TestCase):
             ],
         )
         self.assertEqual(export_df.get_column("match_group_ids_text").to_list(), ["c, d"])
+
+    def test_build_reconstructed_paragraphs_export_df_keeps_existing_scalar_dtypes(self) -> None:
+        reconstructed_paragraphs_df = pl.DataFrame(
+            schema={
+                "paragraph_id": pl.Int64,
+                "document_id": pl.Int64,
+                "municipality_name": pl.String,
+                "ordinance_or_rule": pl.String,
+                "doc_type": pl.String,
+                "sentence_count": pl.UInt32,
+                "paragraph_text": pl.String,
+                "paragraph_text_tagged": pl.String,
+                "paragraph_text_highlight_html": pl.String,
+                "matched_condition_ids": pl.List(pl.String),
+                "matched_condition_ids_text": pl.String,
+                "matched_categories": pl.List(pl.String),
+                "matched_categories_text": pl.String,
+                "match_group_ids": pl.List(pl.String),
+                "match_group_count": pl.UInt32,
+                "annotated_token_count": pl.UInt32,
+            },
+            data=[
+                (
+                    1,
+                    10,
+                    "テスト市",
+                    "条例",
+                    "条例",
+                    1,
+                    "抑制区域を指定する。",
+                    '[[HIT condition_ids="a" categories="b" groups="c"]]抑制区域[[/HIT]]を指定する。',
+                    "<mark>抑制区域</mark>を指定する。",
+                    ["a"],
+                    "a",
+                    ["b"],
+                    "b",
+                    ["c", "d"],
+                    2,
+                    1,
+                )
+            ],
+            orient="row",
+        )
+
+        export_df = analysis_core.build_reconstructed_paragraphs_export_df(
+            reconstructed_paragraphs_df=reconstructed_paragraphs_df
+        )
+
+        self.assertEqual(export_df.schema["paragraph_id"], pl.Int64)
+        self.assertEqual(export_df.schema["document_id"], pl.Int64)
+        self.assertEqual(export_df.schema["sentence_count"], pl.UInt32)
+        self.assertEqual(export_df.schema["match_group_count"], pl.UInt32)
+        self.assertEqual(export_df.schema["annotated_token_count"], pl.UInt32)
+        self.assertEqual(export_df.schema["match_group_ids_text"], pl.String)
 
 
 if __name__ == "__main__":

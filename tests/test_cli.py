@@ -137,6 +137,7 @@ class CliContractTests(unittest.TestCase):
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(meta["status"], "failed")
             self.assertEqual(meta["jobId"], "failure-job")
+            self.assertEqual(meta["warningMessages"], [])
             self.assertIn("Filter config JSON not found", meta["errorSummary"])
             self.assertIn("Filter config JSON not found", stderr_buffer.getvalue())
 
@@ -175,6 +176,7 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(meta["jobId"], "success-job")
             self.assertEqual(meta["selectedParagraphCount"], 1)
             self.assertEqual(meta["outputCsvPath"], str(csv_path))
+            self.assertEqual(meta["warningMessages"], [])
             self.assertEqual(stderr_buffer.getvalue(), "")
             self.assertIn('"status": "succeeded"', stdout_buffer.getvalue())
 
