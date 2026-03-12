@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import is_dataclass
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 import polars as pl
@@ -9,6 +11,7 @@ import polars as pl
 import analysis_backend
 import analysis_backend.analysis_core as analysis_core
 import analysis_backend.condition_model as condition_model
+import analysis_backend.filter_config as filter_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +23,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertIs(analysis_backend.MatchingWarning, condition_model.MatchingWarning)
         self.assertIs(analysis_backend.ConditionHitResult, condition_model.ConditionHitResult)
         self.assertIs(analysis_backend.TargetSelectionResult, condition_model.TargetSelectionResult)
+        self.assertIs(analysis_backend.load_filter_config, filter_config.load_filter_config)
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
@@ -51,6 +55,61 @@ class AnalysisCoreContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result.warning_messages, [])
+
+    def test_load_filter_config_reads_explicit_matching_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            filter_config_path = Path(temp_dir) / "conditions.json"
+            filter_config_path.write_text(
+                json.dumps(
+                    {
+                        "condition_match_logic": "all",
+                        "max_reconstructed_paragraphs": 25,
+                        "distance_matching_mode": "strict",
+                        "distance_match_combination_cap": 12345,
+                        "distance_match_strict_safety_limit": 54321,
+                        "cooccurrence_conditions": [
+                            {
+                                "condition_id": "suppress_area",
+                                "forms": ["抑制", "区域"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            config = analysis_core.load_filter_config(filter_config_path)
+
+        self.assertEqual(config.condition_match_logic, "all")
+        self.assertEqual(config.max_reconstructed_paragraphs, 25)
+        self.assertEqual(config.distance_matching_mode, "strict")
+        self.assertEqual(config.distance_match_combination_cap, 12345)
+        self.assertEqual(config.distance_match_strict_safety_limit, 54321)
+
+    def test_load_filter_config_falls_back_to_default_matching_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            filter_config_path = Path(temp_dir) / "conditions.json"
+            filter_config_path.write_text(
+                json.dumps(
+                    {
+                        "distance_matching_mode": "unexpected",
+                        "distance_match_combination_cap": 0,
+                        "distance_match_strict_safety_limit": -1,
+                        "cooccurrence_conditions": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            config = analysis_core.load_filter_config(filter_config_path)
+
+        self.assertEqual(config.distance_matching_mode, "auto-approx")
+        self.assertEqual(config.distance_match_combination_cap, 10000)
+        self.assertEqual(config.distance_match_strict_safety_limit, 1000000)
 
     def test_render_tagged_token_escapes_attributes(self) -> None:
         tagged_fragment, html_fragment, condition_ids, categories, match_group_ids, increment = (

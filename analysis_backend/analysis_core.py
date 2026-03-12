@@ -3,13 +3,12 @@ from __future__ import annotations
 import heapq
 from html import escape
 from itertools import product
-import json
 from pathlib import Path
 import sqlite3
 
 import polars as pl
 
-from .condition_model import FilterConfig
+from .filter_config import load_filter_config
 
 PARAGRAPH_ID_COL = "paragraph_id"
 SENTENCE_ID_COL = "sentence_id"
@@ -93,41 +92,6 @@ RENDERED_PARAGRAPH_SCHEMA = {
     "match_group_count": pl.UInt32,
     "annotated_token_count": pl.UInt32,
 }
-
-def load_filter_config(filter_config_path: Path) -> FilterConfig:
-    if not filter_config_path.exists():
-        raise FileNotFoundError(f"Filter config JSON not found: {filter_config_path}")
-
-    try:
-        raw_config = json.loads(filter_config_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON format: {filter_config_path} ({exc})") from exc
-
-    if not isinstance(raw_config, dict):
-        raise ValueError(f"JSON root must be object: {filter_config_path}")
-
-    raw_conditions = raw_config.get("cooccurrence_conditions", [])
-    if not isinstance(raw_conditions, list):
-        raise ValueError(f"'cooccurrence_conditions' must be list: {filter_config_path}")
-
-    raw_match_logic = str(raw_config.get("condition_match_logic", "any")).strip().lower()
-    condition_match_logic = raw_match_logic if raw_match_logic in {"any", "all"} else "any"
-
-    raw_max_reconstructed = raw_config.get("max_reconstructed_paragraphs", 10000)
-    try:
-        max_reconstructed_paragraphs = int(raw_max_reconstructed)
-    except (TypeError, ValueError):
-        max_reconstructed_paragraphs = 10000
-    if max_reconstructed_paragraphs < 1:
-        max_reconstructed_paragraphs = 10000
-
-    return FilterConfig(
-        condition_match_logic=condition_match_logic,
-        cooccurrence_conditions=raw_conditions,
-        loaded_condition_count=len(raw_conditions),
-        max_reconstructed_paragraphs=max_reconstructed_paragraphs,
-    )
-
 
 def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
     return pl.DataFrame(schema=schema)
