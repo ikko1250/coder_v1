@@ -34,7 +34,11 @@ def __getattr__(name: str):
             "MatchingWarning",
             "NormalizedCondition",
             "TargetSelectionResult",
-        } else ".filter_config" if name == "load_filter_config" else ".analysis_core"
+        } else ".filter_config" if name == "load_filter_config" else ".data_access" if name in {
+            "read_analysis_sentences",
+            "read_analysis_tokens",
+            "read_paragraph_document_metadata",
+        } else ".token_position" if name == "build_tokens_with_position_df" else ".analysis_core"
         module = import_module(module_name, __name__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

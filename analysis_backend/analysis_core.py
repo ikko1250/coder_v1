@@ -4,11 +4,15 @@ import heapq
 from html import escape
 from itertools import product
 from pathlib import Path
-import sqlite3
 
 import polars as pl
 
+from .data_access import read_analysis_sentences
+from .data_access import read_analysis_tokens
+from .data_access import read_paragraph_document_metadata
 from .filter_config import load_filter_config
+from .token_position import build_candidate_tokens_with_position_df
+from .token_position import build_tokens_with_position_df
 
 PARAGRAPH_ID_COL = "paragraph_id"
 SENTENCE_ID_COL = "sentence_id"
@@ -18,15 +22,7 @@ NORMALIZED_FORM_COL = "normalized_form"
 SURFACE_COL = "surface"
 SENTENCE_TOKEN_POSITION_COL = "sentence_token_position"
 PARAGRAPH_TOKEN_POSITION_COL = "paragraph_token_position"
-PARAGRAPH_METADATA_CHUNK_SIZE = 900
 MAX_DISTANCE_MATCH_COMBINATIONS = 10000
-
-PARAGRAPH_METADATA_SCHEMA = {
-    PARAGRAPH_ID_COL: pl.Int64,
-    "document_id": pl.Int64,
-    "municipality_name": pl.String,
-    "doc_type": pl.String,
-}
 CONDITION_EVAL_SCHEMA = {
     PARAGRAPH_ID_COL: pl.Int64,
     "condition_id": pl.String,
@@ -95,70 +91,6 @@ RENDERED_PARAGRAPH_SCHEMA = {
 
 def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
     return pl.DataFrame(schema=schema)
-
-
-def _read_database_df(db_path: Path, query: str) -> pl.DataFrame:
-    try:
-        with sqlite3.connect(str(db_path)) as conn:
-            return pl.read_database(query=query, connection=conn)
-    except sqlite3.Error as exc:
-        raise RuntimeError(f"SQLite read failed: {db_path} ({exc})") from exc
-
-
-def read_analysis_tokens(db_path: Path, limit_rows: int | None = None) -> pl.DataFrame:
-    query = "SELECT * FROM analysis_tokens"
-    if limit_rows is not None:
-        query = f"{query} LIMIT {int(limit_rows)}"
-    return _read_database_df(db_path=db_path, query=query)
-
-
-def read_analysis_sentences(db_path: Path, limit_rows: int | None = None) -> pl.DataFrame:
-    query = """
-        SELECT sentence_id, paragraph_id, sentence_no_in_paragraph
-        FROM analysis_sentences
-    """
-    if limit_rows is not None:
-        query = f"{query} LIMIT {int(limit_rows)}"
-    return _read_database_df(db_path=db_path, query=query)
-
-
-def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) -> pl.DataFrame:
-    if not paragraph_ids:
-        return _empty_df(PARAGRAPH_METADATA_SCHEMA)
-
-    rows: list[tuple[int, int, str | None, str | None]] = []
-    try:
-        with sqlite3.connect(str(db_path)) as conn:
-            for start_idx in range(0, len(paragraph_ids), PARAGRAPH_METADATA_CHUNK_SIZE):
-                chunk_ids = paragraph_ids[start_idx:start_idx + PARAGRAPH_METADATA_CHUNK_SIZE]
-                placeholders = ",".join("?" for _ in chunk_ids)
-                query = f"""
-                    SELECT
-                        p.paragraph_id,
-                        p.document_id,
-                        d.municipality_name,
-                        d.doc_type
-                    FROM analysis_paragraphs AS p
-                    JOIN analysis_documents AS d
-                      ON d.document_id = p.document_id
-                    WHERE p.paragraph_id IN ({placeholders})
-                """
-                rows.extend(conn.execute(query, tuple(chunk_ids)).fetchall())
-    except sqlite3.Error as exc:
-        raise RuntimeError(f"SQLite metadata read failed: {db_path} ({exc})") from exc
-
-    if not rows:
-        return _empty_df(PARAGRAPH_METADATA_SCHEMA)
-
-    return (
-        pl.DataFrame(rows, schema=list(PARAGRAPH_METADATA_SCHEMA.keys()), orient="row")
-        .with_columns([
-            pl.col(PARAGRAPH_ID_COL).cast(pl.Int64),
-            pl.col("document_id").cast(pl.Int64),
-        ])
-        .sort(PARAGRAPH_ID_COL)
-    )
-
 
 def _empty_condition_eval_df() -> pl.DataFrame:
     return _empty_df(CONDITION_EVAL_SCHEMA)
@@ -275,81 +207,6 @@ def _clean_cooccurrence_conditions(
         )
 
     return cleaned_conditions
-
-
-def build_tokens_with_position_df(
-    tokens_df: pl.DataFrame,
-    sentences_df: pl.DataFrame,
-    paragraph_ids: list[int] | None = None,
-    target_forms: list[str] | None = None,
-) -> pl.DataFrame:
-    if paragraph_ids is not None and not paragraph_ids:
-        return _empty_df(POSITIONED_TOKEN_SCHEMA)
-
-    sentence_order_df = sentences_df.select(["sentence_id", "paragraph_id", "sentence_no_in_paragraph"])
-    base_tokens_df = tokens_df
-    if paragraph_ids is not None:
-        sentence_order_df = sentence_order_df.filter(pl.col("paragraph_id").is_in(paragraph_ids))
-        base_tokens_df = base_tokens_df.filter(pl.col("paragraph_id").is_in(paragraph_ids))
-
-    sentence_token_counts_df = (
-        base_tokens_df
-        .join(sentence_order_df, on=["sentence_id", "paragraph_id"], how="inner")
-        .group_by(["paragraph_id", "sentence_no_in_paragraph"])
-        .agg(pl.len().alias("sentence_token_count"))
-        .sort(["paragraph_id", "sentence_no_in_paragraph"])
-        .with_columns(
-            (
-                pl.col("sentence_token_count")
-                .cum_sum()
-                .over("paragraph_id", order_by="sentence_no_in_paragraph")
-                - pl.col("sentence_token_count")
-            )
-            .alias("sentence_offset")
-        )
-        .select(["paragraph_id", "sentence_no_in_paragraph", "sentence_offset"])
-    )
-
-    selected_tokens_df = base_tokens_df
-    if target_forms is not None:
-        selected_tokens_df = selected_tokens_df.filter(pl.col("normalized_form").is_in(target_forms))
-
-    return (
-        selected_tokens_df
-        .join(sentence_order_df, on=["sentence_id", "paragraph_id"], how="inner")
-        .join(sentence_token_counts_df, on=["paragraph_id", "sentence_no_in_paragraph"], how="inner")
-        .with_columns([
-            pl.col("sentence_no_in_paragraph").cast(pl.Int64),
-            pl.col("token_no").cast(pl.Int64),
-            pl.col("token_no").cast(pl.Int64).alias("sentence_token_position"),
-            (pl.col("sentence_offset") + pl.col("token_no")).cast(pl.Int64).alias("paragraph_token_position"),
-        ])
-        .select([
-            "paragraph_id",
-            "sentence_id",
-            "sentence_no_in_paragraph",
-            "token_no",
-            "sentence_token_position",
-            "paragraph_token_position",
-            "normalized_form",
-            "surface",
-        ])
-    )
-
-
-def _build_candidate_tokens_with_position_df(
-    tokens_df: pl.DataFrame,
-    sentences_df: pl.DataFrame,
-    target_forms: list[str],
-) -> pl.DataFrame:
-    return build_tokens_with_position_df(
-        tokens_df=tokens_df,
-        sentences_df=sentences_df,
-        paragraph_ids=None,
-        target_forms=target_forms,
-    )
-
-
 def _has_forms_within_distance(form_positions_list: list[list[int]], max_token_distance: int) -> bool:
     if max_token_distance < 0:
         return False
@@ -1032,7 +889,7 @@ def select_target_ids_by_cooccurrence_conditions(
         return tokens_df.clear(), _empty_condition_eval_df(), _empty_paragraph_summary_df(), [], []
 
     all_forms = sorted({form for condition in cleaned_conditions for form in condition["forms"]})
-    candidate_tokens_df = _build_candidate_tokens_with_position_df(
+    candidate_tokens_df = build_candidate_tokens_with_position_df(
         tokens_df=tokens_df,
         sentences_df=sentences_df,
         target_forms=all_forms,

@@ -11,7 +11,9 @@ import polars as pl
 import analysis_backend
 import analysis_backend.analysis_core as analysis_core
 import analysis_backend.condition_model as condition_model
+import analysis_backend.data_access as data_access
 import analysis_backend.filter_config as filter_config
+import analysis_backend.token_position as token_position
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,13 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertIs(analysis_backend.ConditionHitResult, condition_model.ConditionHitResult)
         self.assertIs(analysis_backend.TargetSelectionResult, condition_model.TargetSelectionResult)
         self.assertIs(analysis_backend.load_filter_config, filter_config.load_filter_config)
+        self.assertIs(analysis_backend.read_analysis_tokens, data_access.read_analysis_tokens)
+        self.assertIs(analysis_backend.read_analysis_sentences, data_access.read_analysis_sentences)
+        self.assertIs(
+            analysis_backend.read_paragraph_document_metadata,
+            data_access.read_paragraph_document_metadata,
+        )
+        self.assertIs(analysis_backend.build_tokens_with_position_df, token_position.build_tokens_with_position_df)
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
