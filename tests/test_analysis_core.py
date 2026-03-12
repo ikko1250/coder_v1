@@ -12,6 +12,7 @@ import analysis_backend
 import analysis_backend.analysis_core as analysis_core
 import analysis_backend.condition_model as condition_model
 import analysis_backend.data_access as data_access
+import analysis_backend.distance_matcher as distance_matcher
 import analysis_backend.filter_config as filter_config
 import analysis_backend.token_position as token_position
 
@@ -232,6 +233,117 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertGreater(condition_hit_tokens_df.height, 0)
         self.assertIn("condition_id", condition_hit_tokens_df.columns)
         self.assertIn("match_group_id", condition_hit_tokens_df.columns)
+
+    def test_build_condition_hit_result_reports_auto_approx_warning(self) -> None:
+        rows: list[dict[str, object]] = []
+        token_no = 0
+        for idx in range(101):
+            rows.append(
+                {
+                    "paragraph_id": 1,
+                    "sentence_id": 10,
+                    "sentence_no_in_paragraph": 1,
+                    "token_no": token_no,
+                    "sentence_token_position": token_no,
+                    "paragraph_token_position": token_no,
+                    "normalized_form": "抑制",
+                    "surface": f"抑制{idx}",
+                }
+            )
+            token_no += 1
+
+        for idx in range(100):
+            rows.append(
+                {
+                    "paragraph_id": 1,
+                    "sentence_id": 10,
+                    "sentence_no_in_paragraph": 1,
+                    "token_no": token_no,
+                    "sentence_token_position": token_no,
+                    "paragraph_token_position": token_no,
+                    "normalized_form": "区域",
+                    "surface": f"区域{idx}",
+                }
+            )
+            token_no += 1
+
+        hit_result = distance_matcher.build_condition_hit_result(
+            tokens_with_position_df=pl.DataFrame(rows),
+            cooccurrence_conditions=[
+                {
+                    "condition_id": "distance_fallback",
+                    "categories": ["fallback"],
+                    "forms": ["抑制", "区域"],
+                    "form_match_logic": "all",
+                    "max_token_distance": 200,
+                    "effective_max_token_distance": 200,
+                    "search_scope": "sentence",
+                }
+            ],
+            distance_matching_mode="auto-approx",
+            distance_match_combination_cap=10000,
+            distance_match_strict_safety_limit=1000000,
+        )
+
+        self.assertEqual(hit_result.requested_mode, "auto-approx")
+        self.assertEqual(hit_result.used_mode, "approx")
+        self.assertEqual(len(hit_result.warning_messages), 1)
+        self.assertEqual(hit_result.warning_messages[0].code, "distance_match_fallback")
+        self.assertEqual(hit_result.warning_messages[0].combination_count, 10100)
+        self.assertEqual(hit_result.warning_messages[0].combination_cap, 10000)
+
+    def test_build_condition_hit_tokens_df_strict_mode_raises_on_safety_limit(self) -> None:
+        rows: list[dict[str, object]] = []
+        token_no = 0
+        for idx in range(11):
+            rows.append(
+                {
+                    "paragraph_id": 1,
+                    "sentence_id": 10,
+                    "sentence_no_in_paragraph": 1,
+                    "token_no": token_no,
+                    "sentence_token_position": token_no,
+                    "paragraph_token_position": token_no,
+                    "normalized_form": "抑制",
+                    "surface": f"抑制{idx}",
+                }
+            )
+            token_no += 1
+
+        for idx in range(10):
+            rows.append(
+                {
+                    "paragraph_id": 1,
+                    "sentence_id": 10,
+                    "sentence_no_in_paragraph": 1,
+                    "token_no": token_no,
+                    "sentence_token_position": token_no,
+                    "paragraph_token_position": token_no,
+                    "normalized_form": "区域",
+                    "surface": f"区域{idx}",
+                }
+            )
+            token_no += 1
+
+        with self.assertRaises(distance_matcher.DistanceMatchLimitExceededError) as context:
+            analysis_core.build_condition_hit_tokens_df(
+                tokens_with_position_df=pl.DataFrame(rows),
+                cooccurrence_conditions=[
+                    {
+                        "condition_id": "distance_strict",
+                        "categories": ["strict"],
+                        "forms": ["抑制", "区域"],
+                        "form_match_logic": "all",
+                        "max_token_distance": 200,
+                        "search_scope": "sentence",
+                    }
+                ],
+                distance_matching_mode="strict",
+                distance_match_combination_cap=10000,
+                distance_match_strict_safety_limit=100,
+            )
+
+        self.assertIn("distance_match_strict_limit_exceeded", str(context.exception))
 
     def test_select_target_ids_by_cooccurrence_conditions_keeps_tuple_contract(self) -> None:
         tokens_df = pl.DataFrame(

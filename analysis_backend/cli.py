@@ -169,6 +169,9 @@ def run_analysis_job(args: Namespace) -> int:
         condition_hit_tokens_df = build_condition_hit_tokens_df(
             tokens_with_position_df=selected_tokens_with_position_df,
             cooccurrence_conditions=filter_config.cooccurrence_conditions,
+            distance_matching_mode=filter_config.distance_matching_mode,
+            distance_match_combination_cap=filter_config.distance_match_combination_cap,
+            distance_match_strict_safety_limit=filter_config.distance_match_strict_safety_limit,
         )
         token_annotations_df = build_token_annotations_df(
             condition_hit_tokens_df=condition_hit_tokens_df,

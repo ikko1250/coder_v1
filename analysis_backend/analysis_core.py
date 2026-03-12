@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import heapq
 from html import escape
-from itertools import product
 from pathlib import Path
 
 import polars as pl
 
+from .condition_model import DistanceMatchingMode
 from .data_access import read_analysis_sentences
 from .data_access import read_analysis_tokens
 from .data_access import read_paragraph_document_metadata
+from .distance_matcher import build_condition_hit_result
+from .distance_matcher import evaluate_distance_matches_by_unit
 from .filter_config import load_filter_config
 from .token_position import build_candidate_tokens_with_position_df
 from .token_position import build_tokens_with_position_df
@@ -22,7 +23,6 @@ NORMALIZED_FORM_COL = "normalized_form"
 SURFACE_COL = "surface"
 SENTENCE_TOKEN_POSITION_COL = "sentence_token_position"
 PARAGRAPH_TOKEN_POSITION_COL = "paragraph_token_position"
-MAX_DISTANCE_MATCH_COMBINATIONS = 10000
 CONDITION_EVAL_SCHEMA = {
     PARAGRAPH_ID_COL: pl.Int64,
     "condition_id": pl.String,
@@ -207,388 +207,14 @@ def _clean_cooccurrence_conditions(
         )
 
     return cleaned_conditions
-def _has_forms_within_distance(form_positions_list: list[list[int]], max_token_distance: int) -> bool:
-    if max_token_distance < 0:
-        return False
-    if not form_positions_list or any(not positions for positions in form_positions_list):
-        return False
-
-    pointer_list = [0] * len(form_positions_list)
-    length_list = [len(positions) for positions in form_positions_list]
-
-    while True:
-        current_values = [
-            form_positions_list[idx][pointer_list[idx]]
-            for idx in range(len(form_positions_list))
-        ]
-        if max(current_values) - min(current_values) <= max_token_distance:
-            return True
-
-        min_value_index = min(range(len(current_values)), key=lambda idx: current_values[idx])
-        pointer_list[min_value_index] += 1
-        if pointer_list[min_value_index] >= length_list[min_value_index]:
-            return False
-
-
-def _evaluate_distance_matches_by_unit(
-    tokens_with_position_df: pl.DataFrame,
-    forms: list[str],
-    unit_column: str,
-    position_column: str,
-    max_token_distance: int,
-) -> pl.DataFrame:
-    if tokens_with_position_df.is_empty():
-        return _empty_df({"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
-
-    rows: list[dict[str, object]] = []
-    form_tokens_df = (
-        tokens_with_position_df
-        .filter(pl.col("normalized_form").is_in(forms))
-        .select([unit_column, "normalized_form", position_column])
-    )
-    if form_tokens_df.is_empty():
-        return _empty_df({"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
-
-    for unit_df in form_tokens_df.partition_by(unit_column):
-        unit_id = int(unit_df.get_column(unit_column)[0])
-        form_positions_list: list[list[int]] = []
-        for form in forms:
-            positions = (
-                unit_df
-                .filter(pl.col("normalized_form") == form)
-                .sort(position_column)
-                .get_column(position_column)
-                .to_list()
-            )
-            form_positions_list.append(positions)
-
-        rows.append(
-            {
-                "unit_id": unit_id,
-                "distance_is_match": _has_forms_within_distance(
-                    form_positions_list=form_positions_list,
-                    max_token_distance=max_token_distance,
-                ),
-            }
-        )
-
-    return pl.DataFrame(rows, schema={"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
-
-
-def _build_condition_hit_row(
-    row: dict[str, object],
-    condition_id: str,
-    categories: list[str],
-    match_group_id: str,
-    match_role: str,
-) -> dict[str, object]:
-    return {
-        "paragraph_id": int(row["paragraph_id"]),
-        "sentence_id": int(row["sentence_id"]),
-        "sentence_no_in_paragraph": int(row["sentence_no_in_paragraph"]),
-        "token_no": int(row["token_no"]),
-        "sentence_token_position": int(row["sentence_token_position"]),
-        "paragraph_token_position": int(row["paragraph_token_position"]),
-        "normalized_form": str(row["normalized_form"]) if row["normalized_form"] is not None else "",
-        "surface": str(row["surface"]) if row["surface"] is not None else "",
-        "condition_id": condition_id,
-        "category_text": ", ".join(categories),
-        "categories": categories,
-        "match_group_id": match_group_id,
-        "match_role": match_role,
-    }
-
-
-def _row_position_key(row: dict[str, object], position_column: str) -> tuple[int, int, int]:
-    return (
-        int(row[position_column]),
-        int(row["sentence_id"]),
-        int(row["token_no"]),
-    )
-
-
-def _find_distance_match_groups_by_product(
-    form_row_options: list[list[dict[str, object]]],
-    position_column: str,
-    max_token_distance: int,
-) -> list[list[dict[str, object]]]:
-    candidate_groups: list[dict[str, object]] = []
-    for candidate_rows in product(*form_row_options):
-        sorted_rows = sorted(candidate_rows, key=lambda row: _row_position_key(row, position_column))
-        token_keys = [
-            (int(row["sentence_id"]), int(row["token_no"]))
-            for row in sorted_rows
-        ]
-        if len(set(token_keys)) != len(token_keys):
-            continue
-
-        positions = [int(row[position_column]) for row in sorted_rows]
-        span_width = max(positions) - min(positions)
-        if span_width > max_token_distance:
-            continue
-
-        candidate_groups.append(
-            {
-                "rows": sorted_rows,
-                "span_width": span_width,
-                "start_position": min(positions),
-                "end_position": max(positions),
-            }
-        )
-
-    candidate_groups.sort(
-        key=lambda group: (
-            int(group["span_width"]),
-            int(group["start_position"]),
-            int(group["end_position"]),
-        )
-    )
-    return [list(group["rows"]) for group in candidate_groups]
-
-
-def _find_best_distance_group(
-    form_row_options: list[list[dict[str, object]]],
-    position_column: str,
-) -> tuple[list[dict[str, object]], list[int], int] | None:
-    current_indices = [0] * len(form_row_options)
-    heap: list[tuple[int, int, int, int]] = []
-    current_max_position = -1
-
-    for form_index, option_rows in enumerate(form_row_options):
-        row = option_rows[0]
-        position, sentence_id, token_no = _row_position_key(row, position_column)
-        heapq.heappush(heap, (position, sentence_id, token_no, form_index))
-        current_max_position = max(current_max_position, position)
-
-    best_rows: list[dict[str, object]] | None = None
-    best_indices: list[int] | None = None
-    best_span_width: int | None = None
-    best_start_position: int | None = None
-    best_end_position: int | None = None
-
-    while True:
-        min_position, _sentence_id, _token_no, form_index = heapq.heappop(heap)
-        current_rows = [
-            form_row_options[idx][current_indices[idx]]
-            for idx in range(len(form_row_options))
-        ]
-        span_width = current_max_position - min_position
-        if best_rows is None or (
-            span_width,
-            min_position,
-            current_max_position,
-        ) < (
-            best_span_width,
-            best_start_position,
-            best_end_position,
-        ):
-            best_rows = [dict(row) for row in current_rows]
-            best_indices = current_indices.copy()
-            best_span_width = span_width
-            best_start_position = min_position
-            best_end_position = current_max_position
-
-        current_indices[form_index] += 1
-        if current_indices[form_index] >= len(form_row_options[form_index]):
-            break
-
-        next_row = form_row_options[form_index][current_indices[form_index]]
-        next_position, next_sentence_id, next_token_no = _row_position_key(next_row, position_column)
-        heapq.heappush(heap, (next_position, next_sentence_id, next_token_no, form_index))
-        current_max_position = max(current_max_position, next_position)
-
-    if best_rows is None or best_indices is None or best_span_width is None:
-        return None
-
-    return best_rows, best_indices, best_span_width
-
-
-def _find_distance_match_groups_greedily(
-    form_row_options: list[list[dict[str, object]]],
-    position_column: str,
-    max_token_distance: int,
-) -> list[list[dict[str, object]]]:
-    remaining_row_options = [list(option_rows) for option_rows in form_row_options]
-    matched_groups: list[list[dict[str, object]]] = []
-
-    while all(remaining_row_options):
-        best_group = _find_best_distance_group(
-            form_row_options=remaining_row_options,
-            position_column=position_column,
-        )
-        if best_group is None:
-            break
-
-        matched_rows, matched_indices, span_width = best_group
-        if span_width > max_token_distance:
-            break
-
-        matched_groups.append(sorted(matched_rows, key=lambda row: _row_position_key(row, position_column)))
-        for form_index in reversed(range(len(matched_indices))):
-            del remaining_row_options[form_index][matched_indices[form_index]]
-
-    return matched_groups
-
-
-def _find_distance_match_groups_by_unit(
-    tokens_with_position_df: pl.DataFrame,
-    condition_id: str,
-    categories: list[str],
-    forms: list[str],
-    unit_column: str,
-    position_column: str,
-    max_token_distance: int,
-) -> pl.DataFrame:
-    if tokens_with_position_df.is_empty():
-        return _empty_condition_hit_tokens_df()
-
-    hit_rows: list[dict[str, object]] = []
-    for unit_df in tokens_with_position_df.partition_by(unit_column):
-        form_row_options: list[list[dict[str, object]]] = []
-        for form in forms:
-            form_rows = (
-                unit_df
-                .filter(pl.col("normalized_form") == form)
-                .sort(position_column)
-                .iter_rows(named=True)
-            )
-            form_row_list = [dict(form_row) for form_row in form_rows]
-            if not form_row_list:
-                form_row_options = []
-                break
-            form_row_options.append(form_row_list)
-        if not form_row_options:
-            continue
-
-        unit_id = int(unit_df.get_column(unit_column)[0])
-        group_index = 1
-        total_combinations = 1
-        for option_rows in form_row_options:
-            total_combinations *= len(option_rows)
-            if total_combinations > MAX_DISTANCE_MATCH_COMBINATIONS:
-                break
-
-        if total_combinations > MAX_DISTANCE_MATCH_COMBINATIONS:
-            candidate_groups = _find_distance_match_groups_greedily(
-                form_row_options=form_row_options,
-                position_column=position_column,
-                max_token_distance=max_token_distance,
-            )
-        else:
-            candidate_groups = _find_distance_match_groups_by_product(
-                form_row_options=form_row_options,
-                position_column=position_column,
-                max_token_distance=max_token_distance,
-            )
-
-        for candidate_group in candidate_groups:
-            match_group_id = f"{condition_id}:{unit_id}:{group_index}"
-            for matched_row in candidate_group:
-                hit_rows.append(
-                    _build_condition_hit_row(
-                        row=matched_row,
-                        condition_id=condition_id,
-                        categories=categories,
-                        match_group_id=match_group_id,
-                        match_role=str(matched_row["normalized_form"]),
-                    )
-                )
-            group_index += 1
-
-    if not hit_rows:
-        return _empty_condition_hit_tokens_df()
-
-    return (
-        pl.DataFrame(hit_rows)
-        .with_columns([
-            pl.col("paragraph_id").cast(pl.Int64),
-            pl.col("sentence_id").cast(pl.Int64),
-            pl.col("sentence_no_in_paragraph").cast(pl.Int64),
-            pl.col("token_no").cast(pl.Int64),
-            pl.col("sentence_token_position").cast(pl.Int64),
-            pl.col("paragraph_token_position").cast(pl.Int64),
-        ])
-        .sort([
-            "paragraph_id",
-            "sentence_id",
-            "sentence_token_position",
-            "condition_id",
-            "match_group_id",
-        ])
-    )
-
-
-def _find_token_hits_by_unit(
-    tokens_with_position_df: pl.DataFrame,
-    condition_id: str,
-    categories: list[str],
-    forms: list[str],
-    unit_column: str,
-    position_column: str,
-    form_match_logic: str,
-) -> pl.DataFrame:
-    if tokens_with_position_df.is_empty():
-        return _empty_condition_hit_tokens_df()
-
-    hit_rows: list[dict[str, object]] = []
-    for unit_df in tokens_with_position_df.partition_by(unit_column):
-        matched_rows = (
-            unit_df
-            .filter(pl.col("normalized_form").is_in(forms))
-            .sort(position_column)
-            .iter_rows(named=True)
-        )
-        matched_row_list = [dict(matched_row) for matched_row in matched_rows]
-        if not matched_row_list:
-            continue
-
-        matched_forms = _unique_in_order([
-            str(matched_row["normalized_form"])
-            for matched_row in matched_row_list
-            if matched_row["normalized_form"] is not None
-        ])
-        if form_match_logic == "all" and len(matched_forms) < len(forms):
-            continue
-
-        unit_id = int(unit_df.get_column(unit_column)[0])
-        for group_index, matched_row in enumerate(matched_row_list, start=1):
-            match_group_id = f"{condition_id}:{unit_id}:token:{group_index}"
-            hit_rows.append(
-                _build_condition_hit_row(
-                    row=matched_row,
-                    condition_id=condition_id,
-                    categories=categories,
-                    match_group_id=match_group_id,
-                    match_role=str(matched_row["normalized_form"]),
-                )
-            )
-
-    if not hit_rows:
-        return _empty_condition_hit_tokens_df()
-
-    return (
-        pl.DataFrame(hit_rows)
-        .with_columns([
-            pl.col("paragraph_id").cast(pl.Int64),
-            pl.col("sentence_id").cast(pl.Int64),
-            pl.col("sentence_no_in_paragraph").cast(pl.Int64),
-            pl.col("token_no").cast(pl.Int64),
-            pl.col("sentence_token_position").cast(pl.Int64),
-            pl.col("paragraph_token_position").cast(pl.Int64),
-        ])
-        .sort([
-            "paragraph_id",
-            "sentence_id",
-            "sentence_token_position",
-            "condition_id",
-            "match_group_id",
-        ])
-    )
 
 
 def build_condition_hit_tokens_df(
     tokens_with_position_df: pl.DataFrame,
     cooccurrence_conditions: list[dict[str, object]],
+    distance_matching_mode: DistanceMatchingMode = "auto-approx",
+    distance_match_combination_cap: int = 10000,
+    distance_match_strict_safety_limit: int = 1000000,
 ) -> pl.DataFrame:
     if tokens_with_position_df.is_empty():
         return _empty_condition_hit_tokens_df()
@@ -597,54 +223,13 @@ def build_condition_hit_tokens_df(
     if not cleaned_conditions:
         return _empty_condition_hit_tokens_df()
 
-    condition_hit_frames: list[pl.DataFrame] = []
-    for condition in cleaned_conditions:
-        condition_id = str(condition["condition_id"])
-        categories = list(condition["categories"])
-        forms = list(condition["forms"])
-        search_scope = str(condition["search_scope"])
-        form_match_logic = str(condition["form_match_logic"])
-        effective_max_token_distance = condition["effective_max_token_distance"]
-
-        relevant_tokens_df = tokens_with_position_df.filter(pl.col("normalized_form").is_in(forms))
-        if relevant_tokens_df.is_empty():
-            continue
-
-        if search_scope == "sentence":
-            unit_column = "sentence_id"
-            position_column = "sentence_token_position"
-        else:
-            unit_column = "paragraph_id"
-            position_column = "paragraph_token_position"
-
-        if effective_max_token_distance is not None:
-            hit_df = _find_distance_match_groups_by_unit(
-                tokens_with_position_df=relevant_tokens_df,
-                condition_id=condition_id,
-                categories=categories,
-                forms=forms,
-                unit_column=unit_column,
-                position_column=position_column,
-                max_token_distance=int(effective_max_token_distance),
-            )
-        else:
-            hit_df = _find_token_hits_by_unit(
-                tokens_with_position_df=relevant_tokens_df,
-                condition_id=condition_id,
-                categories=categories,
-                forms=forms,
-                unit_column=unit_column,
-                position_column=position_column,
-                form_match_logic=form_match_logic,
-            )
-
-        if not hit_df.is_empty():
-            condition_hit_frames.append(hit_df)
-
-    if not condition_hit_frames:
-        return _empty_condition_hit_tokens_df()
-
-    return pl.concat(condition_hit_frames, how="vertical")
+    return build_condition_hit_result(
+        tokens_with_position_df=tokens_with_position_df,
+        cooccurrence_conditions=cleaned_conditions,
+        distance_matching_mode=distance_matching_mode,
+        distance_match_combination_cap=distance_match_combination_cap,
+        distance_match_strict_safety_limit=distance_match_strict_safety_limit,
+    ).condition_hit_tokens_df
 
 
 def build_token_annotations_df(condition_hit_tokens_df: pl.DataFrame) -> pl.DataFrame:
@@ -955,7 +540,7 @@ def select_target_ids_by_cooccurrence_conditions(
             .with_columns(pl.col("matched_form_count").fill_null(0).cast(pl.UInt32))
         )
         if distance_check_applied:
-            distance_match_df = _evaluate_distance_matches_by_unit(
+            distance_match_df = evaluate_distance_matches_by_unit(
                 tokens_with_position_df=candidate_tokens_df,
                 forms=forms,
                 unit_column=unit_column,
