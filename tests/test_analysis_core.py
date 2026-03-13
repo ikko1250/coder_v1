@@ -543,6 +543,47 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(target_paragraph_ids, [1])
         self.assertEqual(target_sentence_ids, [11])
 
+    def test_condition_eval_matched_form_count_uses_best_unit_coverage_within_paragraph(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 1],
+                "sentence_id": [11, 11, 12, 12],
+                "token_no": [1, 2, 1, 2],
+                "normalized_form": ["抑制", "区域", "抑制", "その他"],
+                "surface": ["抑制", "区域", "抑制", "その他"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+                "sentence_no_in_paragraph": [1, 2],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="suppress_area",
+                    categories=["概念:抑制区域"],
+                    category_text="概念:抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                )
+            ],
+        )
+
+        condition_eval_row = result.condition_eval_df.row(0, named=True)
+        self.assertEqual(condition_eval_row["matched_form_count"], 2)
+        self.assertEqual(condition_eval_row["evaluated_unit_count"], 2)
+        self.assertEqual(condition_eval_row["matched_unit_count"], 1)
+        self.assertTrue(condition_eval_row["is_match"])
+
     def test_build_reconstructed_paragraphs_export_df_keeps_required_columns(self) -> None:
         reconstructed_paragraphs_df = pl.DataFrame(
             {

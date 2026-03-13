@@ -42,6 +42,11 @@ def _empty_paragraph_summary_df() -> pl.DataFrame:
     return empty_df(PARAGRAPH_SUMMARY_SCHEMA)
 
 
+def _paragraph_matched_form_count_expr() -> pl.Expr:
+    # This is a diagnostic summary of the strongest unit-level coverage in the paragraph.
+    return pl.col("matched_form_count").max().cast(pl.UInt32).alias("matched_form_count")
+
+
 def _normalize_condition_categories(raw_categories: object) -> list[str]:
     raw_category_values = raw_categories if isinstance(raw_categories, list) else [raw_categories]
     categories: list[str] = []
@@ -233,7 +238,7 @@ def select_target_ids_by_conditions_result(
             .with_columns(condition_match_expr.alias("is_match"))
             .group_by("paragraph_id")
             .agg([
-                pl.col("matched_form_count").max().cast(pl.UInt32).alias("matched_form_count"),
+                _paragraph_matched_form_count_expr(),
                 pl.len().cast(pl.UInt32).alias("evaluated_unit_count"),
                 pl.col("is_match").sum().cast(pl.UInt32).alias("matched_unit_count"),
                 pl.col("distance_is_match").any().alias("distance_is_match"),
