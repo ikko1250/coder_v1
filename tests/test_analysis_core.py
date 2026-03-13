@@ -10,6 +10,7 @@ import polars as pl
 
 import analysis_backend
 import analysis_backend.analysis_core as analysis_core
+import analysis_backend.condition_evaluator as condition_evaluator
 import analysis_backend.condition_model as condition_model
 import analysis_backend.data_access as data_access
 import analysis_backend.distance_matcher as distance_matcher
@@ -65,6 +66,33 @@ class AnalysisCoreContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result.warning_messages, [])
+
+    def test_normalize_cooccurrence_conditions_returns_normalized_condition_models(self) -> None:
+        normalized_conditions = condition_evaluator.normalize_cooccurrence_conditions(
+            [
+                {
+                    "condition_id": "duplicate",
+                    "categories": ["カテゴリA", "カテゴリA"],
+                    "forms": ["抑制", "区域", "区域"],
+                    "form_match_logic": "all",
+                    "search_scope": "sentence",
+                    "max_token_distance": 5,
+                },
+                {
+                    "condition_id": "duplicate",
+                    "categories": None,
+                    "forms": ["制限", "区域"],
+                },
+            ]
+        )
+
+        self.assertEqual(len(normalized_conditions), 2)
+        self.assertIsInstance(normalized_conditions[0], condition_model.NormalizedCondition)
+        self.assertEqual(normalized_conditions[0].condition_id, "duplicate")
+        self.assertEqual(normalized_conditions[0].categories, ["カテゴリA"])
+        self.assertEqual(normalized_conditions[0].forms, ["抑制", "区域"])
+        self.assertEqual(normalized_conditions[1].condition_id, "duplicate_2")
+        self.assertEqual(normalized_conditions[1].categories, ["未分類"])
 
     def test_load_filter_config_reads_explicit_matching_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
