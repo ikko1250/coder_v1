@@ -315,7 +315,43 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(meta["jobId"], "failure-job")
             self.assertEqual(meta["warningMessages"], [])
             self.assertIn("Filter config JSON not found", meta["errorSummary"])
-            self.assertIn("Filter config JSON not found", stderr_buffer.getvalue())
+
+    def test_run_analysis_job_writes_failure_meta_json_for_data_access_result_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "empty.db"
+            sqlite3.connect(db_path).close()
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="data-access-failure-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 1)
+            self.assertEqual(stdout_buffer.getvalue(), "")
+
+            meta_path = output_dir / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["jobId"], "data-access-failure-job")
+            self.assertEqual(len(meta["warningMessages"]), 1)
+            self.assertEqual(meta["warningMessages"][0]["code"], "sqlite_read_failed")
+            self.assertEqual(meta["warningMessages"][0]["queryName"], "analysis_tokens")
+            self.assertEqual(meta["warningMessages"][0]["severity"], "error")
+            self.assertIn("SQLite read failed", meta["errorSummary"])
+            self.assertIn("SQLite read failed", stderr_buffer.getvalue())
 
     def test_run_analysis_job_writes_success_csv_and_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

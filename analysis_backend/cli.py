@@ -136,9 +136,17 @@ def _serialize_warning_messages(warning_messages: list[object]) -> list[dict[str
                 "severity": getattr(warning_message, "severity", None),
                 "scope": getattr(warning_message, "scope", None),
                 "fieldName": getattr(warning_message, "field_name", None),
+                "queryName": getattr(warning_message, "query_name", None),
+                "dbPath": getattr(warning_message, "db_path", None),
             }
         )
     return serialized_messages
+
+
+def _build_error_summary_from_result_issues(issues: list[object], default_message: str) -> str:
+    if issues:
+        return str(getattr(issues[0], "message", default_message))
+    return default_message
 
 
 def _filter_sentences_for_tokens(
@@ -182,15 +190,68 @@ def run_analysis_job(args: Namespace) -> int:
             enrich_reconstructed_paragraphs_df,
             load_filter_config,
             load_filter_config_result,
-            read_analysis_sentences,
-            read_analysis_tokens,
+            read_analysis_sentences_result,
+            read_analysis_tokens_result,
             select_target_ids_by_cooccurrence_conditions,
         )
 
         load_filter_config_result_value = load_filter_config_result(filter_config_path)
         filter_config = load_filter_config_result_value.filter_config
-        analysis_tokens_df = read_analysis_tokens(db_path=db_path, limit_rows=args.limit_rows)
-        analysis_sentences_df = read_analysis_sentences(db_path=db_path, limit_rows=None)
+        analysis_tokens_result = read_analysis_tokens_result(
+            db_path=db_path,
+            limit_rows=args.limit_rows,
+        )
+        if analysis_tokens_result.data_frame is None:
+            error_summary = _build_error_summary_from_result_issues(
+                analysis_tokens_result.issues,
+                "analysis_tokens read failed",
+            )
+            failure_payload = _build_failure_payload(
+                job_id=args.job_id,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+                duration_seconds=round(
+                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                    6,
+                ),
+                db_path=db_path,
+                filter_config_path=filter_config_path,
+                output_csv_path=output_csv_path,
+                warning_messages=_serialize_warning_messages(
+                    load_filter_config_result_value.issues + analysis_tokens_result.issues
+                ),
+                error_summary=error_summary,
+            )
+            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+            print(error_summary, file=sys.stderr)
+            return 1
+        analysis_tokens_df = analysis_tokens_result.data_frame
+        analysis_sentences_result = read_analysis_sentences_result(db_path=db_path, limit_rows=None)
+        if analysis_sentences_result.data_frame is None:
+            error_summary = _build_error_summary_from_result_issues(
+                analysis_sentences_result.issues,
+                "analysis_sentences read failed",
+            )
+            failure_payload = _build_failure_payload(
+                job_id=args.job_id,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+                duration_seconds=round(
+                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                    6,
+                ),
+                db_path=db_path,
+                filter_config_path=filter_config_path,
+                output_csv_path=output_csv_path,
+                warning_messages=_serialize_warning_messages(
+                    load_filter_config_result_value.issues + analysis_sentences_result.issues
+                ),
+                error_summary=error_summary,
+            )
+            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+            print(error_summary, file=sys.stderr)
+            return 1
+        analysis_sentences_df = analysis_sentences_result.data_frame
         if args.limit_rows is not None:
             analysis_sentences_df = _filter_sentences_for_tokens(
                 analysis_tokens_df=analysis_tokens_df,

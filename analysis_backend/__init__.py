@@ -5,6 +5,8 @@ from importlib import import_module
 __all__ = [
     "ConfigIssue",
     "ConditionHitResult",
+    "DataAccessIssue",
+    "DataAccessResult",
     "DistanceMatchingMode",
     "FilterConfig",
     "LoadFilterConfigResult",
@@ -21,8 +23,11 @@ __all__ = [
     "enrich_reconstructed_paragraphs_df",
     "load_filter_config",
     "load_filter_config_result",
+    "read_analysis_sentences_result",
     "read_analysis_sentences",
+    "read_analysis_tokens_result",
     "read_analysis_tokens",
+    "read_paragraph_document_metadata_result",
     "read_paragraph_document_metadata",
     "reconstruct_paragraphs_by_ids",
     "reconstruct_sentences_by_ids",
@@ -35,6 +40,8 @@ def __getattr__(name: str):
         module_name = ".condition_model" if name in {
             "ConfigIssue",
             "ConditionHitResult",
+            "DataAccessIssue",
+            "DataAccessResult",
             "DistanceMatchingMode",
             "FilterConfig",
             "LoadFilterConfigResult",
@@ -43,8 +50,11 @@ def __getattr__(name: str):
             "NormalizedCondition",
             "TargetSelectionResult",
         } else ".filter_config" if name in {"load_filter_config", "load_filter_config_result"} else ".data_access" if name in {
+            "read_analysis_sentences_result",
             "read_analysis_sentences",
+            "read_analysis_tokens_result",
             "read_analysis_tokens",
+            "read_paragraph_document_metadata_result",
             "read_paragraph_document_metadata",
         } else ".token_position" if name == "build_tokens_with_position_df" else ".rendering" if name in {
             "build_rendered_paragraphs_df",

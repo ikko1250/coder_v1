@@ -28,6 +28,8 @@ class AnalysisCoreContractTests(unittest.TestCase):
     def test_condition_models_are_exported_via_package_api(self) -> None:
         self.assertIs(analysis_backend.ConfigIssue, condition_model.ConfigIssue)
         self.assertIs(analysis_backend.FilterConfig, condition_model.FilterConfig)
+        self.assertIs(analysis_backend.DataAccessIssue, condition_model.DataAccessIssue)
+        self.assertIs(analysis_backend.DataAccessResult, condition_model.DataAccessResult)
         self.assertIs(analysis_backend.LoadFilterConfigResult, condition_model.LoadFilterConfigResult)
         self.assertIs(analysis_backend.MatchingWarning, condition_model.MatchingWarning)
         self.assertIs(analysis_backend.ConditionHitResult, condition_model.ConditionHitResult)
@@ -81,6 +83,8 @@ class AnalysisCoreContractTests(unittest.TestCase):
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
         self.assertTrue(is_dataclass(condition_model.ConfigIssue))
+        self.assertTrue(is_dataclass(condition_model.DataAccessIssue))
+        self.assertTrue(is_dataclass(condition_model.DataAccessResult))
         self.assertTrue(is_dataclass(condition_model.LoadFilterConfigResult))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
         self.assertTrue(is_dataclass(condition_model.NormalizeConditionsResult))
@@ -278,6 +282,20 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "distance_match_strict_safety_limit_defaulted",
             ],
         )
+
+    def test_read_analysis_tokens_result_reports_structured_issue_when_table_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "empty.db"
+            sqlite_conn = __import__("sqlite3").connect(db_path)
+            sqlite_conn.close()
+
+            result = data_access.read_analysis_tokens_result(db_path=db_path)
+
+        self.assertIsInstance(result, condition_model.DataAccessResult)
+        self.assertIsNone(result.data_frame)
+        self.assertEqual(len(result.issues), 1)
+        self.assertEqual(result.issues[0].code, "sqlite_read_failed")
+        self.assertEqual(result.issues[0].query_name, "analysis_tokens")
 
     def test_render_tagged_token_escapes_attributes(self) -> None:
         tagged_fragment, html_fragment, condition_ids, categories, match_group_ids, increment = (

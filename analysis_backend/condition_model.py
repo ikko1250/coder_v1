@@ -9,6 +9,7 @@ import polars as pl
 DistanceMatchingMode = Literal["strict", "auto-approx", "approx"]
 ConfigIssueSeverity = Literal["warning", "error"]
 ConfigIssueScope = Literal["filter_config", "condition"]
+DataAccessIssueSeverity = Literal["error"]
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,21 @@ class FilterConfig:
 class LoadFilterConfigResult:
     filter_config: FilterConfig | None
     issues: list[ConfigIssue] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DataAccessIssue:
+    code: str
+    severity: DataAccessIssueSeverity
+    message: str
+    query_name: str
+    db_path: str
+
+
+@dataclass(frozen=True)
+class DataAccessResult:
+    data_frame: pl.DataFrame | None
+    issues: list[DataAccessIssue] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

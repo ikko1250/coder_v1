@@ -7,13 +7,17 @@ import polars as pl
 from .condition_model import DistanceMatchingMode
 from .condition_model import FilterConfig
 from .condition_model import ConditionHitResult
+from .condition_model import DataAccessResult
 from .condition_model import LoadFilterConfigResult
 from .condition_model import NormalizedCondition
 from .condition_evaluator import normalize_cooccurrence_conditions as _normalize_cooccurrence_conditions_impl
 from .condition_evaluator import select_target_ids_by_conditions_result as _select_target_ids_by_conditions_result_impl
 from .data_access import read_analysis_sentences as _read_analysis_sentences_impl
+from .data_access import read_analysis_sentences_result as _read_analysis_sentences_result_impl
 from .data_access import read_analysis_tokens as _read_analysis_tokens_impl
+from .data_access import read_analysis_tokens_result as _read_analysis_tokens_result_impl
 from .data_access import read_paragraph_document_metadata as _read_paragraph_document_metadata_impl
+from .data_access import read_paragraph_document_metadata_result as _read_paragraph_document_metadata_result_impl
 from .distance_matcher import build_condition_hit_result as _build_condition_hit_result_impl
 from .export_formatter import build_reconstructed_paragraphs_export_df as _build_reconstructed_paragraphs_export_df_impl
 from .export_formatter import enrich_reconstructed_paragraphs_df as _enrich_reconstructed_paragraphs_df_impl
@@ -38,8 +42,11 @@ __all__ = [
     "load_filter_config",
     "load_filter_config_result",
     "read_analysis_sentences",
+    "read_analysis_sentences_result",
     "read_analysis_tokens",
+    "read_analysis_tokens_result",
     "read_paragraph_document_metadata",
+    "read_paragraph_document_metadata_result",
     "reconstruct_paragraphs_by_ids",
     "reconstruct_sentences_by_ids",
     "select_target_ids_by_cooccurrence_conditions",
@@ -69,12 +76,30 @@ def read_analysis_tokens(db_path: Path, limit_rows: int | None = None) -> pl.Dat
     return _read_analysis_tokens_impl(db_path=db_path, limit_rows=limit_rows)
 
 
+def read_analysis_tokens_result(db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
+    return _read_analysis_tokens_result_impl(db_path=db_path, limit_rows=limit_rows)
+
+
 def read_analysis_sentences(db_path: Path, limit_rows: int | None = None) -> pl.DataFrame:
     return _read_analysis_sentences_impl(db_path=db_path, limit_rows=limit_rows)
 
 
+def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
+    return _read_analysis_sentences_result_impl(db_path=db_path, limit_rows=limit_rows)
+
+
 def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) -> pl.DataFrame:
     return _read_paragraph_document_metadata_impl(db_path=db_path, paragraph_ids=paragraph_ids)
+
+
+def read_paragraph_document_metadata_result(
+    db_path: Path,
+    paragraph_ids: list[int],
+) -> DataAccessResult:
+    return _read_paragraph_document_metadata_result_impl(
+        db_path=db_path,
+        paragraph_ids=paragraph_ids,
+    )
 
 
 def build_tokens_with_position_df(
