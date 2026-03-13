@@ -188,6 +188,30 @@ def build_filter_config(filter_config_path: Path) -> None:
     )
 
 
+def build_warning_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "condition_match_logic": "unexpected",
+        "max_reconstructed_paragraphs": 0,
+        "distance_matching_mode": "unexpected",
+        "distance_match_combination_cap": 0,
+        "distance_match_strict_safety_limit": -1,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "suppress_area",
+                "categories": ["概念:抑制区域"],
+                "forms": ["抑制", "区域"],
+                "form_match_logic": "all",
+                "max_token_distance": 5,
+                "search_scope": "sentence",
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def build_fallback_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "any",
@@ -398,6 +422,44 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(warning["usedMode"], "approx")
             self.assertEqual(warning["combinationCap"], 5)
             self.assertGreaterEqual(warning["combinationCount"], 6)
+            self.assertIn('"warningMessages"', stdout_buffer.getvalue())
+
+    def test_run_analysis_job_surfaces_filter_config_warnings_in_meta_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_test_db(db_path)
+            build_warning_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="config-warning-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            meta_path = output_dir / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "succeeded")
+            self.assertEqual(len(meta["warningMessages"]), 5)
+            first_warning = meta["warningMessages"][0]
+            self.assertEqual(first_warning["code"], "condition_match_logic_defaulted")
+            self.assertEqual(first_warning["scope"], "filter_config")
+            self.assertEqual(first_warning["severity"], "warning")
+            self.assertEqual(first_warning["fieldName"], "condition_match_logic")
+            self.assertIsNone(first_warning["conditionId"])
             self.assertIn('"warningMessages"', stdout_buffer.getvalue())
 
     def test_run_analysis_job_writes_failure_meta_json_for_strict_limit_error(self) -> None:

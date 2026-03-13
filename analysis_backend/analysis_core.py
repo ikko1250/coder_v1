@@ -7,6 +7,7 @@ import polars as pl
 from .condition_model import DistanceMatchingMode
 from .condition_model import FilterConfig
 from .condition_model import ConditionHitResult
+from .condition_model import LoadFilterConfigResult
 from .condition_model import NormalizedCondition
 from .condition_evaluator import normalize_cooccurrence_conditions as _normalize_cooccurrence_conditions_impl
 from .condition_evaluator import select_target_ids_by_conditions_result as _select_target_ids_by_conditions_result_impl
@@ -17,6 +18,7 @@ from .distance_matcher import build_condition_hit_result as _build_condition_hit
 from .export_formatter import build_reconstructed_paragraphs_export_df as _build_reconstructed_paragraphs_export_df_impl
 from .export_formatter import enrich_reconstructed_paragraphs_df as _enrich_reconstructed_paragraphs_df_impl
 from .filter_config import load_filter_config as _load_filter_config_impl
+from .filter_config import load_filter_config_result as _load_filter_config_result_impl
 from .frame_schema import CONDITION_HIT_SCHEMA
 from .frame_schema import POSITIONED_TOKEN_SCHEMA
 from .frame_schema import empty_df
@@ -34,6 +36,7 @@ __all__ = [
     "build_tokens_with_position_df",
     "enrich_reconstructed_paragraphs_df",
     "load_filter_config",
+    "load_filter_config_result",
     "read_analysis_sentences",
     "read_analysis_tokens",
     "read_paragraph_document_metadata",
@@ -56,6 +59,10 @@ def _empty_condition_hit_tokens_df() -> pl.DataFrame:
 
 def load_filter_config(filter_config_path: Path) -> FilterConfig:
     return _load_filter_config_impl(filter_config_path)
+
+
+def load_filter_config_result(filter_config_path: Path) -> LoadFilterConfigResult:
+    return _load_filter_config_result_impl(filter_config_path)
 
 
 def read_analysis_tokens(db_path: Path, limit_rows: int | None = None) -> pl.DataFrame:

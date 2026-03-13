@@ -133,6 +133,9 @@ def _serialize_warning_messages(warning_messages: list[object]) -> list[dict[str
                 "combinationCount": getattr(warning_message, "combination_count", None),
                 "combinationCap": getattr(warning_message, "combination_cap", None),
                 "safetyLimit": getattr(warning_message, "safety_limit", None),
+                "severity": getattr(warning_message, "severity", None),
+                "scope": getattr(warning_message, "scope", None),
+                "fieldName": getattr(warning_message, "field_name", None),
             }
         )
     return serialized_messages
@@ -178,12 +181,14 @@ def run_analysis_job(args: Namespace) -> int:
             build_tokens_with_position_df,
             enrich_reconstructed_paragraphs_df,
             load_filter_config,
+            load_filter_config_result,
             read_analysis_sentences,
             read_analysis_tokens,
             select_target_ids_by_cooccurrence_conditions,
         )
 
-        filter_config = load_filter_config(filter_config_path)
+        load_filter_config_result_value = load_filter_config_result(filter_config_path)
+        filter_config = load_filter_config_result_value.filter_config
         analysis_tokens_df = read_analysis_tokens(db_path=db_path, limit_rows=args.limit_rows)
         analysis_sentences_df = read_analysis_sentences(db_path=db_path, limit_rows=None)
         if args.limit_rows is not None:
@@ -242,7 +247,7 @@ def run_analysis_job(args: Namespace) -> int:
             6,
         )
         serialized_warning_messages = _serialize_warning_messages(
-            condition_hit_result.warning_messages
+            load_filter_config_result_value.issues + condition_hit_result.warning_messages
         )
         success_payload = _build_success_payload(
             job_id=args.job_id,

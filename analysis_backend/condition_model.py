@@ -23,6 +23,12 @@ class FilterConfig:
 
 
 @dataclass(frozen=True)
+class LoadFilterConfigResult:
+    filter_config: FilterConfig | None
+    issues: list[ConfigIssue] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class NormalizedCondition:
     condition_id: str
     categories: list[str]

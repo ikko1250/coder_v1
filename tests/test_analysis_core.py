@@ -28,6 +28,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
     def test_condition_models_are_exported_via_package_api(self) -> None:
         self.assertIs(analysis_backend.ConfigIssue, condition_model.ConfigIssue)
         self.assertIs(analysis_backend.FilterConfig, condition_model.FilterConfig)
+        self.assertIs(analysis_backend.LoadFilterConfigResult, condition_model.LoadFilterConfigResult)
         self.assertIs(analysis_backend.MatchingWarning, condition_model.MatchingWarning)
         self.assertIs(analysis_backend.ConditionHitResult, condition_model.ConditionHitResult)
         self.assertIs(analysis_backend.NormalizeConditionsResult, condition_model.NormalizeConditionsResult)
@@ -80,6 +81,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
         self.assertTrue(is_dataclass(condition_model.ConfigIssue))
+        self.assertTrue(is_dataclass(condition_model.LoadFilterConfigResult))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
         self.assertTrue(is_dataclass(condition_model.NormalizeConditionsResult))
         self.assertTrue(is_dataclass(condition_model.MatchingWarning))
@@ -242,6 +244,40 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(config.distance_matching_mode, "auto-approx")
         self.assertEqual(config.distance_match_combination_cap, 10000)
         self.assertEqual(config.distance_match_strict_safety_limit, 1000000)
+
+    def test_load_filter_config_result_reports_defaulting_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            filter_config_path = Path(temp_dir) / "conditions.json"
+            filter_config_path.write_text(
+                json.dumps(
+                    {
+                        "condition_match_logic": "unexpected",
+                        "max_reconstructed_paragraphs": 0,
+                        "distance_matching_mode": "unexpected",
+                        "distance_match_combination_cap": 0,
+                        "distance_match_strict_safety_limit": -1,
+                        "cooccurrence_conditions": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = filter_config.load_filter_config_result(filter_config_path)
+
+        self.assertIsInstance(result, condition_model.LoadFilterConfigResult)
+        self.assertIsNotNone(result.filter_config)
+        self.assertEqual(
+            [issue.code for issue in result.issues],
+            [
+                "condition_match_logic_defaulted",
+                "max_reconstructed_paragraphs_defaulted",
+                "distance_matching_mode_defaulted",
+                "distance_match_combination_cap_defaulted",
+                "distance_match_strict_safety_limit_defaulted",
+            ],
+        )
 
     def test_render_tagged_token_escapes_attributes(self) -> None:
         tagged_fragment, html_fragment, condition_ids, categories, match_group_ids, increment = (
