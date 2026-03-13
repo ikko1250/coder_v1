@@ -42,3 +42,7 @@ def __getattr__(name: str):
         module = import_module(module_name, __name__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(list(globals().keys()) + __all__)

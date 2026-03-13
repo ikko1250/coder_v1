@@ -35,6 +35,15 @@ class AnalysisCoreContractTests(unittest.TestCase):
             data_access.read_paragraph_document_metadata,
         )
         self.assertIs(analysis_backend.build_tokens_with_position_df, token_position.build_tokens_with_position_df)
+        self.assertIn("build_condition_hit_tokens_df", dir(analysis_backend))
+        self.assertIn("select_target_ids_by_cooccurrence_conditions", dir(analysis_backend))
+
+    def test_analysis_core_keeps_legacy_facade_function_symbols(self) -> None:
+        self.assertEqual(analysis_core.load_filter_config.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.read_analysis_tokens.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.read_analysis_sentences.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.read_paragraph_document_metadata.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.build_tokens_with_position_df.__module__, "analysis_backend.analysis_core")
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
