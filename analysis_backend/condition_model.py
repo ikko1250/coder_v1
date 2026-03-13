@@ -7,6 +7,8 @@ import polars as pl
 
 
 DistanceMatchingMode = Literal["strict", "auto-approx", "approx"]
+ConfigIssueSeverity = Literal["warning", "error"]
+ConfigIssueScope = Literal["filter_config", "condition"]
 
 
 @dataclass(frozen=True)
@@ -46,11 +48,28 @@ class MatchingWarning:
 
 
 @dataclass(frozen=True)
+class ConfigIssue:
+    code: str
+    severity: ConfigIssueSeverity
+    scope: ConfigIssueScope
+    message: str
+    condition_index: int | None = None
+    condition_id: str | None = None
+    field_name: str | None = None
+
+
+@dataclass(frozen=True)
 class ConditionHitResult:
     condition_hit_tokens_df: pl.DataFrame
     requested_mode: DistanceMatchingMode
     used_mode: DistanceMatchingMode
     warning_messages: list[MatchingWarning] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class NormalizeConditionsResult:
+    normalized_conditions: list[NormalizedCondition]
+    issues: list[ConfigIssue] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

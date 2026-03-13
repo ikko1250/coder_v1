@@ -3,10 +3,12 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "ConfigIssue",
     "ConditionHitResult",
     "DistanceMatchingMode",
     "FilterConfig",
     "MatchingWarning",
+    "NormalizeConditionsResult",
     "NormalizedCondition",
     "TargetSelectionResult",
     "build_condition_hit_result",
@@ -29,10 +31,12 @@ __all__ = [
 def __getattr__(name: str):
     if name in __all__:
         module_name = ".condition_model" if name in {
+            "ConfigIssue",
             "ConditionHitResult",
             "DistanceMatchingMode",
             "FilterConfig",
             "MatchingWarning",
+            "NormalizeConditionsResult",
             "NormalizedCondition",
             "TargetSelectionResult",
         } else ".filter_config" if name == "load_filter_config" else ".data_access" if name in {

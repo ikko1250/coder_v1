@@ -26,9 +26,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class AnalysisCoreContractTests(unittest.TestCase):
     def test_condition_models_are_exported_via_package_api(self) -> None:
+        self.assertIs(analysis_backend.ConfigIssue, condition_model.ConfigIssue)
         self.assertIs(analysis_backend.FilterConfig, condition_model.FilterConfig)
         self.assertIs(analysis_backend.MatchingWarning, condition_model.MatchingWarning)
         self.assertIs(analysis_backend.ConditionHitResult, condition_model.ConditionHitResult)
+        self.assertIs(analysis_backend.NormalizeConditionsResult, condition_model.NormalizeConditionsResult)
         self.assertIs(analysis_backend.TargetSelectionResult, condition_model.TargetSelectionResult)
         self.assertIs(analysis_backend.load_filter_config, filter_config.load_filter_config)
         self.assertIs(analysis_backend.read_analysis_tokens, data_access.read_analysis_tokens)
@@ -77,7 +79,9 @@ class AnalysisCoreContractTests(unittest.TestCase):
         )
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
+        self.assertTrue(is_dataclass(condition_model.ConfigIssue))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
+        self.assertTrue(is_dataclass(condition_model.NormalizeConditionsResult))
         self.assertTrue(is_dataclass(condition_model.MatchingWarning))
         self.assertTrue(is_dataclass(condition_model.ConditionHitResult))
         self.assertTrue(is_dataclass(condition_model.TargetSelectionResult))
@@ -133,6 +137,56 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(normalized_conditions[0].forms, ["抑制", "区域"])
         self.assertEqual(normalized_conditions[1].condition_id, "duplicate_2")
         self.assertEqual(normalized_conditions[1].categories, ["未分類"])
+
+    def test_normalize_cooccurrence_conditions_result_reports_issues_without_breaking_legacy_output(self) -> None:
+        raw_conditions = [
+            "invalid",
+            {
+                "forms": "not-list",
+            },
+            {
+                "forms": [" ", ""],
+            },
+            {
+                "categories": None,
+                "forms": ["抑制", "区域", "区域"],
+                "form_match_logic": "unexpected",
+                "search_scope": "unexpected",
+                "max_token_distance": "bad",
+            },
+            {
+                "condition_id": "condition_4",
+                "categories": ["概念:抑制区域"],
+                "forms": ["制限", "区域"],
+                "form_match_logic": "any",
+                "max_token_distance": 5,
+            },
+        ]
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(raw_conditions)
+
+        self.assertEqual(
+            [condition.condition_id for condition in normalization_result.normalized_conditions],
+            ["condition_4", "condition_4_2"],
+        )
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            [
+                "condition_not_object",
+                "forms_not_list",
+                "forms_empty",
+                "condition_id_generated",
+                "form_match_logic_defaulted",
+                "search_scope_defaulted",
+                "max_token_distance_ignored",
+                "categories_defaulted",
+                "condition_id_deduplicated",
+                "max_token_distance_disabled",
+            ],
+        )
+        self.assertEqual(
+            condition_evaluator.normalize_cooccurrence_conditions(raw_conditions),
+            normalization_result.normalized_conditions,
+        )
 
     def test_load_filter_config_reads_explicit_matching_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

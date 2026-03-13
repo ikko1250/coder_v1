@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import polars as pl
 
+from .condition_model import ConfigIssue
 from .condition_model import NormalizedCondition
+from .condition_model import NormalizeConditionsResult
 from .condition_model import TargetSelectionResult
 from .distance_matcher import evaluate_distance_matches_by_unit
 from .frame_schema import empty_df
@@ -59,18 +61,56 @@ def _normalize_condition_categories(raw_categories: object) -> list[str]:
     return categories
 
 
-def normalize_cooccurrence_conditions(
+def _build_condition_issue(
+    *,
+    code: str,
+    severity: str,
+    message: str,
+    condition_index: int,
+    condition_id: str | None = None,
+    field_name: str | None = None,
+) -> ConfigIssue:
+    return ConfigIssue(
+        code=code,
+        severity=severity,
+        scope="condition",
+        message=message,
+        condition_index=condition_index,
+        condition_id=condition_id,
+        field_name=field_name,
+    )
+
+
+def normalize_cooccurrence_conditions_result(
     cooccurrence_conditions: list[dict[str, object]],
-) -> list[NormalizedCondition]:
+) -> NormalizeConditionsResult:
     cleaned_conditions: list[NormalizedCondition] = []
+    issues: list[ConfigIssue] = []
     used_condition_ids: set[str] = set()
 
     for idx, raw_condition in enumerate(cooccurrence_conditions, start=1):
         if not isinstance(raw_condition, dict):
+            issues.append(
+                _build_condition_issue(
+                    code="condition_not_object",
+                    severity="error",
+                    message="Condition entry must be an object.",
+                    condition_index=idx,
+                )
+            )
             continue
 
         raw_forms = raw_condition.get("forms", [])
         if not isinstance(raw_forms, list):
+            issues.append(
+                _build_condition_issue(
+                    code="forms_not_list",
+                    severity="error",
+                    message="'forms' must be a list.",
+                    condition_index=idx,
+                    field_name="forms",
+                )
+            )
             continue
 
         forms: list[str] = []
@@ -80,6 +120,15 @@ def normalize_cooccurrence_conditions(
                 forms.append(form)
         unique_forms = list(dict.fromkeys(forms))
         if not unique_forms:
+            issues.append(
+                _build_condition_issue(
+                    code="forms_empty",
+                    severity="error",
+                    message="Normalized 'forms' must not be empty.",
+                    condition_index=idx,
+                    field_name="forms",
+                )
+            )
             continue
 
         raw_condition_id_val = raw_condition.get("condition_id")
@@ -87,17 +136,61 @@ def normalize_cooccurrence_conditions(
             str(raw_condition_id_val).strip() if raw_condition_id_val is not None else ""
         )
         base_condition_id = raw_condition_id or f"condition_{idx}"
+        if not raw_condition_id:
+            issues.append(
+                _build_condition_issue(
+                    code="condition_id_generated",
+                    severity="warning",
+                    message="Missing condition_id was replaced with an auto-generated value.",
+                    condition_index=idx,
+                    condition_id=base_condition_id,
+                    field_name="condition_id",
+                )
+            )
         condition_id = base_condition_id
         suffix = 2
         while condition_id in used_condition_ids:
             condition_id = f"{base_condition_id}_{suffix}"
             suffix += 1
+        if condition_id != base_condition_id:
+            issues.append(
+                _build_condition_issue(
+                    code="condition_id_deduplicated",
+                    severity="warning",
+                    message="Duplicate condition_id was rewritten with a numeric suffix.",
+                    condition_index=idx,
+                    condition_id=condition_id,
+                    field_name="condition_id",
+                )
+            )
         used_condition_ids.add(condition_id)
 
         raw_form_match_logic = str(raw_condition.get("form_match_logic", "all")).strip().lower()
         form_match_logic = raw_form_match_logic if raw_form_match_logic in {"all", "any"} else "all"
+        if raw_form_match_logic not in {"all", "any"}:
+            issues.append(
+                _build_condition_issue(
+                    code="form_match_logic_defaulted",
+                    severity="warning",
+                    message="Unknown form_match_logic was replaced with 'all'.",
+                    condition_index=idx,
+                    condition_id=condition_id,
+                    field_name="form_match_logic",
+                )
+            )
         raw_search_scope = str(raw_condition.get("search_scope", "paragraph")).strip().lower()
         search_scope = raw_search_scope if raw_search_scope in {"paragraph", "sentence"} else "paragraph"
+        if raw_search_scope not in {"paragraph", "sentence"}:
+            issues.append(
+                _build_condition_issue(
+                    code="search_scope_defaulted",
+                    severity="warning",
+                    message="Unknown search_scope was replaced with 'paragraph'.",
+                    condition_index=idx,
+                    condition_id=condition_id,
+                    field_name="search_scope",
+                )
+            )
 
         requested_max_token_distance: int | None = None
         raw_distance = raw_condition.get("max_token_distance")
@@ -106,13 +199,56 @@ def normalize_cooccurrence_conditions(
                 parsed_distance = int(raw_distance)
                 if parsed_distance >= 0:
                     requested_max_token_distance = parsed_distance
+                else:
+                    issues.append(
+                        _build_condition_issue(
+                            code="max_token_distance_ignored",
+                            severity="warning",
+                            message="Negative max_token_distance was ignored.",
+                            condition_index=idx,
+                            condition_id=condition_id,
+                            field_name="max_token_distance",
+                        )
+                    )
             except (TypeError, ValueError):
                 requested_max_token_distance = None
+                issues.append(
+                    _build_condition_issue(
+                        code="max_token_distance_ignored",
+                        severity="warning",
+                        message="Invalid max_token_distance was ignored.",
+                        condition_index=idx,
+                        condition_id=condition_id,
+                        field_name="max_token_distance",
+                    )
+                )
 
         effective_max_token_distance = (
             requested_max_token_distance if form_match_logic == "all" else None
         )
         categories = _normalize_condition_categories(raw_condition.get("categories"))
+        if categories == ["未分類"]:
+            issues.append(
+                _build_condition_issue(
+                    code="categories_defaulted",
+                    severity="warning",
+                    message="Missing categories were replaced with '未分類'.",
+                    condition_index=idx,
+                    condition_id=condition_id,
+                    field_name="categories",
+                )
+            )
+        if requested_max_token_distance is not None and form_match_logic != "all":
+            issues.append(
+                _build_condition_issue(
+                    code="max_token_distance_disabled",
+                    severity="warning",
+                    message="max_token_distance is only applied when form_match_logic is 'all'.",
+                    condition_index=idx,
+                    condition_id=condition_id,
+                    field_name="max_token_distance",
+                )
+            )
 
         cleaned_conditions.append(
             NormalizedCondition(
@@ -127,7 +263,16 @@ def normalize_cooccurrence_conditions(
             )
         )
 
-    return cleaned_conditions
+    return NormalizeConditionsResult(
+        normalized_conditions=cleaned_conditions,
+        issues=issues,
+    )
+
+
+def normalize_cooccurrence_conditions(
+    cooccurrence_conditions: list[dict[str, object]],
+) -> list[NormalizedCondition]:
+    return normalize_cooccurrence_conditions_result(cooccurrence_conditions).normalized_conditions
 
 
 def select_target_ids_by_conditions_result(
