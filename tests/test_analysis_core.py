@@ -50,6 +50,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
             export_formatter.enrich_reconstructed_paragraphs_df,
         )
         self.assertIs(
+            analysis_backend.enrich_reconstructed_paragraphs_result,
+            export_formatter.enrich_reconstructed_paragraphs_result,
+        )
+        self.assertIs(
             analysis_backend.build_reconstructed_paragraphs_export_df,
             export_formatter.build_reconstructed_paragraphs_export_df,
         )
@@ -76,6 +80,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(analysis_core.build_token_annotations_df.__module__, "analysis_backend.analysis_core")
         self.assertEqual(analysis_core.build_rendered_paragraphs_df.__module__, "analysis_backend.analysis_core")
         self.assertEqual(analysis_core.enrich_reconstructed_paragraphs_df.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(
+            analysis_core.enrich_reconstructed_paragraphs_result.__module__,
+            "analysis_backend.analysis_core",
+        )
         self.assertEqual(
             analysis_core.build_reconstructed_paragraphs_export_df.__module__,
             "analysis_backend.analysis_core",
@@ -296,6 +304,38 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(len(result.issues), 1)
         self.assertEqual(result.issues[0].code, "sqlite_read_failed")
         self.assertEqual(result.issues[0].query_name, "analysis_tokens")
+
+    def test_enrich_reconstructed_paragraphs_result_reports_metadata_issue_when_tables_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "empty.db"
+            sqlite_conn = __import__("sqlite3").connect(db_path)
+            sqlite_conn.close()
+            base_df = pl.DataFrame(
+                {
+                    "paragraph_id": [1],
+                    "sentence_count": [1],
+                    "paragraph_text": ["本文"],
+                    "paragraph_text_tagged": ["本文"],
+                    "paragraph_text_highlight_html": ["本文"],
+                    "matched_condition_ids": [["a"]],
+                    "matched_condition_ids_text": ["a"],
+                    "matched_categories": [["b"]],
+                    "matched_categories_text": ["b"],
+                    "match_group_ids": [["g1"]],
+                    "match_group_count": [1],
+                    "annotated_token_count": [1],
+                }
+            )
+
+            result = export_formatter.enrich_reconstructed_paragraphs_result(
+                db_path=db_path,
+                reconstructed_paragraphs_base_df=base_df,
+            )
+
+        self.assertIsNone(result.data_frame)
+        self.assertEqual(len(result.issues), 1)
+        self.assertEqual(result.issues[0].code, "sqlite_metadata_read_failed")
+        self.assertEqual(result.issues[0].query_name, "paragraph_document_metadata")
 
     def test_render_tagged_token_escapes_attributes(self) -> None:
         tagged_fragment, html_fragment, condition_ids, categories, match_group_ids, increment = (

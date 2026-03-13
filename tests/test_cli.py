@@ -94,6 +94,47 @@ def build_test_db(db_path: Path) -> None:
         connection.close()
 
 
+def build_test_db_without_paragraph_metadata(db_path: Path) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE analysis_tokens (
+                paragraph_id INTEGER,
+                sentence_id INTEGER,
+                token_no INTEGER,
+                normalized_form TEXT,
+                surface TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_sentences (
+                sentence_id INTEGER,
+                paragraph_id INTEGER,
+                sentence_no_in_paragraph INTEGER
+            )
+            """
+        )
+        cursor.executemany(
+            "INSERT INTO analysis_tokens VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, 11, 0, "抑制", "抑制"),
+                (1, 11, 1, "区域", "区域"),
+                (1, 11, 2, "。", "。"),
+            ],
+        )
+        cursor.execute(
+            "INSERT INTO analysis_sentences VALUES (?, ?, ?)",
+            (11, 1, 1),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def build_large_distance_test_db(db_path: Path) -> None:
     connection = sqlite3.connect(db_path)
     try:
@@ -352,6 +393,42 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(meta["warningMessages"][0]["severity"], "error")
             self.assertIn("SQLite read failed", meta["errorSummary"])
             self.assertIn("SQLite read failed", stderr_buffer.getvalue())
+
+    def test_run_analysis_job_writes_failure_meta_json_for_metadata_result_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_test_db_without_paragraph_metadata(db_path)
+            build_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="metadata-failure-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 1)
+            self.assertEqual(stdout_buffer.getvalue(), "")
+
+            meta_path = output_dir / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["jobId"], "metadata-failure-job")
+            self.assertEqual(len(meta["warningMessages"]), 1)
+            self.assertEqual(meta["warningMessages"][0]["code"], "sqlite_metadata_read_failed")
+            self.assertEqual(meta["warningMessages"][0]["queryName"], "paragraph_document_metadata")
+            self.assertIn("SQLite metadata read failed", meta["errorSummary"])
+            self.assertIn("SQLite metadata read failed", stderr_buffer.getvalue())
 
     def test_run_analysis_job_writes_success_csv_and_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

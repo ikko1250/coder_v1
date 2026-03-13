@@ -187,7 +187,7 @@ def run_analysis_job(args: Namespace) -> int:
             build_rendered_paragraphs_df,
             build_token_annotations_df,
             build_tokens_with_position_df,
-            enrich_reconstructed_paragraphs_df,
+            enrich_reconstructed_paragraphs_result,
             load_filter_config,
             load_filter_config_result,
             read_analysis_sentences_result,
@@ -293,12 +293,38 @@ def run_analysis_job(args: Namespace) -> int:
             tokens_with_position_df=selected_tokens_with_position_df,
             token_annotations_df=token_annotations_df,
         )
-        reconstructed_paragraphs_df = enrich_reconstructed_paragraphs_df(
+        reconstructed_paragraphs_result = enrich_reconstructed_paragraphs_result(
             db_path=db_path,
             reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
         )
+        if reconstructed_paragraphs_result.data_frame is None:
+            error_summary = _build_error_summary_from_result_issues(
+                reconstructed_paragraphs_result.issues,
+                "paragraph metadata read failed",
+            )
+            failure_payload = _build_failure_payload(
+                job_id=args.job_id,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+                duration_seconds=round(
+                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                    6,
+                ),
+                db_path=db_path,
+                filter_config_path=filter_config_path,
+                output_csv_path=output_csv_path,
+                warning_messages=_serialize_warning_messages(
+                    load_filter_config_result_value.issues
+                    + condition_hit_result.warning_messages
+                    + reconstructed_paragraphs_result.issues
+                ),
+                error_summary=error_summary,
+            )
+            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+            print(error_summary, file=sys.stderr)
+            return 1
         reconstructed_paragraphs_export_df = build_reconstructed_paragraphs_export_df(
-            reconstructed_paragraphs_df=reconstructed_paragraphs_df,
+            reconstructed_paragraphs_df=reconstructed_paragraphs_result.data_frame,
         )
         reconstructed_paragraphs_export_df.write_csv(output_csv_path)
 

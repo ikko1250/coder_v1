@@ -21,6 +21,7 @@ __all__ = [
     "build_token_annotations_df",
     "build_tokens_with_position_df",
     "enrich_reconstructed_paragraphs_df",
+    "enrich_reconstructed_paragraphs_result",
     "load_filter_config",
     "load_filter_config_result",
     "read_analysis_sentences_result",
@@ -62,6 +63,7 @@ def __getattr__(name: str):
         } else ".export_formatter" if name in {
             "build_reconstructed_paragraphs_export_df",
             "enrich_reconstructed_paragraphs_df",
+            "enrich_reconstructed_paragraphs_result",
         } else ".analysis_core"
         module = import_module(module_name, __name__)
         return getattr(module, name)

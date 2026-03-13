@@ -21,6 +21,7 @@ from .data_access import read_paragraph_document_metadata_result as _read_paragr
 from .distance_matcher import build_condition_hit_result as _build_condition_hit_result_impl
 from .export_formatter import build_reconstructed_paragraphs_export_df as _build_reconstructed_paragraphs_export_df_impl
 from .export_formatter import enrich_reconstructed_paragraphs_df as _enrich_reconstructed_paragraphs_df_impl
+from .export_formatter import enrich_reconstructed_paragraphs_result as _enrich_reconstructed_paragraphs_result_impl
 from .filter_config import load_filter_config as _load_filter_config_impl
 from .filter_config import load_filter_config_result as _load_filter_config_result_impl
 from .frame_schema import CONDITION_HIT_SCHEMA
@@ -39,6 +40,7 @@ __all__ = [
     "build_token_annotations_df",
     "build_tokens_with_position_df",
     "enrich_reconstructed_paragraphs_df",
+    "enrich_reconstructed_paragraphs_result",
     "load_filter_config",
     "load_filter_config_result",
     "read_analysis_sentences",
@@ -192,6 +194,16 @@ def build_rendered_paragraphs_df(
     return _build_rendered_paragraphs_df_impl(
         tokens_with_position_df=tokens_with_position_df,
         token_annotations_df=token_annotations_df,
+    )
+
+
+def enrich_reconstructed_paragraphs_result(
+    db_path: Path,
+    reconstructed_paragraphs_base_df: pl.DataFrame,
+) -> DataAccessResult:
+    return _enrich_reconstructed_paragraphs_result_impl(
+        db_path=db_path,
+        reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
     )
 
 
