@@ -9,6 +9,7 @@ __all__ = [
     "MatchingWarning",
     "NormalizedCondition",
     "TargetSelectionResult",
+    "build_condition_hit_result",
     "build_condition_hit_tokens_df",
     "build_reconstructed_paragraphs_export_df",
     "build_rendered_paragraphs_df",

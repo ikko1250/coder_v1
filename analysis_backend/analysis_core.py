@@ -6,6 +6,7 @@ import polars as pl
 
 from .condition_model import DistanceMatchingMode
 from .condition_model import FilterConfig
+from .condition_model import ConditionHitResult
 from .condition_model import NormalizedCondition
 from .condition_evaluator import normalize_cooccurrence_conditions as _normalize_cooccurrence_conditions_impl
 from .condition_evaluator import select_target_ids_by_conditions_result as _select_target_ids_by_conditions_result_impl
@@ -23,6 +24,7 @@ from .token_position import build_tokens_with_position_df as _build_tokens_with_
 
 __all__ = [
     "build_condition_hit_tokens_df",
+    "build_condition_hit_result",
     "build_reconstructed_paragraphs_export_df",
     "build_rendered_paragraphs_df",
     "build_token_annotations_df",
@@ -146,6 +148,23 @@ def build_condition_hit_tokens_df(
         distance_match_combination_cap=distance_match_combination_cap,
         distance_match_strict_safety_limit=distance_match_strict_safety_limit,
     ).condition_hit_tokens_df
+
+
+def build_condition_hit_result(
+    tokens_with_position_df: pl.DataFrame,
+    cooccurrence_conditions: list[dict[str, object]],
+    distance_matching_mode: DistanceMatchingMode = "auto-approx",
+    distance_match_combination_cap: int = 10000,
+    distance_match_strict_safety_limit: int = 1000000,
+) -> ConditionHitResult:
+    normalized_conditions = _normalize_cooccurrence_conditions_impl(cooccurrence_conditions)
+    return _build_condition_hit_result_impl(
+        tokens_with_position_df=tokens_with_position_df,
+        cooccurrence_conditions=_normalized_conditions_to_dicts(normalized_conditions),
+        distance_matching_mode=distance_matching_mode,
+        distance_match_combination_cap=distance_match_combination_cap,
+        distance_match_strict_safety_limit=distance_match_strict_safety_limit,
+    )
 
 
 def build_token_annotations_df(condition_hit_tokens_df: pl.DataFrame) -> pl.DataFrame:

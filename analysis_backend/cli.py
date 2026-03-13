@@ -69,6 +69,7 @@ def _build_failure_payload(
     db_path: Path,
     filter_config_path: Path,
     output_csv_path: Path,
+    warning_messages: list[dict[str, object]],
     error_summary: str,
 ) -> dict[str, object]:
     return {
@@ -82,7 +83,7 @@ def _build_failure_payload(
         "outputCsvPath": str(output_csv_path),
         "targetParagraphCount": 0,
         "selectedParagraphCount": 0,
-        "warningMessages": [],
+        "warningMessages": warning_messages,
         "errorSummary": error_summary,
     }
 
@@ -98,7 +99,7 @@ def _build_success_payload(
     output_csv_path: Path,
     target_paragraph_count: int,
     selected_paragraph_count: int,
-    warning_messages: list[str],
+    warning_messages: list[dict[str, object]],
 ) -> dict[str, object]:
     return {
         "jobId": job_id,
@@ -116,6 +117,25 @@ def _build_success_payload(
     }
 
 
+def _serialize_warning_messages(warning_messages: list[object]) -> list[dict[str, object]]:
+    serialized_messages: list[dict[str, object]] = []
+    for warning_message in warning_messages:
+        serialized_messages.append(
+            {
+                "code": getattr(warning_message, "code", ""),
+                "message": getattr(warning_message, "message", ""),
+                "conditionId": getattr(warning_message, "condition_id", None),
+                "unitId": getattr(warning_message, "unit_id", None),
+                "requestedMode": getattr(warning_message, "requested_mode", None),
+                "usedMode": getattr(warning_message, "used_mode", None),
+                "combinationCount": getattr(warning_message, "combination_count", None),
+                "combinationCap": getattr(warning_message, "combination_cap", None),
+                "safetyLimit": getattr(warning_message, "safety_limit", None),
+            }
+        )
+    return serialized_messages
+
+
 def run_analysis_job(args: Namespace) -> int:
     started_at = _utc_now_iso()
     start_timestamp = datetime.now(timezone.utc)
@@ -130,7 +150,7 @@ def run_analysis_job(args: Namespace) -> int:
 
     try:
         from .analysis_core import (
-            build_condition_hit_tokens_df,
+            build_condition_hit_result,
             build_reconstructed_paragraphs_export_df,
             build_rendered_paragraphs_df,
             build_token_annotations_df,
@@ -166,13 +186,14 @@ def run_analysis_job(args: Namespace) -> int:
             paragraph_ids=target_paragraph_ids,
             target_forms=None,
         )
-        condition_hit_tokens_df = build_condition_hit_tokens_df(
+        condition_hit_result = build_condition_hit_result(
             tokens_with_position_df=selected_tokens_with_position_df,
             cooccurrence_conditions=filter_config.cooccurrence_conditions,
             distance_matching_mode=filter_config.distance_matching_mode,
             distance_match_combination_cap=filter_config.distance_match_combination_cap,
             distance_match_strict_safety_limit=filter_config.distance_match_strict_safety_limit,
         )
+        condition_hit_tokens_df = condition_hit_result.condition_hit_tokens_df
         token_annotations_df = build_token_annotations_df(
             condition_hit_tokens_df=condition_hit_tokens_df,
         )
@@ -194,6 +215,9 @@ def run_analysis_job(args: Namespace) -> int:
             (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
             6,
         )
+        serialized_warning_messages = _serialize_warning_messages(
+            condition_hit_result.warning_messages
+        )
         success_payload = _build_success_payload(
             job_id=args.job_id,
             started_at=started_at,
@@ -204,7 +228,7 @@ def run_analysis_job(args: Namespace) -> int:
             output_csv_path=output_csv_path,
             target_paragraph_count=paragraph_match_summary_df.height,
             selected_paragraph_count=len(target_paragraph_ids),
-            warning_messages=[],
+            warning_messages=serialized_warning_messages,
         )
         _write_meta_json(output_meta_json_path=output_meta_json_path, payload=success_payload)
         print(json.dumps(success_payload, ensure_ascii=False))
@@ -223,6 +247,7 @@ def run_analysis_job(args: Namespace) -> int:
             db_path=db_path,
             filter_config_path=filter_config_path,
             output_csv_path=output_csv_path,
+            warning_messages=[],
             error_summary=str(exc),
         )
         try:
