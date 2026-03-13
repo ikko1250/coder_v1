@@ -241,6 +241,46 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(sentence_11_positions, [0, 1])
         self.assertEqual(sentence_12_positions, [2])
 
+    def test_build_tokens_with_position_df_preserves_one_based_token_positions(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1],
+                "sentence_id": [11, 11, 12],
+                "token_no": [1, 2, 1],
+                "normalized_form": ["抑制", "区域", "指定"],
+                "surface": ["抑制", "区域", "指定"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+                "sentence_no_in_paragraph": [1, 2],
+            }
+        )
+
+        positioned_df = analysis_core.build_tokens_with_position_df(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+        ).sort(["sentence_id", "token_no"])
+
+        self.assertEqual(
+            positioned_df.select(
+                [
+                    "sentence_id",
+                    "token_no",
+                    "sentence_token_position",
+                    "paragraph_token_position",
+                ]
+            ).to_dict(as_series=False),
+            {
+                "sentence_id": [11, 11, 12],
+                "token_no": [1, 2, 1],
+                "sentence_token_position": [1, 2, 1],
+                "paragraph_token_position": [1, 2, 3],
+            },
+        )
+
     def test_build_condition_hit_tokens_df_handles_large_distance_combinations(self) -> None:
         rows: list[dict[str, object]] = []
         token_no = 0

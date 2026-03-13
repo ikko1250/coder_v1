@@ -63,6 +63,7 @@ def build_tokens_with_position_df(
         .with_columns([
             pl.col("sentence_no_in_paragraph").cast(pl.Int64),
             pl.col("token_no").cast(pl.Int64),
+            # Preserve the source token numbering because downstream code only relies on order and span.
             pl.col("token_no").cast(pl.Int64).alias("sentence_token_position"),
             (pl.col("sentence_offset") + pl.col("token_no")).cast(pl.Int64).alias("paragraph_token_position"),
         ])
