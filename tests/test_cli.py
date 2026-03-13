@@ -208,6 +208,29 @@ def build_fallback_filter_config(filter_config_path: Path) -> None:
     )
 
 
+def build_strict_limit_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "condition_match_logic": "any",
+        "max_reconstructed_paragraphs": 10,
+        "distance_matching_mode": "strict",
+        "distance_match_strict_safety_limit": 5,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "suppress_area",
+                "categories": ["概念:抑制区域"],
+                "forms": ["抑制", "区域"],
+                "form_match_logic": "all",
+                "max_token_distance": 10,
+                "search_scope": "sentence",
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 class CliContractTests(unittest.TestCase):
     def test_run_analysis_job_writes_failure_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -343,6 +366,40 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(warning["combinationCap"], 5)
             self.assertGreaterEqual(warning["combinationCount"], 6)
             self.assertIn('"warningMessages"', stdout_buffer.getvalue())
+
+    def test_run_analysis_job_writes_failure_meta_json_for_strict_limit_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_large_distance_test_db(db_path)
+            build_strict_limit_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="strict-failure-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 1)
+            self.assertEqual(stdout_buffer.getvalue(), "")
+
+            meta_path = output_dir / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["jobId"], "strict-failure-job")
+            self.assertEqual(meta["warningMessages"], [])
+            self.assertIn("distance_match_strict_limit_exceeded", meta["errorSummary"])
+            self.assertIn("distance_match_strict_limit_exceeded", stderr_buffer.getvalue())
 
 
 if __name__ == "__main__":

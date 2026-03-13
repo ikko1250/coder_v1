@@ -47,7 +47,9 @@ class AnalysisCoreContractTests(unittest.TestCase):
             analysis_backend.build_reconstructed_paragraphs_export_df,
             export_formatter.build_reconstructed_paragraphs_export_df,
         )
+        self.assertIs(analysis_backend.build_condition_hit_result, analysis_core.build_condition_hit_result)
         self.assertIn("build_condition_hit_tokens_df", dir(analysis_backend))
+        self.assertIn("build_condition_hit_result", dir(analysis_backend))
         self.assertIn("select_target_ids_by_cooccurrence_conditions", dir(analysis_backend))
 
     def test_analysis_core_keeps_legacy_facade_function_symbols(self) -> None:
@@ -348,6 +350,54 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(hit_result.warning_messages[0].code, "distance_match_fallback")
         self.assertEqual(hit_result.warning_messages[0].combination_count, 10100)
         self.assertEqual(hit_result.warning_messages[0].combination_cap, 10000)
+
+    def test_build_condition_hit_result_strict_and_approx_can_produce_different_group_counts(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 1],
+                "sentence_id": [10, 10, 10, 10],
+                "sentence_no_in_paragraph": [1, 1, 1, 1],
+                "token_no": [0, 1, 2, 3],
+                "sentence_token_position": [0, 1, 2, 3],
+                "paragraph_token_position": [0, 1, 2, 3],
+                "normalized_form": ["A", "B", "A", "B"],
+                "surface": ["A1", "B1", "A2", "B2"],
+            }
+        )
+        cooccurrence_conditions = [
+            {
+                "condition_id": "pair",
+                "categories": ["pair"],
+                "forms": ["A", "B"],
+                "form_match_logic": "all",
+                "effective_max_token_distance": 3,
+                "search_scope": "sentence",
+            }
+        ]
+
+        strict_result = distance_matcher.build_condition_hit_result(
+            tokens_with_position_df=tokens_with_position_df,
+            cooccurrence_conditions=cooccurrence_conditions,
+            distance_matching_mode="strict",
+            distance_match_combination_cap=10000,
+            distance_match_strict_safety_limit=1000000,
+        )
+        approx_result = distance_matcher.build_condition_hit_result(
+            tokens_with_position_df=tokens_with_position_df,
+            cooccurrence_conditions=cooccurrence_conditions,
+            distance_matching_mode="approx",
+            distance_match_combination_cap=10000,
+            distance_match_strict_safety_limit=1000000,
+        )
+
+        strict_group_count = strict_result.condition_hit_tokens_df.get_column("match_group_id").n_unique()
+        approx_group_count = approx_result.condition_hit_tokens_df.get_column("match_group_id").n_unique()
+
+        self.assertEqual(strict_result.used_mode, "strict")
+        self.assertEqual(approx_result.used_mode, "approx")
+        self.assertGreater(strict_group_count, approx_group_count)
+        self.assertEqual(strict_group_count, 4)
+        self.assertEqual(approx_group_count, 2)
 
     def test_build_condition_hit_tokens_df_strict_mode_raises_on_safety_limit(self) -> None:
         rows: list[dict[str, object]] = []
