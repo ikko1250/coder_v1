@@ -2,21 +2,8 @@ from __future__ import annotations
 
 import polars as pl
 
-
-POSITIONED_TOKEN_SCHEMA = {
-    "paragraph_id": pl.Int64,
-    "sentence_id": pl.Int64,
-    "sentence_no_in_paragraph": pl.Int64,
-    "token_no": pl.Int64,
-    "sentence_token_position": pl.Int64,
-    "paragraph_token_position": pl.Int64,
-    "normalized_form": pl.String,
-    "surface": pl.String,
-}
-
-
-def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
+from .frame_schema import POSITIONED_TOKEN_SCHEMA
+from .frame_schema import empty_df
 
 
 def build_tokens_with_position_df(
@@ -26,7 +13,7 @@ def build_tokens_with_position_df(
     target_forms: list[str] | None = None,
 ) -> pl.DataFrame:
     if paragraph_ids is not None and not paragraph_ids:
-        return _empty_df(POSITIONED_TOKEN_SCHEMA)
+        return empty_df(POSITIONED_TOKEN_SCHEMA)
 
     sentence_order_df = sentences_df.select(["sentence_id", "paragraph_id", "sentence_no_in_paragraph"])
     base_tokens_df = tokens_df

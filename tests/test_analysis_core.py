@@ -16,6 +16,7 @@ import analysis_backend.data_access as data_access
 import analysis_backend.distance_matcher as distance_matcher
 import analysis_backend.export_formatter as export_formatter
 import analysis_backend.filter_config as filter_config
+import analysis_backend.frame_schema as frame_schema
 import analysis_backend.rendering as rendering
 import analysis_backend.token_position as token_position
 
@@ -51,6 +52,14 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertIn("build_condition_hit_tokens_df", dir(analysis_backend))
         self.assertIn("build_condition_hit_result", dir(analysis_backend))
         self.assertIn("select_target_ids_by_cooccurrence_conditions", dir(analysis_backend))
+
+    def test_shared_frame_schemas_are_reused_across_modules(self) -> None:
+        self.assertIs(token_position.POSITIONED_TOKEN_SCHEMA, frame_schema.POSITIONED_TOKEN_SCHEMA)
+        self.assertIs(rendering.POSITIONED_TOKEN_SCHEMA, frame_schema.POSITIONED_TOKEN_SCHEMA)
+        self.assertIs(analysis_core.POSITIONED_TOKEN_SCHEMA, frame_schema.POSITIONED_TOKEN_SCHEMA)
+        self.assertIs(analysis_core.CONDITION_HIT_SCHEMA, frame_schema.CONDITION_HIT_SCHEMA)
+        self.assertIs(data_access.PARAGRAPH_METADATA_SCHEMA, frame_schema.PARAGRAPH_METADATA_SCHEMA)
+        self.assertTrue(frame_schema.empty_df(frame_schema.POSITIONED_TOKEN_SCHEMA).is_empty())
 
     def test_analysis_core_keeps_legacy_facade_function_symbols(self) -> None:
         self.assertEqual(analysis_core.load_filter_config.__module__, "analysis_backend.analysis_core")

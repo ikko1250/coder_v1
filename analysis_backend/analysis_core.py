@@ -17,6 +17,9 @@ from .distance_matcher import build_condition_hit_result as _build_condition_hit
 from .export_formatter import build_reconstructed_paragraphs_export_df as _build_reconstructed_paragraphs_export_df_impl
 from .export_formatter import enrich_reconstructed_paragraphs_df as _enrich_reconstructed_paragraphs_df_impl
 from .filter_config import load_filter_config as _load_filter_config_impl
+from .frame_schema import CONDITION_HIT_SCHEMA
+from .frame_schema import POSITIONED_TOKEN_SCHEMA
+from .frame_schema import empty_df
 from .rendering import build_rendered_paragraphs_df as _build_rendered_paragraphs_df_impl
 from .rendering import build_token_annotations_df as _build_token_annotations_df_impl
 from .rendering import render_tagged_token as _render_tagged_token_impl
@@ -47,29 +50,8 @@ NORMALIZED_FORM_COL = "normalized_form"
 SURFACE_COL = "surface"
 SENTENCE_TOKEN_POSITION_COL = "sentence_token_position"
 PARAGRAPH_TOKEN_POSITION_COL = "paragraph_token_position"
-POSITIONED_TOKEN_SCHEMA = {
-    PARAGRAPH_ID_COL: pl.Int64,
-    SENTENCE_ID_COL: pl.Int64,
-    SENTENCE_NO_COL: pl.Int64,
-    TOKEN_NO_COL: pl.Int64,
-    SENTENCE_TOKEN_POSITION_COL: pl.Int64,
-    PARAGRAPH_TOKEN_POSITION_COL: pl.Int64,
-    NORMALIZED_FORM_COL: pl.String,
-    SURFACE_COL: pl.String,
-}
-CONDITION_HIT_SCHEMA = {
-    **POSITIONED_TOKEN_SCHEMA,
-    "condition_id": pl.String,
-    "category_text": pl.String,
-    "categories": pl.List(pl.String),
-    "match_group_id": pl.String,
-    "match_role": pl.String,
-}
-
-def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
 def _empty_condition_hit_tokens_df() -> pl.DataFrame:
-    return _empty_df(CONDITION_HIT_SCHEMA)
+    return empty_df(CONDITION_HIT_SCHEMA)
 
 
 def load_filter_config(filter_config_path: Path) -> FilterConfig:

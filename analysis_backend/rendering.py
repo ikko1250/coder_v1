@@ -4,22 +4,14 @@ from html import escape
 
 import polars as pl
 
+from .frame_schema import POSITIONED_TOKEN_SCHEMA
+from .frame_schema import empty_df
 
 PARAGRAPH_ID_COL = "paragraph_id"
 SENTENCE_ID_COL = "sentence_id"
 SENTENCE_NO_COL = "sentence_no_in_paragraph"
 TOKEN_NO_COL = "token_no"
 SURFACE_COL = "surface"
-POSITIONED_TOKEN_SCHEMA = {
-    PARAGRAPH_ID_COL: pl.Int64,
-    SENTENCE_ID_COL: pl.Int64,
-    SENTENCE_NO_COL: pl.Int64,
-    TOKEN_NO_COL: pl.Int64,
-    "sentence_token_position": pl.Int64,
-    "paragraph_token_position": pl.Int64,
-    "normalized_form": pl.String,
-    SURFACE_COL: pl.String,
-}
 TOKEN_ANNOTATION_SCHEMA = {
     **POSITIONED_TOKEN_SCHEMA,
     "condition_ids": pl.List(pl.String),
@@ -45,16 +37,12 @@ RENDERED_PARAGRAPH_SCHEMA = {
 }
 
 
-def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
-
-
 def _empty_token_annotations_df() -> pl.DataFrame:
-    return _empty_df(TOKEN_ANNOTATION_SCHEMA)
+    return empty_df(TOKEN_ANNOTATION_SCHEMA)
 
 
 def _empty_rendered_paragraphs_df() -> pl.DataFrame:
-    return _empty_df(RENDERED_PARAGRAPH_SCHEMA)
+    return empty_df(RENDERED_PARAGRAPH_SCHEMA)
 
 
 def _unique_in_order(values: list[str]) -> list[str]:

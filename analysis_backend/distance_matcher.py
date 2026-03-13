@@ -8,29 +8,16 @@ import polars as pl
 from .condition_model import ConditionHitResult
 from .condition_model import DistanceMatchingMode
 from .condition_model import MatchingWarning
-from .token_position import POSITIONED_TOKEN_SCHEMA
-
-
-CONDITION_HIT_SCHEMA = {
-    **POSITIONED_TOKEN_SCHEMA,
-    "condition_id": pl.String,
-    "category_text": pl.String,
-    "categories": pl.List(pl.String),
-    "match_group_id": pl.String,
-    "match_role": pl.String,
-}
+from .frame_schema import CONDITION_HIT_SCHEMA
+from .frame_schema import empty_df
 
 
 class DistanceMatchLimitExceededError(RuntimeError):
     pass
 
 
-def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
-
-
 def _empty_condition_hit_tokens_df() -> pl.DataFrame:
-    return _empty_df(CONDITION_HIT_SCHEMA)
+    return empty_df(CONDITION_HIT_SCHEMA)
 
 
 def _unique_in_order(values: list[str]) -> list[str]:
@@ -95,7 +82,7 @@ def evaluate_distance_matches_by_unit(
     max_token_distance: int,
 ) -> pl.DataFrame:
     if tokens_with_position_df.is_empty():
-        return _empty_df({"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
+        return empty_df({"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
 
     rows: list[dict[str, object]] = []
     form_tokens_df = (
@@ -104,7 +91,7 @@ def evaluate_distance_matches_by_unit(
         .select([unit_column, "normalized_form", position_column])
     )
     if form_tokens_df.is_empty():
-        return _empty_df({"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
+        return empty_df({"unit_id": pl.Int64, "distance_is_match": pl.Boolean})
 
     for unit_df in form_tokens_df.partition_by(unit_column):
         unit_id = int(unit_df.get_column(unit_column)[0])

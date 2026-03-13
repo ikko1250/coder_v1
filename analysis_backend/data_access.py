@@ -5,18 +5,11 @@ import sqlite3
 
 import polars as pl
 
+from .frame_schema import PARAGRAPH_METADATA_SCHEMA
+from .frame_schema import empty_df
+
 
 PARAGRAPH_METADATA_CHUNK_SIZE = 900
-PARAGRAPH_METADATA_SCHEMA = {
-    "paragraph_id": pl.Int64,
-    "document_id": pl.Int64,
-    "municipality_name": pl.String,
-    "doc_type": pl.String,
-}
-
-
-def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
 
 
 def _read_database_df(db_path: Path, query: str) -> pl.DataFrame:
@@ -46,7 +39,7 @@ def read_analysis_sentences(db_path: Path, limit_rows: int | None = None) -> pl.
 
 def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) -> pl.DataFrame:
     if not paragraph_ids:
-        return _empty_df(PARAGRAPH_METADATA_SCHEMA)
+        return empty_df(PARAGRAPH_METADATA_SCHEMA)
 
     rows: list[tuple[int, int, str | None, str | None]] = []
     try:
@@ -70,7 +63,7 @@ def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) ->
         raise RuntimeError(f"SQLite metadata read failed: {db_path} ({exc})") from exc
 
     if not rows:
-        return _empty_df(PARAGRAPH_METADATA_SCHEMA)
+        return empty_df(PARAGRAPH_METADATA_SCHEMA)
 
     return (
         pl.DataFrame(rows, schema=list(PARAGRAPH_METADATA_SCHEMA.keys()), orient="row")

@@ -5,6 +5,7 @@ import polars as pl
 from .condition_model import NormalizedCondition
 from .condition_model import TargetSelectionResult
 from .distance_matcher import evaluate_distance_matches_by_unit
+from .frame_schema import empty_df
 from .token_position import build_candidate_tokens_with_position_df
 
 
@@ -33,17 +34,12 @@ PARAGRAPH_SUMMARY_SCHEMA = {
     "matched_condition_ids": pl.List(pl.String),
 }
 
-
-def _empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
-
-
 def _empty_condition_eval_df() -> pl.DataFrame:
-    return _empty_df(CONDITION_EVAL_SCHEMA)
+    return empty_df(CONDITION_EVAL_SCHEMA)
 
 
 def _empty_paragraph_summary_df() -> pl.DataFrame:
-    return _empty_df(PARAGRAPH_SUMMARY_SCHEMA)
+    return empty_df(PARAGRAPH_SUMMARY_SCHEMA)
 
 
 def _normalize_condition_categories(raw_categories: object) -> list[str]:
