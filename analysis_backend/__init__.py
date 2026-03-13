@@ -38,7 +38,13 @@ def __getattr__(name: str):
             "read_analysis_sentences",
             "read_analysis_tokens",
             "read_paragraph_document_metadata",
-        } else ".token_position" if name == "build_tokens_with_position_df" else ".analysis_core"
+        } else ".token_position" if name == "build_tokens_with_position_df" else ".rendering" if name in {
+            "build_rendered_paragraphs_df",
+            "build_token_annotations_df",
+        } else ".export_formatter" if name in {
+            "build_reconstructed_paragraphs_export_df",
+            "enrich_reconstructed_paragraphs_df",
+        } else ".analysis_core"
         module = import_module(module_name, __name__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

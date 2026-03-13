@@ -14,7 +14,9 @@ import analysis_backend.condition_evaluator as condition_evaluator
 import analysis_backend.condition_model as condition_model
 import analysis_backend.data_access as data_access
 import analysis_backend.distance_matcher as distance_matcher
+import analysis_backend.export_formatter as export_formatter
 import analysis_backend.filter_config as filter_config
+import analysis_backend.rendering as rendering
 import analysis_backend.token_position as token_position
 
 
@@ -35,6 +37,16 @@ class AnalysisCoreContractTests(unittest.TestCase):
             data_access.read_paragraph_document_metadata,
         )
         self.assertIs(analysis_backend.build_tokens_with_position_df, token_position.build_tokens_with_position_df)
+        self.assertIs(analysis_backend.build_token_annotations_df, rendering.build_token_annotations_df)
+        self.assertIs(analysis_backend.build_rendered_paragraphs_df, rendering.build_rendered_paragraphs_df)
+        self.assertIs(
+            analysis_backend.enrich_reconstructed_paragraphs_df,
+            export_formatter.enrich_reconstructed_paragraphs_df,
+        )
+        self.assertIs(
+            analysis_backend.build_reconstructed_paragraphs_export_df,
+            export_formatter.build_reconstructed_paragraphs_export_df,
+        )
         self.assertIn("build_condition_hit_tokens_df", dir(analysis_backend))
         self.assertIn("select_target_ids_by_cooccurrence_conditions", dir(analysis_backend))
 
@@ -44,6 +56,14 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(analysis_core.read_analysis_sentences.__module__, "analysis_backend.analysis_core")
         self.assertEqual(analysis_core.read_paragraph_document_metadata.__module__, "analysis_backend.analysis_core")
         self.assertEqual(analysis_core.build_tokens_with_position_df.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.render_tagged_token.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.build_token_annotations_df.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.build_rendered_paragraphs_df.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(analysis_core.enrich_reconstructed_paragraphs_df.__module__, "analysis_backend.analysis_core")
+        self.assertEqual(
+            analysis_core.build_reconstructed_paragraphs_export_df.__module__,
+            "analysis_backend.analysis_core",
+        )
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
         self.assertTrue(is_dataclass(condition_model.NormalizedCondition))
