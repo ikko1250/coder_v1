@@ -13,6 +13,11 @@
 
 ## 優先順位
 
+- 進捗メモ:
+  - P0 の `analysis_runner` meta 契約整合は対応済み
+  - schema / `_empty_df()` の共通化は一部対応済み
+  - tagged text escape 契約と `matched_form_count` の意味は明文化済み
+
 ### P0. Rust `analysis_runner` との meta 契約整合
 
 - 現状:
@@ -27,8 +32,9 @@
   - parse 失敗時は `meta.json の解析に失敗しました` と明示する
 - 完了条件:
   - warning あり成功系でも Rust UI が正常に job 完了扱いできる
+  - parse failure が「生成失敗」ではなく「解析失敗」として見える
 
-### P1. schema と列定義の集約
+### P1-A. schema と列定義の集約
 
 - 現状:
   - render/export 周辺で schema, cast, select 対象列が分散している
@@ -40,8 +46,9 @@
   - empty DataFrame schema と export 列順を同じ定義源に寄せる
 - 完了条件:
   - 列順・型の変更点が 1 か所で追える
+  - CSV 契約テストと Rust loader 契約が同時に維持される
 
-### P1. 条件正規化の hard fail / warning / auto-fix 再整理
+### P1-B. 条件正規化の hard fail / warning / auto-fix 再整理
 
 - 現状:
   - 条件正規化は無効条件の破棄、未知値の丸め込み、重複 ID の補正を行う
@@ -54,6 +61,7 @@
   - 自動補正の対象を最小化する
 - 完了条件:
   - config 誤りが利用者から見える
+  - 自動補正 / warning / error の基準が文書化されている
 
 ### P2. Polars と逐次処理の境界整理
 
@@ -68,7 +76,7 @@
 - 完了条件:
   - matcher / renderer / export の処理境界が説明しやすい
 
-### P2. façade の縮退計画
+### P2-B. façade の縮退計画
 
 - 現状:
   - `analysis_core.py` は compatibility façade として旧 API を維持している
@@ -79,7 +87,8 @@
   - 旧 API の利用箇所を列挙し、移行順を決める
   - 移行完了後に façade の責務を絞る
 - 完了条件:
-  - façade の存在理由が限定される
+  - `.analysis_core` 経由の呼び出し箇所数が把握されている
+  - `.analysis_core` フォールバック export が最小集合まで縮退している
 
 ## 推奨実行順
 
@@ -88,6 +97,11 @@
 3. 条件正規化の fail/warning 方針を再定義する
 4. Polars と逐次処理の境界を整理する
 5. façade の縮退計画を実行する
+
+## 補足依存
+
+- `schema / 列定義` の変更は Rust 側 CSV loader 契約と独立ではない
+- そのため P1-A の修正時は CSV 契約テストと Rust 側 required columns を同時確認する
 
 ## 再開時の入口
 
