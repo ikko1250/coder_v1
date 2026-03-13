@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import sys
 
+import polars as pl
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -136,6 +138,25 @@ def _serialize_warning_messages(warning_messages: list[object]) -> list[dict[str
     return serialized_messages
 
 
+def _filter_sentences_for_tokens(
+    analysis_tokens_df: pl.DataFrame,
+    analysis_sentences_df: pl.DataFrame,
+) -> pl.DataFrame:
+    if analysis_tokens_df.is_empty() or analysis_sentences_df.is_empty():
+        return analysis_sentences_df.clear()
+
+    token_sentence_keys_df = (
+        analysis_tokens_df
+        .select(["sentence_id", "paragraph_id"])
+        .unique()
+    )
+    return analysis_sentences_df.join(
+        token_sentence_keys_df,
+        on=["sentence_id", "paragraph_id"],
+        how="inner",
+    )
+
+
 def run_analysis_job(args: Namespace) -> int:
     started_at = _utc_now_iso()
     start_timestamp = datetime.now(timezone.utc)
@@ -165,6 +186,11 @@ def run_analysis_job(args: Namespace) -> int:
         filter_config = load_filter_config(filter_config_path)
         analysis_tokens_df = read_analysis_tokens(db_path=db_path, limit_rows=args.limit_rows)
         analysis_sentences_df = read_analysis_sentences(db_path=db_path, limit_rows=None)
+        if args.limit_rows is not None:
+            analysis_sentences_df = _filter_sentences_for_tokens(
+                analysis_tokens_df=analysis_tokens_df,
+                analysis_sentences_df=analysis_sentences_df,
+            )
 
         (
             _candidate_tokens_df,

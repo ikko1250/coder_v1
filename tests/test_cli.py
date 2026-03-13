@@ -10,6 +10,9 @@ import sqlite3
 import tempfile
 import unittest
 
+import polars as pl
+
+from analysis_backend.cli import _filter_sentences_for_tokens
 from analysis_backend.cli import run_analysis_job
 
 
@@ -232,6 +235,36 @@ def build_strict_limit_filter_config(filter_config_path: Path) -> None:
 
 
 class CliContractTests(unittest.TestCase):
+    def test_filter_sentences_for_tokens_keeps_only_sentence_keys_present_in_limited_tokens(self) -> None:
+        analysis_tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 2],
+                "sentence_id": [11, 11, 21],
+                "token_no": [0, 1, 0],
+            }
+        )
+        analysis_sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12, 21, 31],
+                "paragraph_id": [1, 1, 2, 3],
+                "sentence_no_in_paragraph": [1, 2, 1, 1],
+            }
+        )
+
+        filtered_df = _filter_sentences_for_tokens(
+            analysis_tokens_df=analysis_tokens_df,
+            analysis_sentences_df=analysis_sentences_df,
+        )
+
+        self.assertEqual(
+            filtered_df.sort(["paragraph_id", "sentence_id"]).to_dict(as_series=False),
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            },
+        )
+
     def test_run_analysis_job_writes_failure_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir) / "job"
