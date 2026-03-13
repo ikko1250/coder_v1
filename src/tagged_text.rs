@@ -68,3 +68,42 @@ pub(crate) fn parse_tagged_text(tagged: &str) -> Vec<TextSegment> {
 
     segments
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tagged_text;
+
+    #[test]
+    fn parse_tagged_text_restores_escaped_attributes() {
+        let tagged = concat!(
+            "前文",
+            "[[HIT condition_ids=\"cond\\\"1\" categories=\"cat\\\\1\" groups=\"group\\\\\\\"1\"]]",
+            "抑制区域",
+            "[[/HIT]]",
+            "後文"
+        );
+
+        let segments = parse_tagged_text(tagged);
+
+        assert_eq!(segments.len(), 3);
+        assert!(!segments[0].is_hit);
+        assert_eq!(segments[0].text, "前文");
+        assert!(segments[1].is_hit);
+        assert_eq!(segments[1].text, "抑制区域");
+        assert_eq!(segments[1].attributes.get("condition_ids"), Some(&"cond\"1".to_string()));
+        assert_eq!(segments[1].attributes.get("categories"), Some(&"cat\\1".to_string()));
+        assert_eq!(segments[1].attributes.get("groups"), Some(&"group\\\"1".to_string()));
+        assert!(!segments[2].is_hit);
+        assert_eq!(segments[2].text, "後文");
+    }
+
+    #[test]
+    fn parse_tagged_text_keeps_plain_text_when_no_hit_marker_exists() {
+        let segments = parse_tagged_text("通常テキスト");
+
+        assert_eq!(segments.len(), 1);
+        assert!(!segments[0].is_hit);
+        assert_eq!(segments[0].text, "通常テキスト");
+        assert!(segments[0].attributes.is_empty());
+    }
+}

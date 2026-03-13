@@ -56,6 +56,8 @@ def _unique_in_order(values: list[str]) -> list[str]:
 
 
 def _escape_tag_attribute(value: str) -> str:
+    # This is for the custom [[HIT ...]] tag format, not HTML.
+    # Keep it aligned with src/tagged_text.rs::unescape_attribute.
     return value.replace("\\", "\\\\").replace("\"", "\\\"")
 
 
