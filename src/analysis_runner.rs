@@ -64,9 +64,19 @@ pub(crate) struct AnalysisWarningMessage {
     #[serde(default)]
     pub(crate) message: String,
     #[serde(default)]
+    pub(crate) severity: Option<String>,
+    #[serde(default)]
+    pub(crate) scope: Option<String>,
+    #[serde(default)]
     pub(crate) condition_id: Option<String>,
     #[serde(default)]
+    pub(crate) field_name: Option<String>,
+    #[serde(default)]
     pub(crate) unit_id: Option<i64>,
+    #[serde(default)]
+    pub(crate) query_name: Option<String>,
+    #[serde(default)]
+    pub(crate) db_path: Option<String>,
     #[serde(default)]
     pub(crate) requested_mode: Option<String>,
     #[serde(default)]
@@ -100,8 +110,13 @@ where
             RawAnalysisWarningMessage::LegacyString(message) => AnalysisWarningMessage {
                 code: String::new(),
                 message,
+                severity: None,
+                scope: None,
                 condition_id: None,
+                field_name: None,
                 unit_id: None,
+                query_name: None,
+                db_path: None,
                 requested_mode: None,
                 used_mode: None,
                 combination_count: None,
@@ -342,8 +357,13 @@ mod tests {
     {
       "code": "distance_match_fallback",
       "message": "fallback applied",
+      "severity": "warning",
+      "scope": "condition",
       "conditionId": "pair",
+      "fieldName": "max_token_distance",
       "unitId": 10,
+      "queryName": "analysis_tokens",
+      "dbPath": "/tmp/db.sqlite3",
       "requestedMode": "auto-approx",
       "usedMode": "approx",
       "combinationCount": 10100,
@@ -363,13 +383,18 @@ mod tests {
             AnalysisWarningMessage {
                 code: "distance_match_fallback".to_string(),
                 message: "fallback applied".to_string(),
+                severity: Some("warning".to_string()),
+                scope: Some("condition".to_string()),
                 condition_id: Some("pair".to_string()),
+                field_name: Some("max_token_distance".to_string()),
                 unit_id: Some(10),
+                query_name: Some("analysis_tokens".to_string()),
                 requested_mode: Some("auto-approx".to_string()),
                 used_mode: Some("approx".to_string()),
                 combination_count: Some(10100),
                 combination_cap: Some(10000),
                 safety_limit: Some(1000000),
+                db_path: Some("/tmp/db.sqlite3".to_string()),
             }
         );
 
@@ -400,7 +425,51 @@ mod tests {
         assert_eq!(meta.warning_messages.len(), 1);
         assert_eq!(meta.warning_messages[0].message, "legacy warning");
         assert!(meta.warning_messages[0].code.is_empty());
+        assert_eq!(meta.warning_messages[0].severity, None);
+        assert_eq!(meta.warning_messages[0].scope, None);
+        assert_eq!(meta.warning_messages[0].field_name, None);
+        assert_eq!(meta.warning_messages[0].query_name, None);
         assert_eq!(meta.warning_messages[0].used_mode, None);
+        assert_eq!(meta.warning_messages[0].db_path, None);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_meta_json_sets_new_warning_fields_to_none_for_older_structured_payloads() {
+        let path = temp_meta_path("older-structured-warning");
+        let payload = r#"{
+  "jobId": "job-3",
+  "status": "succeeded",
+  "startedAt": "2026-03-13T00:00:00Z",
+  "finishedAt": "2026-03-13T00:00:01Z",
+  "durationSeconds": 1.0,
+  "dbPath": "/tmp/db.sqlite3",
+  "filterConfigPath": "/tmp/filter.json",
+  "outputCsvPath": "/tmp/result.csv",
+  "targetParagraphCount": 2,
+  "selectedParagraphCount": 1,
+  "warningMessages": [
+    {
+      "code": "distance_match_fallback",
+      "message": "fallback applied",
+      "conditionId": "pair",
+      "requestedMode": "auto-approx",
+      "usedMode": "approx"
+    }
+  ],
+  "errorSummary": ""
+}"#;
+        fs::write(&path, payload).unwrap();
+
+        let meta = read_meta_json(&path).unwrap();
+
+        assert_eq!(meta.warning_messages.len(), 1);
+        assert_eq!(meta.warning_messages[0].severity, None);
+        assert_eq!(meta.warning_messages[0].scope, None);
+        assert_eq!(meta.warning_messages[0].field_name, None);
+        assert_eq!(meta.warning_messages[0].query_name, None);
+        assert_eq!(meta.warning_messages[0].db_path, None);
 
         let _ = fs::remove_file(path);
     }

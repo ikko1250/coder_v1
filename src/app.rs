@@ -2,6 +2,7 @@ use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, spawn_analysis_job, AnalysisJobEvent,
     AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
     AnalysisRuntimeOverrides,
+    AnalysisWarningMessage,
 };
 use crate::csv_loader::load_records;
 use crate::db::{
@@ -12,7 +13,7 @@ use crate::model::{CsvRecord, DbViewerState, FilterColumn, FilterOption, TextSeg
 use crate::tagged_text::parse_tagged_text;
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, RichText, ScrollArea, TextStyle, Ui};
+use egui::{Color32, RichText, ScrollArea, TextStyle, TextWrapMode, Ui};
 use egui_extras::{Column, TableBuilder};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -97,6 +98,8 @@ struct AnalysisRuntimeState {
     runtime: Option<AnalysisRuntimeConfig>,
     current_job: Option<RunningAnalysisJob>,
     status: AnalysisJobStatus,
+    last_warnings: Vec<AnalysisWarningMessage>,
+    warning_window_open: bool,
 }
 
 impl AnalysisRuntimeState {
@@ -106,11 +109,15 @@ impl AnalysisRuntimeState {
                 runtime: Some(runtime),
                 current_job: None,
                 status: AnalysisJobStatus::Idle,
+                last_warnings: Vec::new(),
+                warning_window_open: false,
             },
             Err(error) => Self {
                 runtime: None,
                 current_job: None,
                 status: AnalysisJobStatus::Failed { summary: error },
+                last_warnings: Vec::new(),
+                warning_window_open: false,
             },
         }
     }
@@ -126,6 +133,10 @@ impl AnalysisRuntimeState {
             AnalysisJobStatus::Succeeded { summary } => format!("分析成功: {summary}"),
             AnalysisJobStatus::Failed { summary } => format!("分析失敗: {summary}"),
         }
+    }
+
+    fn has_warning_details(&self) -> bool {
+        !self.last_warnings.is_empty()
     }
 }
 
@@ -486,6 +497,8 @@ impl App {
             runtime,
         });
 
+        self.analysis_runtime_state.last_warnings.clear();
+        self.analysis_runtime_state.warning_window_open = false;
         self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
         self.analysis_runtime_state.status = AnalysisJobStatus::Running { job_id };
         Ok(())
@@ -519,23 +532,31 @@ impl App {
     }
 
     fn handle_analysis_success(&mut self, success: AnalysisJobSuccess) {
+        let warnings = success.meta.warning_messages.clone();
+        let warning_count = warnings.len();
         self.load_csv(success.output_csv_path);
         let mut summary = format!(
             "{} 件抽出 / {:.2} 秒",
             success.meta.selected_paragraph_count, success.meta.duration_seconds
         );
-        if !success.meta.warning_messages.is_empty() {
-            summary.push_str(&format!(
-                " / 警告 {} 件",
-                success.meta.warning_messages.len()
-            ));
+        if warning_count > 0 {
+            summary.push_str(&format!(" / 警告 {} 件", warning_count));
         }
+        self.analysis_runtime_state.last_warnings = warnings;
+        self.analysis_runtime_state.warning_window_open = false;
         self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
     }
 
     fn handle_analysis_failure(&mut self, failure: AnalysisJobFailure) {
+        let warnings = failure
+            .meta
+            .as_ref()
+            .map(|meta| meta.warning_messages.clone())
+            .unwrap_or_default();
         let summary = failure.message.clone();
         self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary };
+        self.analysis_runtime_state.last_warnings = warnings;
+        self.analysis_runtime_state.warning_window_open = false;
 
         let mut error_message = failure.message;
         if !failure.stderr.is_empty() {
@@ -549,6 +570,133 @@ impl App {
             }
         }
         self.error_message = Some(error_message);
+    }
+
+    fn warning_headline(&self, warning: &AnalysisWarningMessage) -> String {
+        match warning.code.as_str() {
+            "distance_match_fallback" => {
+                let requested_mode = warning.requested_mode.as_deref().unwrap_or("unknown");
+                let used_mode = warning.used_mode.as_deref().unwrap_or("unknown");
+                match (warning.combination_count, warning.combination_cap) {
+                    (Some(count), Some(cap)) if count > cap => format!(
+                        "distance matching: {requested_mode} -> {used_mode} ({count} / cap {cap}, +{})",
+                        count - cap
+                    ),
+                    (Some(count), Some(cap)) => {
+                        format!("distance matching: {requested_mode} -> {used_mode} ({count} / cap {cap})")
+                    }
+                    _ => format!("distance matching: {requested_mode} -> {used_mode}"),
+                }
+            }
+            code if code.ends_with("_defaulted") => warning
+                .field_name
+                .as_ref()
+                .map(|field_name| format!("設定を既定値へ補正: {field_name}"))
+                .filter(|headline| !headline.trim().is_empty())
+                .or_else(|| (!warning.message.trim().is_empty()).then(|| warning.message.clone()))
+                .unwrap_or_else(|| format!("警告コード: {}", warning.code)),
+            code if code.starts_with("sqlite_") => warning
+                .query_name
+                .as_ref()
+                .map(|query_name| format!("DB 読込失敗: {query_name}"))
+                .filter(|headline| !headline.trim().is_empty())
+                .or_else(|| (!warning.message.trim().is_empty()).then(|| warning.message.clone()))
+                .unwrap_or_else(|| format!("警告コード: {}", warning.code)),
+            _ if !warning.message.trim().is_empty() => warning.message.clone(),
+            _ if !warning.code.trim().is_empty() => format!("警告コード: {}", warning.code),
+            _ => "詳細不明の警告".to_string(),
+        }
+    }
+
+    fn warning_detail_lines(&self, warning: &AnalysisWarningMessage) -> Vec<String> {
+        let mut lines = Vec::new();
+        if !warning.message.trim().is_empty() && self.warning_headline(warning) != warning.message {
+            lines.push(format!("message: {}", warning.message));
+        }
+        if !warning.code.trim().is_empty() {
+            lines.push(format!("code: {}", warning.code));
+        }
+        if let Some(severity) = &warning.severity {
+            lines.push(format!("severity: {severity}"));
+        }
+        if let Some(scope) = &warning.scope {
+            lines.push(format!("scope: {scope}"));
+        }
+        if let Some(condition_id) = &warning.condition_id {
+            lines.push(format!("conditionId: {condition_id}"));
+        }
+        if let Some(field_name) = &warning.field_name {
+            lines.push(format!("fieldName: {field_name}"));
+        }
+        if let Some(unit_id) = warning.unit_id {
+            lines.push(format!("unitId: {unit_id}"));
+        }
+        if let Some(query_name) = &warning.query_name {
+            lines.push(format!("queryName: {query_name}"));
+        }
+        match (&warning.requested_mode, &warning.used_mode) {
+            (Some(requested_mode), Some(used_mode)) => {
+                lines.push(format!("mode: {requested_mode} -> {used_mode}"));
+            }
+            (Some(requested_mode), None) => lines.push(format!("requestedMode: {requested_mode}")),
+            (None, Some(used_mode)) => lines.push(format!("usedMode: {used_mode}")),
+            (None, None) => {}
+        }
+        match (warning.combination_count, warning.combination_cap) {
+            (Some(count), Some(cap)) if count > cap => {
+                lines.push(format!("combinationCount: {count} / cap {cap} (+{})", count - cap));
+            }
+            (Some(count), Some(cap)) => lines.push(format!("combinationCount: {count} / cap {cap}")),
+            (Some(count), None) => lines.push(format!("combinationCount: {count}")),
+            (None, Some(cap)) => lines.push(format!("combinationCap: {cap}")),
+            (None, None) => {}
+        }
+        if let Some(safety_limit) = warning.safety_limit {
+            lines.push(format!("safetyLimit: {safety_limit}"));
+        }
+        if let Some(db_path) = &warning.db_path {
+            lines.push(format!("dbPath: {db_path}"));
+        }
+        lines
+    }
+
+    fn draw_warning_details_window(&mut self, ctx: &egui::Context) {
+        if !self.analysis_runtime_state.warning_window_open {
+            return;
+        }
+
+        let mut window_open = self.analysis_runtime_state.warning_window_open;
+        egui::Window::new(format!(
+            "警告詳細 ({})",
+            self.analysis_runtime_state.last_warnings.len()
+        ))
+        .open(&mut window_open)
+        .resizable(true)
+        .default_width(620.0)
+        .show(ctx, |ui| {
+            ScrollArea::vertical()
+                .max_height(480.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (idx, warning) in self.analysis_runtime_state.last_warnings.iter().enumerate() {
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}. {}", idx + 1, self.warning_headline(warning))).strong(),
+                            );
+                            for line in self.warning_detail_lines(warning) {
+                                ui.add(
+                                    egui::Label::new(line)
+                                        .wrap_mode(TextWrapMode::Wrap),
+                                );
+                            }
+                        });
+                        if idx + 1 < self.analysis_runtime_state.last_warnings.len() {
+                            ui.add_space(6.0);
+                        }
+                    }
+                });
+        });
+        self.analysis_runtime_state.warning_window_open = window_open;
     }
 }
 
@@ -568,6 +716,8 @@ impl eframe::App for App {
                     }
                 });
         }
+
+        self.draw_warning_details_window(ctx);
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             self.draw_toolbar(ui);
@@ -818,6 +968,11 @@ impl App {
                 ui.label(format!("DB: {db_label}"));
                 ui.label(format!("条件: {filter_config_label}"));
                 ui.label(format!("Python: {python_label}"));
+                if self.analysis_runtime_state.has_warning_details()
+                    && ui.button("警告詳細").clicked()
+                {
+                    self.analysis_runtime_state.warning_window_open = true;
+                }
 
                 let status_text = self.analysis_runtime_state.status_text();
                 let status_color = match &self.analysis_runtime_state.status {
