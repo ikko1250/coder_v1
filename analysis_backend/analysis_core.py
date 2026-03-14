@@ -272,7 +272,12 @@ def reconstruct_paragraphs_by_ids(
     sentence_order_df = (
         sentences_df
         .filter(pl.col("paragraph_id").is_in(paragraph_ids))
-        .select(["sentence_id", "paragraph_id", "sentence_no_in_paragraph"])
+        .with_columns(
+            pl.col("is_table_paragraph").fill_null(0).cast(pl.Int64)
+            if "is_table_paragraph" in sentences_df.columns
+            else pl.lit(0, dtype=pl.Int64).alias("is_table_paragraph")
+        )
+        .select(["sentence_id", "paragraph_id", "sentence_no_in_paragraph", "is_table_paragraph"])
     )
     joined_df = (
         tokens_df
@@ -288,17 +293,38 @@ def reconstruct_paragraphs_by_ids(
             }
         )
 
-    sentence_text_df = (
-        joined_df
-        .group_by(["paragraph_id", "sentence_id", "sentence_no_in_paragraph"])
-        .agg(pl.col("surface").sort_by("token_no").list.join("").alias("sentence_text"))
-    )
+    sentence_rows: list[dict[str, object]] = []
+    for sentence_df in joined_df.partition_by(["paragraph_id", "sentence_id"]):
+        sorted_sentence_df = sentence_df.sort("token_no")
+        sentence_rows.append(
+            {
+                "paragraph_id": int(sorted_sentence_df.get_column("paragraph_id")[0]),
+                "sentence_id": int(sorted_sentence_df.get_column("sentence_id")[0]),
+                "sentence_no_in_paragraph": int(sorted_sentence_df.get_column("sentence_no_in_paragraph")[0]),
+                "is_table_paragraph": int(sorted_sentence_df.get_column("is_table_paragraph")[0]),
+                "sentence_text": "".join(sorted_sentence_df.get_column("surface").to_list()),
+            }
+        )
+
+    sentence_text_df = pl.DataFrame(sentence_rows)
+
+    paragraph_rows: list[dict[str, object]] = []
+    for paragraph_df in sentence_text_df.partition_by("paragraph_id"):
+        sorted_sentence_df = paragraph_df.sort("sentence_no_in_paragraph")
+        separator = "\n" if int(sorted_sentence_df.get_column("is_table_paragraph")[0]) == 1 else ""
+        paragraph_rows.append(
+            {
+                "paragraph_id": int(sorted_sentence_df.get_column("paragraph_id")[0]),
+                "sentence_count": int(sorted_sentence_df.height),
+                "paragraph_text": separator.join(sorted_sentence_df.get_column("sentence_text").to_list()),
+            }
+        )
+
     return (
-        sentence_text_df
-        .group_by("paragraph_id")
-        .agg([
-            pl.len().alias("sentence_count"),
-            pl.col("sentence_text").sort_by("sentence_no_in_paragraph").list.join("").alias("paragraph_text"),
+        pl.DataFrame(paragraph_rows)
+        .with_columns([
+            pl.col("paragraph_id").cast(pl.Int64),
+            pl.col("sentence_count").cast(pl.UInt32),
         ])
         .sort("paragraph_id")
     )

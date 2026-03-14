@@ -30,6 +30,13 @@ def _build_data_access_issue(
     )
 
 
+def _read_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    return {
+        str(row[1])
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+
+
 def _read_database_df_result(db_path: Path, query: str, *, query_name: str) -> DataAccessResult:
     try:
         with sqlite3.connect(str(db_path)) as conn:
@@ -72,13 +79,47 @@ def read_analysis_tokens(db_path: Path, limit_rows: int | None = None) -> pl.Dat
 
 
 def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
-    query = """
-        SELECT sentence_id, paragraph_id, sentence_no_in_paragraph
-        FROM analysis_sentences
-    """
-    if limit_rows is not None:
-        query = f"{query} LIMIT {int(limit_rows)}"
-    return _read_database_df_result(db_path=db_path, query=query, query_name="analysis_sentences")
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
+            if "is_table_paragraph" in paragraph_columns:
+                query = """
+                    SELECT
+                        s.sentence_id,
+                        s.paragraph_id,
+                        s.sentence_no_in_paragraph,
+                        COALESCE(CAST(p.is_table_paragraph AS INTEGER), 0) AS is_table_paragraph
+                    FROM analysis_sentences AS s
+                    LEFT JOIN analysis_paragraphs AS p
+                      ON p.paragraph_id = s.paragraph_id
+                """
+            else:
+                query = """
+                    SELECT
+                        sentence_id,
+                        paragraph_id,
+                        sentence_no_in_paragraph,
+                        0 AS is_table_paragraph
+                    FROM analysis_sentences
+                """
+            if limit_rows is not None:
+                query = f"{query} LIMIT {int(limit_rows)}"
+            return DataAccessResult(
+                data_frame=pl.read_database(query=query, connection=conn),
+                issues=[],
+            )
+    except sqlite3.Error as exc:
+        return DataAccessResult(
+            data_frame=None,
+            issues=[
+                _build_data_access_issue(
+                    code="sqlite_read_failed",
+                    message=f"SQLite read failed: {db_path} ({exc})",
+                    query_name="analysis_sentences",
+                    db_path=db_path,
+                )
+            ],
+        )
 
 
 def read_analysis_sentences(db_path: Path, limit_rows: int | None = None) -> pl.DataFrame:
@@ -97,9 +138,14 @@ def read_paragraph_document_metadata_result(
             issues=[],
         )
 
-    rows: list[tuple[int, int, str | None, str | None]] = []
+    rows: list[tuple[int, int, str | None, str | None, int]] = []
     try:
         with sqlite3.connect(str(db_path)) as conn:
+            paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
+            if "is_table_paragraph" in paragraph_columns:
+                table_flag_select = "COALESCE(CAST(p.is_table_paragraph AS INTEGER), 0) AS is_table_paragraph"
+            else:
+                table_flag_select = "0 AS is_table_paragraph"
             for start_idx in range(0, len(paragraph_ids), PARAGRAPH_METADATA_CHUNK_SIZE):
                 chunk_ids = paragraph_ids[start_idx:start_idx + PARAGRAPH_METADATA_CHUNK_SIZE]
                 placeholders = ",".join("?" for _ in chunk_ids)
@@ -108,7 +154,8 @@ def read_paragraph_document_metadata_result(
                         p.paragraph_id,
                         p.document_id,
                         d.municipality_name,
-                        d.doc_type
+                        d.doc_type,
+                        {table_flag_select}
                     FROM analysis_paragraphs AS p
                     JOIN analysis_documents AS d
                       ON d.document_id = p.document_id

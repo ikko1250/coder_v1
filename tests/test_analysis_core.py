@@ -438,6 +438,128 @@ class AnalysisCoreContractTests(unittest.TestCase):
             },
         )
 
+    def test_build_tokens_with_position_df_preserves_table_flag(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 12],
+                "token_no": [0, 0],
+                "normalized_form": ["表", "行"],
+                "surface": ["表", "行"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+                "sentence_no_in_paragraph": [1, 2],
+                "is_table_paragraph": [1, 1],
+            }
+        )
+
+        positioned_df = analysis_core.build_tokens_with_position_df(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+        ).sort(["sentence_id", "token_no"])
+
+        self.assertEqual(positioned_df.get_column("is_table_paragraph").to_list(), [1, 1])
+
+    def test_reconstruct_paragraphs_by_ids_inserts_newlines_for_table_paragraph(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 12],
+                "token_no": [0, 0],
+                "surface": ["表", "行"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+                "sentence_no_in_paragraph": [1, 2],
+                "is_table_paragraph": [1, 1],
+            }
+        )
+
+        reconstructed_df = analysis_core.reconstruct_paragraphs_by_ids(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            paragraph_ids=[1],
+        )
+
+        self.assertEqual(reconstructed_df.get_column("paragraph_text").to_list(), ["表\n行"])
+
+    def test_reconstruct_paragraphs_by_ids_keeps_empty_join_for_non_table_paragraph(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 12],
+                "token_no": [0, 0],
+                "surface": ["表", "行"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+                "sentence_no_in_paragraph": [1, 2],
+            }
+        )
+
+        reconstructed_df = analysis_core.reconstruct_paragraphs_by_ids(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            paragraph_ids=[1],
+        )
+
+        self.assertEqual(reconstructed_df.get_column("paragraph_text").to_list(), ["表行"])
+
+    def test_build_rendered_paragraphs_df_inserts_newlines_for_table_paragraph(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 12],
+                "sentence_no_in_paragraph": [1, 2],
+                "is_table_paragraph": [1, 1],
+                "token_no": [0, 0],
+                "sentence_token_position": [0, 0],
+                "paragraph_token_position": [0, 1],
+                "normalized_form": ["表", "行"],
+                "surface": ["表", "行"],
+            }
+        )
+
+        rendered_df = analysis_core.build_rendered_paragraphs_df(
+            tokens_with_position_df=tokens_with_position_df,
+            token_annotations_df=pl.DataFrame(),
+        )
+
+        self.assertEqual(rendered_df.get_column("paragraph_text").to_list(), ["表\n行"])
+        self.assertEqual(rendered_df.get_column("paragraph_text_tagged").to_list(), ["表\n行"])
+        self.assertEqual(rendered_df.get_column("paragraph_text_highlight_html").to_list(), ["表\n行"])
+
+    def test_build_rendered_paragraphs_df_keeps_empty_join_for_non_table_paragraph(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 12],
+                "sentence_no_in_paragraph": [1, 2],
+                "token_no": [0, 0],
+                "sentence_token_position": [0, 0],
+                "paragraph_token_position": [0, 1],
+                "normalized_form": ["表", "行"],
+                "surface": ["表", "行"],
+            }
+        )
+
+        rendered_df = analysis_core.build_rendered_paragraphs_df(
+            tokens_with_position_df=tokens_with_position_df,
+            token_annotations_df=pl.DataFrame(),
+        )
+
+        self.assertEqual(rendered_df.get_column("paragraph_text").to_list(), ["表行"])
+
     def test_build_condition_hit_tokens_df_handles_large_distance_combinations(self) -> None:
         rows: list[dict[str, object]] = []
         token_no = 0

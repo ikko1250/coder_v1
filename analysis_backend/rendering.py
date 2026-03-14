@@ -79,6 +79,12 @@ def _build_annotation_lookup(
     return annotation_lookup
 
 
+def _paragraph_join_separator(paragraph_df: pl.DataFrame) -> str:
+    if "is_table_paragraph" not in paragraph_df.columns or paragraph_df.is_empty():
+        return ""
+    return "\n" if int(paragraph_df.get_column("is_table_paragraph")[0]) == 1 else ""
+
+
 def render_tagged_token(
     surface: str,
     annotation: dict[str, object] | None,
@@ -135,6 +141,7 @@ def build_token_annotations_df(condition_hit_tokens_df: pl.DataFrame) -> pl.Data
                 "paragraph_id": int(hit_row["paragraph_id"]),
                 "sentence_id": int(hit_row["sentence_id"]),
                 "sentence_no_in_paragraph": int(hit_row["sentence_no_in_paragraph"]),
+                "is_table_paragraph": int(hit_row.get("is_table_paragraph", 0) or 0),
                 "token_no": int(hit_row["token_no"]),
                 "sentence_token_position": int(hit_row["sentence_token_position"]),
                 "paragraph_token_position": int(hit_row["paragraph_token_position"]),
@@ -174,6 +181,7 @@ def build_token_annotations_df(condition_hit_tokens_df: pl.DataFrame) -> pl.Data
             pl.col("paragraph_id").cast(pl.Int64),
             pl.col("sentence_id").cast(pl.Int64),
             pl.col("sentence_no_in_paragraph").cast(pl.Int64),
+            pl.col("is_table_paragraph").fill_null(0).cast(pl.Int64),
             pl.col("token_no").cast(pl.Int64),
             pl.col("sentence_token_position").cast(pl.Int64),
             pl.col("paragraph_token_position").cast(pl.Int64),
@@ -242,6 +250,7 @@ def build_rendered_paragraphs_df(
         TOKEN_NO_COL,
     ]).partition_by(PARAGRAPH_ID_COL):
         paragraph_id = int(paragraph_df.get_column(PARAGRAPH_ID_COL)[0])
+        paragraph_separator = _paragraph_join_separator(paragraph_df)
         sentence_fragments: list[dict[str, object]] = []
         matched_condition_ids: list[str] = []
         matched_categories: list[str] = []
@@ -264,9 +273,11 @@ def build_rendered_paragraphs_df(
             {
                 PARAGRAPH_ID_COL: paragraph_id,
                 "sentence_count": len(sorted_sentence_fragments),
-                "paragraph_text": "".join(fragment["plain_text"] for fragment in sorted_sentence_fragments),
-                "paragraph_text_tagged": "".join(fragment["tagged_text"] for fragment in sorted_sentence_fragments),
-                "paragraph_text_highlight_html": "".join(
+                "paragraph_text": paragraph_separator.join(fragment["plain_text"] for fragment in sorted_sentence_fragments),
+                "paragraph_text_tagged": paragraph_separator.join(
+                    fragment["tagged_text"] for fragment in sorted_sentence_fragments
+                ),
+                "paragraph_text_highlight_html": paragraph_separator.join(
                     fragment["html_text"] for fragment in sorted_sentence_fragments
                 ),
                 "matched_condition_ids": _unique_in_order(matched_condition_ids),

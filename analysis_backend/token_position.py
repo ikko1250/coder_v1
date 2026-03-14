@@ -6,6 +6,16 @@ from .frame_schema import POSITIONED_TOKEN_SCHEMA
 from .frame_schema import empty_df
 
 
+def _with_sentence_table_flag(sentences_df: pl.DataFrame) -> pl.DataFrame:
+    if "is_table_paragraph" in sentences_df.columns:
+        return sentences_df.with_columns(
+            pl.col("is_table_paragraph").fill_null(0).cast(pl.Int64)
+        )
+    return sentences_df.with_columns(
+        pl.lit(0, dtype=pl.Int64).alias("is_table_paragraph")
+    )
+
+
 def build_tokens_with_position_df(
     tokens_df: pl.DataFrame,
     sentences_df: pl.DataFrame,
@@ -15,7 +25,9 @@ def build_tokens_with_position_df(
     if paragraph_ids is not None and not paragraph_ids:
         return empty_df(POSITIONED_TOKEN_SCHEMA)
 
-    sentence_order_df = sentences_df.select(["sentence_id", "paragraph_id", "sentence_no_in_paragraph"])
+    sentence_order_df = _with_sentence_table_flag(sentences_df).select(
+        ["sentence_id", "paragraph_id", "sentence_no_in_paragraph", "is_table_paragraph"]
+    )
     base_tokens_df = tokens_df
     if paragraph_ids is not None:
         sentence_order_df = sentence_order_df.filter(pl.col("paragraph_id").is_in(paragraph_ids))
@@ -49,6 +61,7 @@ def build_tokens_with_position_df(
         .join(sentence_token_counts_df, on=["paragraph_id", "sentence_no_in_paragraph"], how="inner")
         .with_columns([
             pl.col("sentence_no_in_paragraph").cast(pl.Int64),
+            pl.col("is_table_paragraph").fill_null(0).cast(pl.Int64),
             pl.col("token_no").cast(pl.Int64),
             # Preserve the source token numbering because downstream code only relies on order and span.
             pl.col("token_no").cast(pl.Int64).alias("sentence_token_position"),
@@ -58,6 +71,7 @@ def build_tokens_with_position_df(
             "paragraph_id",
             "sentence_id",
             "sentence_no_in_paragraph",
+            "is_table_paragraph",
             "token_no",
             "sentence_token_position",
             "paragraph_token_position",

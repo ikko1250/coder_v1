@@ -7,6 +7,7 @@ POSITIONED_TOKEN_SCHEMA = {
     "paragraph_id": pl.Int64,
     "sentence_id": pl.Int64,
     "sentence_no_in_paragraph": pl.Int64,
+    "is_table_paragraph": pl.Int64,
     "token_no": pl.Int64,
     "sentence_token_position": pl.Int64,
     "paragraph_token_position": pl.Int64,
@@ -26,6 +27,7 @@ PARAGRAPH_METADATA_SCHEMA = {
     "document_id": pl.Int64,
     "municipality_name": pl.String,
     "doc_type": pl.String,
+    "is_table_paragraph": pl.Int64,
 }
 
 

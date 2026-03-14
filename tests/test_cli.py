@@ -208,6 +208,79 @@ def build_large_distance_test_db(db_path: Path) -> None:
         connection.close()
 
 
+def build_table_paragraph_test_db(db_path: Path) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE analysis_tokens (
+                paragraph_id INTEGER,
+                sentence_id INTEGER,
+                token_no INTEGER,
+                normalized_form TEXT,
+                surface TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_sentences (
+                sentence_id INTEGER,
+                paragraph_id INTEGER,
+                sentence_no_in_paragraph INTEGER
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_paragraphs (
+                paragraph_id INTEGER,
+                document_id INTEGER,
+                is_table_paragraph INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_documents (
+                document_id INTEGER,
+                municipality_name TEXT,
+                doc_type TEXT
+            )
+            """
+        )
+
+        cursor.executemany(
+            "INSERT INTO analysis_tokens VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, 11, 0, "抑制", "抑制"),
+                (1, 11, 1, "区域", "区域"),
+                (1, 12, 0, "指定", "指定"),
+                (1, 12, 1, "する", "する"),
+                (1, 12, 2, "。", "。"),
+            ],
+        )
+        cursor.executemany(
+            "INSERT INTO analysis_sentences VALUES (?, ?, ?)",
+            [
+                (11, 1, 1),
+                (12, 1, 2),
+            ],
+        )
+        cursor.execute(
+            "INSERT INTO analysis_paragraphs VALUES (?, ?, ?)",
+            (1, 100, 1),
+        )
+        cursor.execute(
+            "INSERT INTO analysis_documents VALUES (?, ?, ?)",
+            (100, "テスト市", "条例"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def build_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "any",
@@ -497,6 +570,42 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area")
             self.assertEqual(rows[0]["matched_categories_text"], "概念:抑制区域")
             self.assertIn("[[HIT ", rows[0]["paragraph_text_tagged"])
+
+    def test_run_analysis_job_inserts_newlines_for_table_paragraph_csv_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_table_paragraph_test_db(db_path)
+            build_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="table-paragraph-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            csv_path = output_dir / "result.csv"
+            with csv_path.open(encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["paragraph_text"], "抑制区域\n指定する。")
+            self.assertIn("\n", rows[0]["paragraph_text_tagged"])
+            self.assertIn("[[HIT ", rows[0]["paragraph_text_tagged"])
+            self.assertEqual(rows[0]["paragraph_text_highlight_html"].count("\n"), 1)
 
     def test_run_analysis_job_surfaces_matching_warnings_in_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
