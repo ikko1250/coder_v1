@@ -9,7 +9,7 @@ use crate::db::{
     fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
 };
 use crate::filter::{build_filter_options, display_filter_value};
-use crate::model::{CsvRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
+use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
@@ -45,7 +45,7 @@ struct SelectionChange {
 struct TreeColumnSpec {
     header: &'static str,
     build_column: fn() -> Column,
-    value: fn(&CsvRecord) -> String,
+    value: fn(&AnalysisRecord) -> String,
 }
 
 const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
@@ -214,12 +214,11 @@ fn build_tree_scroll_request(
 }
 
 pub(crate) struct App {
-    csv_path: PathBuf,
     records_source_label: String,
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
     analysis_runtime_state: AnalysisRuntimeState,
-    all_records: Vec<CsvRecord>,
+    all_records: Vec<AnalysisRecord>,
     filtered_indices: Vec<usize>,
     filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
     selected_filter_values: HashMap<FilterColumn, BTreeSet<String>>,
@@ -231,12 +230,11 @@ pub(crate) struct App {
 }
 
 impl App {
-    pub(crate) fn new(csv_path: PathBuf) -> Self {
+    pub(crate) fn new(initial_csv_path: Option<PathBuf>) -> Self {
         let analysis_request_state = AnalysisRequestState::default();
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let mut app = Self {
-            csv_path: csv_path.clone(),
-            records_source_label: csv_path.display().to_string(),
+            records_source_label: "分析結果なし".to_string(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             analysis_request_state,
             analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
@@ -251,14 +249,16 @@ impl App {
             cached_segments: None,
         };
         app.try_cleanup_analysis_jobs();
-        app.load_csv(csv_path);
+        if let Some(csv_path) = initial_csv_path {
+            app.load_csv(csv_path);
+        }
         app
     }
 
     fn load_csv(&mut self, path: PathBuf) {
         match load_records(&path) {
             Ok(records) => {
-                self.replace_records(records, path.display().to_string(), Some(path));
+                self.replace_records(records, path.display().to_string());
                 self.analysis_runtime_state.last_export_context = None;
             }
             Err(e) => {
@@ -267,16 +267,8 @@ impl App {
         }
     }
 
-    fn replace_records(
-        &mut self,
-        records: Vec<CsvRecord>,
-        source_label: String,
-        csv_path: Option<PathBuf>,
-    ) {
+    fn replace_records(&mut self, records: Vec<AnalysisRecord>, source_label: String) {
         self.all_records = records;
-        if let Some(path) = csv_path {
-            self.csv_path = path;
-        }
         self.records_source_label = source_label;
         self.db_viewer_state.reset_loaded_state();
         self.filter_options = build_filter_options(&self.all_records);
@@ -317,14 +309,14 @@ impl App {
     #[allow(dead_code)]
     fn prepare_db_viewer_state(&mut self) -> Result<(), String> {
         let paragraph_id = self.selected_paragraph_id_for_db()?;
-        let csv_paragraph_text = self
+        let source_paragraph_text = self
             .selected_record()
             .map(|record| record.paragraph_text.clone())
             .ok_or_else(|| "レコードが選択されていません".to_string())?;
 
         self.db_viewer_state.is_open = true;
         self.db_viewer_state.source_paragraph_id = Some(paragraph_id);
-        self.db_viewer_state.csv_paragraph_text = Some(csv_paragraph_text);
+        self.db_viewer_state.source_paragraph_text = Some(source_paragraph_text);
         self.db_viewer_state.context = None;
         self.db_viewer_state.error_message = None;
         Ok(())
@@ -413,7 +405,7 @@ impl App {
         }
     }
 
-    fn selected_record(&self) -> Option<&CsvRecord> {
+    fn selected_record(&self) -> Option<&AnalysisRecord> {
         let filtered_idx = self.selected_row?;
         let record_idx = *self.filtered_indices.get(filtered_idx)?;
         self.all_records.get(record_idx)
@@ -430,7 +422,7 @@ impl App {
         self.select_first_filtered_row(ScrollBehavior::AlignMin);
     }
 
-    fn record_matches_filters(&self, record: &CsvRecord) -> bool {
+    fn record_matches_filters(&self, record: &AnalysisRecord) -> bool {
         self.selected_filter_values
             .iter()
             .all(|(column, selected)| column.matches(record, selected))
@@ -601,7 +593,7 @@ impl App {
         let warnings = success.meta.warning_messages.clone();
         let warning_count = warnings.len();
         let source_label = format!("分析結果: {}", success.meta.job_id);
-        self.replace_records(success.records, source_label, None);
+        self.replace_records(success.records, source_label);
         let mut summary = format!(
             "{} 件抽出 / {:.2} 秒",
             success.meta.selected_paragraph_count, success.meta.duration_seconds
@@ -987,7 +979,7 @@ impl App {
                         .interactive(false),
                 );
 
-                if ui.button("開く").clicked() {
+                if ui.button("CSVを開く").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("CSV files", &["csv"])
                         .add_filter("All files", &["*"])
@@ -1511,27 +1503,27 @@ fn build_tree_annotated_token_count_column() -> Column {
     Column::initial(92.0).at_least(72.0).clip(true)
 }
 
-fn tree_row_no_value(record: &CsvRecord) -> String {
+fn tree_row_no_value(record: &AnalysisRecord) -> String {
     record.row_no.to_string()
 }
 
-fn tree_paragraph_id_value(record: &CsvRecord) -> String {
+fn tree_paragraph_id_value(record: &AnalysisRecord) -> String {
     record.paragraph_id.clone()
 }
 
-fn tree_municipality_value(record: &CsvRecord) -> String {
+fn tree_municipality_value(record: &AnalysisRecord) -> String {
     record.municipality_name.clone()
 }
 
-fn tree_ordinance_value(record: &CsvRecord) -> String {
+fn tree_ordinance_value(record: &AnalysisRecord) -> String {
     record.ordinance_or_rule.clone()
 }
 
-fn tree_category_value(record: &CsvRecord) -> String {
+fn tree_category_value(record: &AnalysisRecord) -> String {
     record.matched_categories_text.clone()
 }
 
-fn tree_annotated_token_count_value(record: &CsvRecord) -> String {
+fn tree_annotated_token_count_value(record: &AnalysisRecord) -> String {
     record.annotated_token_count.clone()
 }
 
@@ -1547,14 +1539,15 @@ fn render_db_viewer_contents(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("ordinance_analysis3.db");
-    let csv_text = state.csv_paragraph_text.clone().unwrap_or_default();
+    let source_text = state.source_paragraph_text.clone().unwrap_or_default();
     let comparison_label = match state.context.as_ref() {
-        Some(context) if context.center.paragraph_text != csv_text => {
-            RichText::new("CSV と DB 中心段落は不一致")
+        Some(context) if context.center.paragraph_text != source_text => {
+            RichText::new("表示中テキスト と DB 中心段落は不一致")
                 .color(Color32::from_rgb(200, 64, 64))
         }
         Some(_) => {
-            RichText::new("CSV と DB 中心段落は一致").color(Color32::from_rgb(70, 130, 70))
+            RichText::new("表示中テキスト と DB 中心段落は一致")
+                .color(Color32::from_rgb(70, 130, 70))
         }
         None => RichText::new("DB 中心段落未取得").italics(),
     };
@@ -1627,12 +1620,12 @@ fn render_db_viewer_contents(
             });
 
             ui.add_space(6.0);
-            egui::CollapsingHeader::new("CSV/DB 比較")
+            egui::CollapsingHeader::new("表示中テキスト/DB 比較")
                 .id_salt("db_viewer_comparison_header")
                 .default_open(false)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("CSV テキスト").strong());
-                    ui.label(&csv_text);
+                    ui.label(RichText::new("表示中テキスト").strong());
+                    ui.label(&source_text);
 
                     ui.add_space(6.0);
                     ui.label(RichText::new("DB 中心段落").strong());

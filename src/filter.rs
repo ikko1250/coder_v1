@@ -1,11 +1,11 @@
-use crate::model::{CsvRecord, FilterColumn, FilterOption};
+use crate::model::{AnalysisRecord, FilterColumn, FilterOption};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Clone, Copy, Debug)]
 enum FilterValueKind {
-    Single(fn(&CsvRecord) -> String),
-    Multi(fn(&CsvRecord) -> Vec<String>),
+    Single(fn(&AnalysisRecord) -> String),
+    Multi(fn(&AnalysisRecord) -> Vec<String>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,14 +106,14 @@ const FILTER_COLUMN_SPECS: &[FilterColumnSpec] = &[
 ];
 
 impl FilterColumnSpec {
-    fn values(self, record: &CsvRecord) -> Vec<String> {
+    fn values(self, record: &AnalysisRecord) -> Vec<String> {
         match self.value_kind {
             FilterValueKind::Single(extract) => vec![extract(record)],
             FilterValueKind::Multi(extract) => extract(record),
         }
     }
 
-    fn matches(self, record: &CsvRecord, selected: &BTreeSet<String>) -> bool {
+    fn matches(self, record: &AnalysisRecord, selected: &BTreeSet<String>) -> bool {
         if selected.is_empty() {
             return true;
         }
@@ -137,12 +137,14 @@ impl FilterColumn {
         filter_column_spec(self).label
     }
 
-    pub(crate) fn matches(self, record: &CsvRecord, selected: &BTreeSet<String>) -> bool {
+    pub(crate) fn matches(self, record: &AnalysisRecord, selected: &BTreeSet<String>) -> bool {
         filter_column_spec(self).matches(record, selected)
     }
 }
 
-pub(crate) fn build_filter_options(records: &[CsvRecord]) -> HashMap<FilterColumn, Vec<FilterOption>> {
+pub(crate) fn build_filter_options(
+    records: &[AnalysisRecord],
+) -> HashMap<FilterColumn, Vec<FilterOption>> {
     let mut options = HashMap::new();
 
     for spec in FILTER_COLUMN_SPECS {
@@ -183,47 +185,47 @@ fn normalize_single_filter_value(value: &str) -> String {
     value.trim().to_string()
 }
 
-fn record_paragraph_id_value(record: &CsvRecord) -> String {
+fn record_paragraph_id_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.paragraph_id)
 }
 
-fn record_document_id_value(record: &CsvRecord) -> String {
+fn record_document_id_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.document_id)
 }
 
-fn record_municipality_name_value(record: &CsvRecord) -> String {
+fn record_municipality_name_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.municipality_name)
 }
 
-fn record_ordinance_or_rule_value(record: &CsvRecord) -> String {
+fn record_ordinance_or_rule_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.ordinance_or_rule)
 }
 
-fn record_doc_type_value(record: &CsvRecord) -> String {
+fn record_doc_type_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.doc_type)
 }
 
-fn record_sentence_count_value(record: &CsvRecord) -> String {
+fn record_sentence_count_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.sentence_count)
 }
 
-fn record_matched_categories_values(record: &CsvRecord) -> Vec<String> {
+fn record_matched_categories_values(record: &AnalysisRecord) -> Vec<String> {
     category_values(&record.matched_categories_text)
 }
 
-fn record_matched_condition_ids_value(record: &CsvRecord) -> String {
+fn record_matched_condition_ids_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.matched_condition_ids_text)
 }
 
-fn record_match_group_ids_value(record: &CsvRecord) -> String {
+fn record_match_group_ids_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.match_group_ids_text)
 }
 
-fn record_match_group_count_value(record: &CsvRecord) -> String {
+fn record_match_group_count_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.match_group_count)
 }
 
-fn record_annotated_token_count_value(record: &CsvRecord) -> String {
+fn record_annotated_token_count_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.annotated_token_count)
 }
 

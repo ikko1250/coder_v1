@@ -1,4 +1,4 @@
-use crate::model::CsvRecord;
+use crate::model::AnalysisRecord;
 use std::path::PathBuf;
 
 const REQUIRED_COLUMNS: &[&str] = &[
@@ -16,7 +16,7 @@ const REQUIRED_COLUMNS: &[&str] = &[
     "annotated_token_count",
 ];
 
-pub(crate) fn load_records(path: &PathBuf) -> Result<Vec<CsvRecord>, String> {
+pub(crate) fn load_records(path: &PathBuf) -> Result<Vec<AnalysisRecord>, String> {
     if !path.exists() {
         return Err(format!("CSV ファイルが見つかりません: {}", path.display()));
     }
@@ -59,7 +59,7 @@ pub(crate) fn load_records(path: &PathBuf) -> Result<Vec<CsvRecord>, String> {
     let mut records = Vec::new();
     for (row_no, result) in rdr.records().enumerate() {
         let row = result.map_err(|e| format!("行 {} の読み込みエラー: {e}", row_no + 1))?;
-        records.push(CsvRecord {
+        records.push(AnalysisRecord {
             row_no: row_no + 1,
             paragraph_id: get(&row, "paragraph_id"),
             document_id: get(&row, "document_id"),

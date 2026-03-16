@@ -1,4 +1,4 @@
-use crate::model::CsvRecord;
+use crate::model::AnalysisRecord;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::ffi::OsString;
@@ -52,7 +52,7 @@ pub(crate) struct AnalysisExportRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnalysisJobSuccess {
     pub(crate) meta: AnalysisMeta,
-    pub(crate) records: Vec<CsvRecord>,
+    pub(crate) records: Vec<AnalysisRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,8 +181,8 @@ struct AnalysisJsonRecord {
 }
 
 impl AnalysisJsonRecord {
-    fn into_csv_record(self, row_no: usize) -> CsvRecord {
-        CsvRecord {
+    fn into_analysis_record(self, row_no: usize) -> AnalysisRecord {
+        AnalysisRecord {
             row_no,
             paragraph_id: self.paragraph_id,
             document_id: self.document_id,
@@ -286,10 +286,6 @@ struct WorkerResponse {
     records: Vec<AnalysisJsonRecord>,
     #[serde(default)]
     message: String,
-}
-
-pub(crate) fn build_default_runtime_config() -> Result<AnalysisRuntimeConfig, String> {
-    build_runtime_config(&AnalysisRuntimeOverrides::default())
 }
 
 fn worker_slot() -> &'static Mutex<Option<WorkerHandle>> {
@@ -695,7 +691,7 @@ fn send_analyze_request(
             .records
             .into_iter()
             .enumerate()
-            .map(|(idx, record)| record.into_csv_record(idx + 1))
+            .map(|(idx, record)| record.into_analysis_record(idx + 1))
             .collect();
         return Ok(AnalysisJobSuccess { meta, records });
     }
@@ -1043,7 +1039,12 @@ mod tests {
 
         assert_eq!(response.meta.selected_paragraph_count, 1);
         assert_eq!(response.records.len(), 1);
-        let first_record = response.records.into_iter().next().unwrap().into_csv_record(1);
+        let first_record = response
+            .records
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_analysis_record(1);
         assert_eq!(first_record.row_no, 1);
         assert_eq!(first_record.paragraph_id, "1");
         assert_eq!(first_record.municipality_name, "札幌市");
