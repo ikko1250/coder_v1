@@ -1,3 +1,4 @@
+use crate::model::CsvRecord;
 use serde::Deserialize;
 use std::env;
 use std::ffi::OsString;
@@ -40,8 +41,7 @@ pub(crate) struct AnalysisJobRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnalysisJobSuccess {
     pub(crate) meta: AnalysisMeta,
-    pub(crate) output_csv_path: PathBuf,
-    pub(crate) stdout: String,
+    pub(crate) records: Vec<CsvRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +143,51 @@ pub(crate) struct AnalysisMeta {
     #[serde(default, deserialize_with = "deserialize_warning_messages")]
     pub(crate) warning_messages: Vec<AnalysisWarningMessage>,
     pub(crate) error_summary: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct AnalysisJsonRecord {
+    paragraph_id: String,
+    document_id: String,
+    municipality_name: String,
+    ordinance_or_rule: String,
+    doc_type: String,
+    sentence_count: String,
+    paragraph_text: String,
+    paragraph_text_tagged: String,
+    matched_condition_ids_text: String,
+    matched_categories_text: String,
+    match_group_ids_text: String,
+    match_group_count: String,
+    annotated_token_count: String,
+}
+
+impl AnalysisJsonRecord {
+    fn into_csv_record(self, row_no: usize) -> CsvRecord {
+        CsvRecord {
+            row_no,
+            paragraph_id: self.paragraph_id,
+            document_id: self.document_id,
+            municipality_name: self.municipality_name,
+            ordinance_or_rule: self.ordinance_or_rule,
+            doc_type: self.doc_type,
+            sentence_count: self.sentence_count,
+            paragraph_text: self.paragraph_text,
+            paragraph_text_tagged: self.paragraph_text_tagged,
+            matched_condition_ids_text: self.matched_condition_ids_text,
+            matched_categories_text: self.matched_categories_text,
+            match_group_ids_text: self.match_group_ids_text,
+            match_group_count: self.match_group_count,
+            annotated_token_count: self.annotated_token_count,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct AnalysisJsonResponse {
+    meta: AnalysisMeta,
+    #[serde(default)]
+    records: Vec<AnalysisJsonRecord>,
 }
 
 pub(crate) fn build_default_runtime_config() -> Result<AnalysisRuntimeConfig, String> {
@@ -254,7 +299,9 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
         .arg("--output-csv-path")
         .arg(&output_csv_path)
         .arg("--output-meta-json-path")
-        .arg(&output_meta_json_path);
+        .arg(&output_meta_json_path)
+        .arg("--output-format")
+        .arg("json");
 
     let output = command.output();
 
@@ -271,34 +318,44 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let meta_result = read_meta_json(&output_meta_json_path);
+    let json_response_result = read_json_response(&stdout);
+    let json_response = json_response_result.clone().ok();
+    let meta_result = json_response
+        .as_ref()
+        .map(|response| Ok(response.meta.clone()))
+        .unwrap_or_else(|| read_meta_json(&output_meta_json_path));
     let meta = meta_result.clone().ok();
 
     if output.status.success() {
-        let Some(meta) = meta else {
+        let Some(json_response) = json_response else {
             return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
                 meta: None,
                 stderr,
-                message: meta_result.unwrap_err(),
+                message: json_response_result.unwrap_err(),
             }));
         };
-
-        let resolved_output_csv_path = PathBuf::from(&meta.output_csv_path);
-        if !resolved_output_csv_path.is_file() {
+        if json_response.meta.selected_paragraph_count != json_response.records.len() {
+            let selected_paragraph_count = json_response.meta.selected_paragraph_count;
+            let record_count = json_response.records.len();
             return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
-                meta: Some(meta),
+                meta: Some(json_response.meta),
                 stderr,
                 message: format!(
-                    "出力 CSV が見つかりません: {}",
-                    resolved_output_csv_path.display()
+                    "返却件数が selectedParagraphCount と一致しません: meta={}, records={}",
+                    selected_paragraph_count, record_count
                 ),
             }));
         }
+        let records = json_response
+            .records
+            .into_iter()
+            .enumerate()
+            .map(|(idx, record)| record.into_csv_record(idx + 1))
+            .collect();
 
         return AnalysisJobEvent::Completed(Ok(AnalysisJobSuccess {
-            meta,
-            output_csv_path: resolved_output_csv_path,
-            stdout,
+            meta: json_response.meta,
+            records,
         }));
     }
 
@@ -322,9 +379,13 @@ fn read_meta_json(path: &Path) -> Result<AnalysisMeta, String> {
         .map_err(|error| format!("meta.json の解析に失敗しました ({}): {error}", path.display()))
 }
 
+fn read_json_response(text: &str) -> Result<AnalysisJsonResponse, String> {
+    serde_json::from_str(text).map_err(|error| format!("JSON 応答の解析に失敗しました: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{read_meta_json, AnalysisWarningMessage};
+    use super::{read_json_response, read_meta_json, AnalysisWarningMessage};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -472,6 +533,53 @@ mod tests {
         assert_eq!(meta.warning_messages[0].db_path, None);
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_json_response_accepts_gui_records_payload() {
+        let payload = r#"{
+  "meta": {
+    "jobId": "job-4",
+    "status": "succeeded",
+    "startedAt": "2026-03-16T00:00:00Z",
+    "finishedAt": "2026-03-16T00:00:01Z",
+    "durationSeconds": 1.0,
+    "dbPath": "/tmp/db.sqlite3",
+    "filterConfigPath": "/tmp/filter.json",
+    "outputCsvPath": "/tmp/result.csv",
+    "targetParagraphCount": 1,
+    "selectedParagraphCount": 1,
+    "warningMessages": [],
+    "errorSummary": ""
+  },
+  "records": [
+    {
+      "paragraph_id": "1",
+      "document_id": "2",
+      "municipality_name": "札幌市",
+      "ordinance_or_rule": "条例",
+      "doc_type": "",
+      "sentence_count": "3",
+      "paragraph_text": "本文",
+      "paragraph_text_tagged": "<hit>本文</hit>",
+      "matched_condition_ids_text": "",
+      "matched_categories_text": "抑制区域",
+      "match_group_ids_text": "",
+      "match_group_count": "1",
+      "annotated_token_count": "2"
+    }
+  ]
+}"#;
+
+        let response = read_json_response(payload).unwrap();
+
+        assert_eq!(response.meta.selected_paragraph_count, 1);
+        assert_eq!(response.records.len(), 1);
+        let first_record = response.records.into_iter().next().unwrap().into_csv_record(1);
+        assert_eq!(first_record.row_no, 1);
+        assert_eq!(first_record.paragraph_id, "1");
+        assert_eq!(first_record.municipality_name, "札幌市");
+        assert_eq!(first_record.annotated_token_count, "2");
     }
 }
 

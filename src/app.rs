@@ -200,6 +200,7 @@ fn build_tree_scroll_request(
 
 pub(crate) struct App {
     csv_path: PathBuf,
+    records_source_label: String,
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
     analysis_runtime_state: AnalysisRuntimeState,
@@ -220,6 +221,7 @@ impl App {
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let mut app = Self {
             csv_path: csv_path.clone(),
+            records_source_label: csv_path.display().to_string(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             analysis_request_state,
             analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
@@ -241,23 +243,35 @@ impl App {
     fn load_csv(&mut self, path: PathBuf) {
         match load_records(&path) {
             Ok(records) => {
-                self.all_records = records;
-                self.csv_path = path;
-                self.db_viewer_state.reset_loaded_state();
-                self.filter_options = build_filter_options(&self.all_records);
-                self.selected_filter_values.clear();
-                self.filtered_indices = (0..self.all_records.len()).collect();
-                self.cached_segments = None;
-                self.apply_selection_change(SelectionChange::first_filtered_row(
-                    self.filtered_indices.len(),
-                    ScrollBehavior::AlignMin,
-                ));
-                self.error_message = None;
+                self.replace_records(records, path.display().to_string(), Some(path));
             }
             Err(e) => {
                 self.error_message = Some(e);
             }
         }
+    }
+
+    fn replace_records(
+        &mut self,
+        records: Vec<CsvRecord>,
+        source_label: String,
+        csv_path: Option<PathBuf>,
+    ) {
+        self.all_records = records;
+        if let Some(path) = csv_path {
+            self.csv_path = path;
+        }
+        self.records_source_label = source_label;
+        self.db_viewer_state.reset_loaded_state();
+        self.filter_options = build_filter_options(&self.all_records);
+        self.selected_filter_values.clear();
+        self.filtered_indices = (0..self.all_records.len()).collect();
+        self.cached_segments = None;
+        self.apply_selection_change(SelectionChange::first_filtered_row(
+            self.filtered_indices.len(),
+            ScrollBehavior::AlignMin,
+        ));
+        self.error_message = None;
     }
 
     #[allow(dead_code)]
@@ -534,7 +548,8 @@ impl App {
     fn handle_analysis_success(&mut self, success: AnalysisJobSuccess) {
         let warnings = success.meta.warning_messages.clone();
         let warning_count = warnings.len();
-        self.load_csv(success.output_csv_path);
+        let source_label = format!("分析結果: {}", success.meta.job_id);
+        self.replace_records(success.records, source_label, None);
         let mut summary = format!(
             "{} 件抽出 / {:.2} 秒",
             success.meta.selected_paragraph_count, success.meta.duration_seconds
@@ -895,8 +910,8 @@ impl App {
     fn draw_toolbar(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.label("CSV:");
-                let path_str = self.csv_path.display().to_string();
+                ui.label("表示元:");
+                let path_str = self.records_source_label.clone();
                 ui.add(
                     egui::TextEdit::singleline(&mut path_str.as_str())
                         .desired_width(600.0)
