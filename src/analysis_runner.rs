@@ -1,19 +1,22 @@
 use crate::model::CsvRecord;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::mpsc::{self, Receiver};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_FILTER_CONFIG_RELATIVE_PATH: &str = "asset/cooccurrence-conditions.json";
 const DEFAULT_SCRIPT_RELATIVE_PATH: &str = "run-analysis.py";
 const DEFAULT_JOBS_RELATIVE_PATH: &str = "runtime/jobs";
 const JOB_HISTORY_KEEP_COUNT: usize = 5;
 const PYTHON_PATH_ENV_KEY: &str = "CSV_VIEWER_PYTHON";
+const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AnalysisRuntimeOverrides {
@@ -190,8 +193,81 @@ struct AnalysisJsonResponse {
     records: Vec<AnalysisJsonRecord>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkerRuntimeFingerprint {
+    python_command: String,
+    python_args: Vec<String>,
+    project_root: PathBuf,
+    script_path: PathBuf,
+}
+
+impl WorkerRuntimeFingerprint {
+    fn from_runtime(runtime: &AnalysisRuntimeConfig) -> Self {
+        Self {
+            python_command: runtime.python_command.to_string_lossy().into_owned(),
+            python_args: runtime
+                .python_args
+                .iter()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect(),
+            project_root: runtime.project_root.clone(),
+            script_path: runtime.script_path.clone(),
+        }
+    }
+}
+
+struct WorkerConnection {
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+#[derive(Clone)]
+struct WorkerHandle {
+    fingerprint: WorkerRuntimeFingerprint,
+    child: Arc<Mutex<Child>>,
+    connection: Arc<Mutex<WorkerConnection>>,
+    stderr_buffer: Arc<Mutex<String>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerAnalyzeRequest {
+    request_id: String,
+    request_type: &'static str,
+    job_id: String,
+    db_path: String,
+    filter_config_path: String,
+    limit_rows: Option<i64>,
+    force_reload: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerSimpleRequest {
+    request_id: String,
+    request_type: &'static str,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct WorkerResponse {
+    request_id: String,
+    status: String,
+    #[serde(default)]
+    meta: Option<AnalysisMeta>,
+    #[serde(default)]
+    records: Vec<AnalysisJsonRecord>,
+    #[serde(default)]
+    message: String,
+}
+
 pub(crate) fn build_default_runtime_config() -> Result<AnalysisRuntimeConfig, String> {
     build_runtime_config(&AnalysisRuntimeOverrides::default())
+}
+
+fn worker_slot() -> &'static Mutex<Option<WorkerHandle>> {
+    static WORKER_SLOT: OnceLock<Mutex<Option<WorkerHandle>>> = OnceLock::new();
+    WORKER_SLOT.get_or_init(|| Mutex::new(None))
 }
 
 pub(crate) fn build_runtime_config(
@@ -268,108 +344,339 @@ pub(crate) fn spawn_analysis_job(request: AnalysisJobRequest) -> (String, Receiv
 }
 
 fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobEvent {
-    let output_dir = request.runtime.jobs_root.join(&job_id);
-    let output_csv_path = output_dir.join("result.csv");
-    let output_meta_json_path = output_dir.join("meta.json");
-
-    if let Err(error) = fs::create_dir_all(&output_dir) {
-        return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
-            meta: None,
-            stderr: String::new(),
-            message: format!(
-                "job 出力ディレクトリを作成できませんでした ({}): {error}",
-                output_dir.display()
-            ),
-        }));
-    }
-
-    let mut command = Command::new(&request.runtime.python_command);
-    command
-        .current_dir(&request.runtime.project_root)
-        .args(&request.runtime.python_args)
-        .arg(&request.runtime.script_path)
-        .arg("--job-id")
-        .arg(&job_id)
-        .arg("--db-path")
-        .arg(&request.db_path)
-        .arg("--filter-config-path")
-        .arg(&request.runtime.filter_config_path)
-        .arg("--output-dir")
-        .arg(&output_dir)
-        .arg("--output-csv-path")
-        .arg(&output_csv_path)
-        .arg("--output-meta-json-path")
-        .arg(&output_meta_json_path)
-        .arg("--output-format")
-        .arg("json");
-
-    let output = command.output();
-
-    let output = match output {
-        Ok(output) => output,
-        Err(error) => {
+    let worker_handle = match ensure_worker(&request.runtime) {
+        Ok(worker_handle) => worker_handle,
+        Err(message) => {
             return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
                 meta: None,
                 stderr: String::new(),
-                message: format!("Python CLI の起動に失敗しました: {error}"),
+                message,
             }));
         }
     };
+    let worker_request = WorkerAnalyzeRequest {
+        request_id: job_id.clone(),
+        request_type: "analyze",
+        job_id,
+        db_path: request.db_path.display().to_string(),
+        filter_config_path: request.runtime.filter_config_path.display().to_string(),
+        limit_rows: None,
+        force_reload: false,
+    };
+    let worker_handle_for_request = worker_handle.clone();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = send_analyze_request(worker_handle_for_request, worker_request);
+        let _ = sender.send(result);
+    });
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let json_response_result = read_json_response(&stdout);
-    let json_response = json_response_result.clone().ok();
-    let meta_result = json_response
-        .as_ref()
-        .map(|response| Ok(response.meta.clone()))
-        .unwrap_or_else(|| read_meta_json(&output_meta_json_path));
-    let meta = meta_result.clone().ok();
-
-    if output.status.success() {
-        let Some(json_response) = json_response else {
-            return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
+    match receiver.recv_timeout(WORKER_REQUEST_TIMEOUT) {
+        Ok(result) => AnalysisJobEvent::Completed(result),
+        Err(RecvTimeoutError::Timeout) => {
+            let stderr = worker_stderr_snapshot(&worker_handle);
+            shutdown_worker(&worker_handle);
+            invalidate_worker_slot(&worker_handle.fingerprint);
+            AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
                 meta: None,
                 stderr,
-                message: json_response_result.unwrap_err(),
-            }));
+                message: format!(
+                    "Python worker が {} 秒以内に応答しませんでした",
+                    WORKER_REQUEST_TIMEOUT.as_secs()
+                ),
+            }))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            let stderr = worker_stderr_snapshot(&worker_handle);
+            shutdown_worker(&worker_handle);
+            invalidate_worker_slot(&worker_handle.fingerprint);
+            AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message: "Python worker 応答待機中にチャネルが切断されました".to_string(),
+            }))
+        }
+    }
+}
+
+fn ensure_worker(runtime: &AnalysisRuntimeConfig) -> Result<WorkerHandle, String> {
+    let fingerprint = WorkerRuntimeFingerprint::from_runtime(runtime);
+    let slot = worker_slot();
+    let mut guard = slot
+        .lock()
+        .map_err(|_| "worker スロットのロック取得に失敗しました".to_string())?;
+
+    if let Some(handle) = guard.as_ref() {
+        if handle.fingerprint == fingerprint && worker_is_running(handle) {
+            return Ok(handle.clone());
+        }
+        shutdown_worker(handle);
+        *guard = None;
+    }
+
+    let handle = spawn_worker(runtime, fingerprint)?;
+    *guard = Some(handle.clone());
+    Ok(handle)
+}
+
+fn spawn_worker(
+    runtime: &AnalysisRuntimeConfig,
+    fingerprint: WorkerRuntimeFingerprint,
+) -> Result<WorkerHandle, String> {
+    let mut command = Command::new(&runtime.python_command);
+    command
+        .current_dir(&runtime.project_root)
+        .args(&runtime.python_args)
+        .arg(&runtime.script_path)
+        .arg("--worker")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Python worker の起動に失敗しました: {error}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Python worker stdin を取得できませんでした".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Python worker stdout を取得できませんでした".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Python worker stderr を取得できませんでした".to_string())?;
+
+    let child = Arc::new(Mutex::new(child));
+    let stderr_buffer = Arc::new(Mutex::new(String::new()));
+    spawn_stderr_collector(stderr, stderr_buffer.clone());
+
+    let handle = WorkerHandle {
+        fingerprint,
+        child,
+        connection: Arc::new(Mutex::new(WorkerConnection {
+            stdin,
+            stdout: BufReader::new(stdout),
+        })),
+        stderr_buffer,
+    };
+
+    send_simple_worker_request(&handle, "health")?;
+    Ok(handle)
+}
+
+fn spawn_stderr_collector(stderr: ChildStderr, stderr_buffer: Arc<Mutex<String>>) {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let text = String::from_utf8_lossy(&chunk[..bytes_read]);
+                    if let Ok(mut buffer) = stderr_buffer.lock() {
+                        buffer.push_str(&text);
+                        if buffer.len() > 32_768 {
+                            let remove_len = buffer.len() - 32_768;
+                            buffer.drain(..remove_len);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn worker_is_running(handle: &WorkerHandle) -> bool {
+    let Ok(mut child) = handle.child.lock() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(None) => true,
+        Ok(Some(_)) => false,
+        Err(_) => false,
+    }
+}
+
+fn shutdown_worker(handle: &WorkerHandle) {
+    if let Ok(mut child) = handle.child.lock() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn invalidate_worker_slot(fingerprint: &WorkerRuntimeFingerprint) {
+    if let Ok(mut guard) = worker_slot().lock() {
+        let should_clear = guard
+            .as_ref()
+            .map(|handle| &handle.fingerprint == fingerprint)
+            .unwrap_or(false);
+        if should_clear {
+            *guard = None;
+        }
+    }
+}
+
+fn worker_stderr_snapshot(handle: &WorkerHandle) -> String {
+    handle
+        .stderr_buffer
+        .lock()
+        .map(|buffer| buffer.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn send_simple_worker_request(handle: &WorkerHandle, request_type: &'static str) -> Result<(), String> {
+    let request = WorkerSimpleRequest {
+        request_id: format!("worker-{request_type}"),
+        request_type,
+    };
+    let response = send_worker_request(handle, &request)?;
+    if response.status == "ok" {
+        return Ok(());
+    }
+    Err(build_worker_response_message(
+        &response,
+        &worker_stderr_snapshot(handle),
+        "Python worker 制御要求が失敗しました".to_string(),
+    ))
+}
+
+fn send_analyze_request(
+    handle: WorkerHandle,
+    request: WorkerAnalyzeRequest,
+) -> Result<AnalysisJobSuccess, AnalysisJobFailure> {
+    let stderr = worker_stderr_snapshot(&handle);
+    let response = match send_worker_request(&handle, &request) {
+        Ok(response) => response,
+        Err(message) => {
+            shutdown_worker(&handle);
+            invalidate_worker_slot(&handle.fingerprint);
+            return Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message,
+            });
+        }
+    };
+
+    if response.request_id != request.request_id {
+        shutdown_worker(&handle);
+        invalidate_worker_slot(&handle.fingerprint);
+        return Err(AnalysisJobFailure {
+            meta: response.meta,
+            stderr,
+            message: format!(
+                "Python worker 応答の requestId が一致しません: expected={}, actual={}",
+                request.request_id, response.request_id
+            ),
+        });
+    }
+
+    let meta = response.meta.clone();
+    if response.status == "succeeded" {
+        let Some(meta) = meta else {
+            return Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message: "Python worker 成功応答に meta が含まれていません".to_string(),
+            });
         };
-        if json_response.meta.selected_paragraph_count != json_response.records.len() {
-            let selected_paragraph_count = json_response.meta.selected_paragraph_count;
-            let record_count = json_response.records.len();
-            return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
-                meta: Some(json_response.meta),
+        if meta.selected_paragraph_count != response.records.len() {
+            let selected_paragraph_count = meta.selected_paragraph_count;
+            let record_count = response.records.len();
+            return Err(AnalysisJobFailure {
+                meta: Some(meta),
                 stderr,
                 message: format!(
                     "返却件数が selectedParagraphCount と一致しません: meta={}, records={}",
                     selected_paragraph_count, record_count
                 ),
-            }));
+            });
         }
-        let records = json_response
+        let records = response
             .records
             .into_iter()
             .enumerate()
             .map(|(idx, record)| record.into_csv_record(idx + 1))
             .collect();
-
-        return AnalysisJobEvent::Completed(Ok(AnalysisJobSuccess {
-            meta: json_response.meta,
-            records,
-        }));
+        return Ok(AnalysisJobSuccess { meta, records });
     }
 
-    let message = meta
-        .as_ref()
-        .and_then(|meta| (!meta.error_summary.trim().is_empty()).then(|| meta.error_summary.clone()))
-        .or_else(|| (!stderr.is_empty()).then_some(stderr.clone()))
-        .unwrap_or_else(|| format!("Python CLI が異常終了しました: {}", output.status));
-
-    AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
+    Err(AnalysisJobFailure {
         meta,
         stderr,
-        message,
-    }))
+        message: build_worker_response_message(
+            &response,
+            &worker_stderr_snapshot(&handle),
+            "Python worker が分析要求に失敗しました".to_string(),
+        ),
+    })
+}
+
+fn send_worker_request<T>(handle: &WorkerHandle, payload: &T) -> Result<WorkerResponse, String>
+where
+    T: Serialize,
+{
+    let mut connection = handle
+        .connection
+        .lock()
+        .map_err(|_| "worker 接続のロック取得に失敗しました".to_string())?;
+    write_framed_json(&mut connection.stdin, payload)?;
+    read_framed_json(&mut connection.stdout)
+}
+
+fn write_framed_json<T>(writer: &mut ChildStdin, payload: &T) -> Result<(), String>
+where
+    T: Serialize,
+{
+    let payload_bytes = serde_json::to_vec(payload)
+        .map_err(|error| format!("worker 要求 JSON の直列化に失敗しました: {error}"))?;
+    let payload_len = u32::try_from(payload_bytes.len())
+        .map_err(|_| "worker 要求 JSON が大きすぎます".to_string())?;
+    writer
+        .write_all(&payload_len.to_be_bytes())
+        .map_err(|error| format!("worker 要求長の送信に失敗しました: {error}"))?;
+    writer
+        .write_all(&payload_bytes)
+        .map_err(|error| format!("worker 要求本体の送信に失敗しました: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("worker 要求 flush に失敗しました: {error}"))
+}
+
+fn read_framed_json(reader: &mut BufReader<ChildStdout>) -> Result<WorkerResponse, String> {
+    let mut length_bytes = [0_u8; 4];
+    reader
+        .read_exact(&mut length_bytes)
+        .map_err(|error| format!("worker 応答長の読込に失敗しました: {error}"))?;
+    let payload_len = u32::from_be_bytes(length_bytes) as usize;
+    let mut payload_bytes = vec![0_u8; payload_len];
+    reader
+        .read_exact(&mut payload_bytes)
+        .map_err(|error| format!("worker 応答本体の読込に失敗しました: {error}"))?;
+    serde_json::from_slice(&payload_bytes)
+        .map_err(|error| format!("worker 応答 JSON の解析に失敗しました: {error}"))
+}
+
+fn build_worker_response_message(
+    response: &WorkerResponse,
+    stderr: &str,
+    fallback_message: String,
+) -> String {
+    if let Some(meta) = response.meta.as_ref() {
+        if !meta.error_summary.trim().is_empty() {
+            return meta.error_summary.clone();
+        }
+    }
+    if !response.message.trim().is_empty() {
+        return response.message.clone();
+    }
+    if !stderr.trim().is_empty() {
+        return stderr.to_string();
+    }
+    fallback_message
 }
 
 fn read_meta_json(path: &Path) -> Result<AnalysisMeta, String> {
