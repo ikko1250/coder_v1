@@ -17,6 +17,9 @@ pub(crate) struct AnalysisRecord {
     pub(crate) match_group_ids_text: String,
     pub(crate) match_group_count: String,
     pub(crate) annotated_token_count: String,
+    pub(crate) manual_annotation_count: String,
+    pub(crate) manual_annotation_pairs_text: String,
+    pub(crate) manual_annotation_namespaces_text: String,
 }
 
 #[derive(Clone, Debug)]

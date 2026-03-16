@@ -1,14 +1,19 @@
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, spawn_analysis_job, spawn_export_job,
-    AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure,
-    AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig, AnalysisRuntimeOverrides,
-    AnalysisWarningMessage,
+    resolve_annotation_csv_path, AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent,
+    AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
+    AnalysisRuntimeOverrides, AnalysisWarningMessage,
 };
 use crate::csv_loader::load_records;
 use crate::db::{
     fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
 };
 use crate::filter::{build_filter_options, display_filter_value};
+use crate::manual_annotation_store::{
+    append_manual_annotation_namespaces_text, append_manual_annotation_pairs_text,
+    append_manual_annotation_row, build_manual_annotation_pair, first_manual_annotation_line,
+    increment_manual_annotation_count, ManualAnnotationAppendRow,
+};
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
 use eframe::egui;
@@ -75,6 +80,11 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
         value: tree_category_value,
     },
     TreeColumnSpec {
+        header: "annotation",
+        build_column: build_tree_annotation_column,
+        value: tree_annotation_value,
+    },
+    TreeColumnSpec {
         header: "強調token数",
         build_column: build_tree_annotated_token_count_column,
         value: tree_annotated_token_count_value,
@@ -91,6 +101,7 @@ struct RunningAnalysisJob {
 struct AnalysisExportContext {
     db_path: PathBuf,
     filter_config_path: PathBuf,
+    annotation_csv_path: PathBuf,
 }
 
 enum AnalysisJobStatus {
@@ -159,6 +170,7 @@ impl AnalysisRuntimeState {
 struct AnalysisRequestState {
     python_path_override: Option<PathBuf>,
     filter_config_path_override: Option<PathBuf>,
+    annotation_csv_path_override: Option<PathBuf>,
     settings_window_open: bool,
 }
 
@@ -167,8 +179,21 @@ impl AnalysisRequestState {
         AnalysisRuntimeOverrides {
             python_path: self.python_path_override.clone(),
             filter_config_path: self.filter_config_path_override.clone(),
+            annotation_csv_path: self.annotation_csv_path_override.clone(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct AnnotationEditorState {
+    namespace_input: String,
+    key_input: String,
+    value_input: String,
+    tagged_by_input: String,
+    confidence_input: String,
+    note_input: String,
+    status_message: Option<String>,
+    status_is_error: bool,
 }
 
 impl SelectionChange {
@@ -227,6 +252,7 @@ pub(crate) struct App {
     pending_tree_scroll: Option<TreeScrollRequest>,
     pub(crate) error_message: Option<String>,
     cached_segments: Option<(usize, Vec<TextSegment>)>,
+    annotation_editor_state: AnnotationEditorState,
 }
 
 impl App {
@@ -247,6 +273,7 @@ impl App {
             pending_tree_scroll: None,
             error_message: None,
             cached_segments: None,
+            annotation_editor_state: AnnotationEditorState::default(),
         };
         app.try_cleanup_analysis_jobs();
         if let Some(csv_path) = initial_csv_path {
@@ -280,6 +307,8 @@ impl App {
             ScrollBehavior::AlignMin,
         ));
         self.error_message = None;
+        self.annotation_editor_state.status_message = None;
+        self.annotation_editor_state.status_is_error = false;
     }
 
     #[allow(dead_code)]
@@ -328,6 +357,7 @@ impl App {
         if selection_changed {
             self.selected_row = next;
             self.cached_segments = None;
+            self.clear_annotation_editor_status();
         }
 
         let next_scroll_request = build_tree_scroll_request(next, change.scroll_behavior);
@@ -409,6 +439,142 @@ impl App {
         let filtered_idx = self.selected_row?;
         let record_idx = *self.filtered_indices.get(filtered_idx)?;
         self.all_records.get(record_idx)
+    }
+
+    fn selected_record_index(&self) -> Option<usize> {
+        let filtered_idx = self.selected_row?;
+        self.filtered_indices.get(filtered_idx).copied()
+    }
+
+    fn selected_record_mut(&mut self) -> Option<&mut AnalysisRecord> {
+        let record_idx = self.selected_record_index()?;
+        self.all_records.get_mut(record_idx)
+    }
+
+    fn resolved_annotation_csv_path(&self) -> Result<PathBuf, String> {
+        resolve_annotation_csv_path(&self.analysis_request_state.runtime_overrides())
+    }
+
+    fn annotation_save_enabled(&self) -> bool {
+        self.selected_record().is_some() && self.analysis_runtime_state.current_job.is_none()
+    }
+
+    fn clear_annotation_editor_status(&mut self) {
+        self.annotation_editor_state.status_message = None;
+        self.annotation_editor_state.status_is_error = false;
+    }
+
+    fn clear_annotation_editor_inputs(&mut self) {
+        self.annotation_editor_state.value_input.clear();
+        self.annotation_editor_state.confidence_input.clear();
+        self.annotation_editor_state.note_input.clear();
+    }
+
+    fn build_annotation_append_row(&self) -> Result<ManualAnnotationAppendRow, String> {
+        let record = self
+            .selected_record()
+            .ok_or_else(|| "レコードが選択されていません".to_string())?;
+
+        let paragraph_id = record.paragraph_id.trim();
+        if paragraph_id.is_empty() {
+            return Err("paragraph_id が空のため annotation を保存できません".to_string());
+        }
+
+        let namespace = self.annotation_editor_state.namespace_input.trim();
+        if namespace.is_empty() {
+            return Err("namespace を入力してください".to_string());
+        }
+
+        let key = self.annotation_editor_state.key_input.trim();
+        if key.is_empty() {
+            return Err("key を入力してください".to_string());
+        }
+
+        let value = self.annotation_editor_state.value_input.trim();
+        if value.is_empty() {
+            return Err("value を入力してください".to_string());
+        }
+
+        Ok(ManualAnnotationAppendRow {
+            target_type: "paragraph".to_string(),
+            target_id: paragraph_id.to_string(),
+            label_namespace: namespace.to_string(),
+            label_key: key.to_string(),
+            label_value: value.to_string(),
+            tagged_by: self.annotation_editor_state.tagged_by_input.trim().to_string(),
+            tagged_at: String::new(),
+            confidence: self.annotation_editor_state.confidence_input.trim().to_string(),
+            note: self.annotation_editor_state.note_input.trim().to_string(),
+        })
+    }
+
+    fn apply_saved_annotation_to_selected_record(
+        &mut self,
+        annotation_row: &ManualAnnotationAppendRow,
+    ) -> Result<(), String> {
+        let pair = build_manual_annotation_pair(
+            &annotation_row.label_namespace,
+            &annotation_row.label_key,
+            &annotation_row.label_value,
+        );
+        {
+            let updated_record = self
+                .selected_record_mut()
+                .ok_or_else(|| "レコードが選択されていません".to_string())?;
+            updated_record.manual_annotation_count =
+                increment_manual_annotation_count(&updated_record.manual_annotation_count);
+            updated_record.manual_annotation_pairs_text = append_manual_annotation_pairs_text(
+                &updated_record.manual_annotation_pairs_text,
+                &pair,
+            );
+            updated_record.manual_annotation_namespaces_text =
+                append_manual_annotation_namespaces_text(
+                    &updated_record.manual_annotation_namespaces_text,
+                    &annotation_row.label_namespace,
+                );
+        }
+        self.filter_options = build_filter_options(&self.all_records);
+        Ok(())
+    }
+
+    fn save_annotation_for_selected_record(&mut self) {
+        self.clear_annotation_editor_status();
+        let annotation_row = match self.build_annotation_append_row() {
+            Ok(annotation_row) => annotation_row,
+            Err(error) => {
+                self.annotation_editor_state.status_message = Some(error);
+                self.annotation_editor_state.status_is_error = true;
+                return;
+            }
+        };
+
+        let annotation_csv_path = match self.resolved_annotation_csv_path() {
+            Ok(annotation_csv_path) => annotation_csv_path,
+            Err(error) => {
+                self.annotation_editor_state.status_message = Some(error);
+                self.annotation_editor_state.status_is_error = true;
+                return;
+            }
+        };
+
+        if let Err(error) = append_manual_annotation_row(&annotation_csv_path, &annotation_row) {
+            self.annotation_editor_state.status_message = Some(error);
+            self.annotation_editor_state.status_is_error = true;
+            return;
+        }
+
+        if let Err(error) = self.apply_saved_annotation_to_selected_record(&annotation_row) {
+            self.annotation_editor_state.status_message = Some(error);
+            self.annotation_editor_state.status_is_error = true;
+            return;
+        }
+
+        self.clear_annotation_editor_inputs();
+        self.annotation_editor_state.status_message = Some(format!(
+            "annotation を追記しました: {}",
+            annotation_csv_path.display()
+        ));
+        self.annotation_editor_state.status_is_error = false;
     }
 
     fn apply_filters(&mut self) {
@@ -545,6 +711,7 @@ impl App {
         let (job_id, receiver) = spawn_export_job(AnalysisExportRequest {
             db_path: export_context.db_path,
             filter_config_path: export_context.filter_config_path,
+            annotation_csv_path: export_context.annotation_csv_path,
             output_csv_path,
             runtime,
         });
@@ -603,9 +770,17 @@ impl App {
         }
         self.analysis_runtime_state.last_warnings = warnings;
         self.analysis_runtime_state.warning_window_open = false;
+        let annotation_csv_path = self
+            .analysis_runtime_state
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.annotation_csv_path.clone())
+            .or_else(|| self.resolved_annotation_csv_path().ok())
+            .unwrap_or_default();
         self.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
             db_path: PathBuf::from(&success.meta.db_path),
             filter_config_path: PathBuf::from(&success.meta.filter_config_path),
+            annotation_csv_path,
         });
         self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
     }
@@ -1020,6 +1195,10 @@ impl App {
                     .as_ref()
                     .map(|runtime| runtime.filter_config_path.display().to_string())
                     .unwrap_or_else(|| "-".to_string());
+                let annotation_label = self
+                    .resolved_annotation_csv_path()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| "-".to_string());
                 let db_label = self.db_viewer_state.db_path.display().to_string();
 
                 if matches!(
@@ -1062,6 +1241,7 @@ impl App {
 
                 ui.label(format!("DB: {db_label}"));
                 ui.label(format!("条件: {filter_config_label}"));
+                ui.label(format!("Annotation: {annotation_label}"));
                 ui.label(format!("Python: {python_label}"));
                 if can_export {
                     ui.label("保存対象は直近分析結果の全件です");
@@ -1094,8 +1274,10 @@ impl App {
         let mut window_open = self.analysis_request_state.settings_window_open;
         let mut selected_python_path = None;
         let mut selected_filter_config_path = None;
+        let mut selected_annotation_csv_path = None;
         let mut clear_python_override = false;
         let mut clear_filter_config_override = false;
+        let mut clear_annotation_csv_override = false;
         let settings_enabled = self.analysis_runtime_state.current_job.is_none();
         let python_override_label = self
             .analysis_request_state
@@ -1109,6 +1291,12 @@ impl App {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "既定値 (asset/cooccurrence-conditions.json)".to_string());
+        let annotation_override_label = self
+            .analysis_request_state
+            .annotation_csv_path_override
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "既定値 (asset/manual-annotations.csv)".to_string());
         let resolved_python_label = self
             .analysis_runtime_state
             .runtime
@@ -1121,6 +1309,10 @@ impl App {
             .as_ref()
             .map(|runtime| runtime.filter_config_path.display().to_string())
             .unwrap_or_else(|| "-".to_string());
+        let resolved_annotation_label = self
+            .resolved_annotation_csv_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("解決失敗: {error}"));
         let status_text = self.analysis_runtime_state.status_text();
 
         egui::Window::new("分析設定")
@@ -1185,6 +1377,33 @@ impl App {
                 ui.label(format!("現在の解決結果: {resolved_filter_label}"));
                 ui.separator();
 
+                ui.label("annotation CSV");
+                ui.horizontal(|ui| {
+                    let mut label = annotation_override_label.clone();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut label)
+                            .desired_width(460.0)
+                            .interactive(false),
+                    );
+                    if ui
+                        .add_enabled(settings_enabled, egui::Button::new("選択"))
+                        .clicked()
+                    {
+                        selected_annotation_csv_path = rfd::FileDialog::new()
+                            .add_filter("CSV files", &["csv"])
+                            .set_file_name("manual-annotations.csv")
+                            .save_file();
+                    }
+                    if ui
+                        .add_enabled(settings_enabled, egui::Button::new("既定値"))
+                        .clicked()
+                    {
+                        clear_annotation_csv_override = true;
+                    }
+                });
+                ui.label(format!("現在の解決結果: {resolved_annotation_label}"));
+                ui.separator();
+
                 ui.label(format!("状態: {status_text}"));
                 if !settings_enabled {
                     ui.label("分析ジョブ実行中は設定を変更できません。");
@@ -1208,6 +1427,14 @@ impl App {
         }
         if clear_filter_config_override {
             self.analysis_request_state.filter_config_path_override = None;
+            runtime_changed = true;
+        }
+        if let Some(path) = selected_annotation_csv_path {
+            self.analysis_request_state.annotation_csv_path_override = Some(path);
+            runtime_changed = true;
+        }
+        if clear_annotation_csv_override {
+            self.analysis_request_state.annotation_csv_path_override = None;
             runtime_changed = true;
         }
 
@@ -1438,6 +1665,10 @@ impl App {
             ui.label(format!("conditions: {}", record.matched_condition_ids_text));
             ui.label(format!("match_groups: {}", record.match_group_ids_text));
             ui.label(format!("annotated_tokens: {}", record.annotated_token_count));
+            ui.label(format!(
+                "manual_annotations: {}",
+                record.manual_annotation_count
+            ));
 
             ui.separator();
 
@@ -1464,13 +1695,111 @@ impl App {
                 };
                 job.append(&seg.text, 0.0, format);
             }
+            let annotation_summary = if record.manual_annotation_pairs_text.trim().is_empty() {
+                "annotation なし".to_string()
+            } else {
+                record.manual_annotation_pairs_text.clone()
+            };
+            let annotation_path_label = self
+                .resolved_annotation_csv_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| format!("解決失敗: {error}"));
+            let annotation_save_enabled = self.annotation_save_enabled();
 
-            ScrollArea::vertical()
-                .id_salt("detail_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add(egui::Label::new(job).wrap());
+            egui::TopBottomPanel::bottom("annotation_editor_panel")
+                .resizable(false)
+                .default_height(230.0)
+                .min_height(200.0)
+                .show_inside(ui, |ui| {
+                    ui.group(|ui| {
+                        ui.label(RichText::new("annotation 追記").strong());
+                        ui.label(format!("保存先: {annotation_path_label}"));
+                        ui.label(format!(
+                            "現在件数: {} / namespaces: {}",
+                            record.manual_annotation_count,
+                            if record.manual_annotation_namespaces_text.trim().is_empty() {
+                                "(なし)"
+                            } else {
+                                &record.manual_annotation_namespaces_text
+                            }
+                        ));
+
+                        ScrollArea::vertical()
+                            .id_salt("annotation_summary_scroll")
+                            .max_height(56.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(annotation_summary.as_str()).wrap());
+                            });
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label("namespace");
+                            ui.text_edit_singleline(
+                                &mut self.annotation_editor_state.namespace_input,
+                            );
+                            ui.label("key");
+                            ui.text_edit_singleline(&mut self.annotation_editor_state.key_input);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("tagged_by");
+                            ui.text_edit_singleline(
+                                &mut self.annotation_editor_state.tagged_by_input,
+                            );
+                            ui.label("confidence");
+                            ui.text_edit_singleline(
+                                &mut self.annotation_editor_state.confidence_input,
+                            );
+                        });
+                        ui.label("value");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.annotation_editor_state.value_input)
+                                .desired_rows(2),
+                        );
+                        ui.label("note");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.annotation_editor_state.note_input)
+                                .desired_rows(2),
+                        );
+
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    annotation_save_enabled,
+                                    egui::Button::new("追記"),
+                                )
+                                .clicked()
+                            {
+                                self.save_annotation_for_selected_record();
+                            }
+                            if ui.button("入力クリア").clicked() {
+                                self.clear_annotation_editor_inputs();
+                                self.clear_annotation_editor_status();
+                            }
+                            if !annotation_save_enabled {
+                                ui.label("分析ジョブ実行中は保存できません。");
+                            }
+                        });
+
+                        if let Some(status_message) = &self.annotation_editor_state.status_message {
+                            let status_color = if self.annotation_editor_state.status_is_error {
+                                Color32::from_rgb(200, 64, 64)
+                            } else {
+                                Color32::from_rgb(70, 130, 70)
+                            };
+                            ui.colored_label(status_color, status_message);
+                        }
+                    });
                 });
+
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("detail_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(job).wrap());
+                    });
+            });
         } else {
             self.draw_db_viewer_button(ui, false);
             ui.add_space(6.0);
@@ -1499,6 +1828,10 @@ fn build_tree_category_column() -> Column {
     Column::remainder().at_least(140.0).clip(true)
 }
 
+fn build_tree_annotation_column() -> Column {
+    Column::initial(220.0).at_least(140.0).clip(true)
+}
+
 fn build_tree_annotated_token_count_column() -> Column {
     Column::initial(92.0).at_least(72.0).clip(true)
 }
@@ -1521,6 +1854,10 @@ fn tree_ordinance_value(record: &AnalysisRecord) -> String {
 
 fn tree_category_value(record: &AnalysisRecord) -> String {
     record.matched_categories_text.clone()
+}
+
+fn tree_annotation_value(record: &AnalysisRecord) -> String {
+    first_manual_annotation_line(&record.manual_annotation_pairs_text)
 }
 
 fn tree_annotated_token_count_value(record: &AnalysisRecord) -> String {

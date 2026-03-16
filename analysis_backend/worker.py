@@ -175,6 +175,10 @@ def _handle_analyze_request(
     job_id = str(request.get("jobId", "")).strip()
     db_path = Path(str(request.get("dbPath", ""))).expanduser()
     filter_config_path = Path(str(request.get("filterConfigPath", ""))).expanduser()
+    raw_annotation_csv_path = str(request.get("annotationCsvPath", "")).strip()
+    annotation_csv_path = (
+        Path(raw_annotation_csv_path).expanduser() if raw_annotation_csv_path else None
+    )
     limit_rows = request.get("limitRows")
     force_reload = bool(request.get("forceReload", False))
 
@@ -196,7 +200,7 @@ def _handle_analyze_request(
             job_id=job_id,
             db_path=str(db_path),
             filter_config_path=str(filter_config_path),
-            annotation_csv_path=None,
+            annotation_csv_path=str(annotation_csv_path) if annotation_csv_path else None,
             output_dir=temp_dir,
             output_csv_path=None,
             output_meta_json_path=None,
@@ -231,6 +235,10 @@ def _handle_export_csv_request(
     job_id = str(request.get("jobId", "")).strip()
     db_path = Path(str(request.get("dbPath", ""))).expanduser()
     filter_config_path = Path(str(request.get("filterConfigPath", ""))).expanduser()
+    raw_annotation_csv_path = str(request.get("annotationCsvPath", "")).strip()
+    annotation_csv_path = (
+        Path(raw_annotation_csv_path).expanduser() if raw_annotation_csv_path else None
+    )
     output_path = Path(str(request.get("outputPath", ""))).expanduser().resolve()
     force_reload = bool(request.get("forceReload", False))
 
@@ -254,7 +262,7 @@ def _handle_export_csv_request(
             job_id=job_id,
             db_path=str(db_path),
             filter_config_path=str(filter_config_path),
-            annotation_csv_path=None,
+            annotation_csv_path=str(annotation_csv_path) if annotation_csv_path else None,
             output_dir=temp_dir,
             output_csv_path=str(output_path),
             output_meta_json_path=str(meta_json_path),

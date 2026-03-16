@@ -74,6 +74,12 @@ pub(crate) fn load_records(path: &PathBuf) -> Result<Vec<AnalysisRecord>, String
             match_group_ids_text: get(&row, "match_group_ids_text"),
             match_group_count: get(&row, "match_group_count"),
             annotated_token_count: get(&row, "annotated_token_count"),
+            manual_annotation_count: {
+                let value = get(&row, "manual_annotation_count");
+                if value.is_empty() { "0".to_string() } else { value }
+            },
+            manual_annotation_pairs_text: get(&row, "manual_annotation_pairs_text"),
+            manual_annotation_namespaces_text: get(&row, "manual_annotation_namespaces_text"),
         });
     }
 

@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_FILTER_CONFIG_RELATIVE_PATH: &str = "asset/cooccurrence-conditions.json";
+const DEFAULT_ANNOTATION_CSV_RELATIVE_PATH: &str = "asset/manual-annotations.csv";
 const DEFAULT_SCRIPT_RELATIVE_PATH: &str = "run-analysis.py";
 const DEFAULT_JOBS_RELATIVE_PATH: &str = "runtime/jobs";
 const JOB_HISTORY_KEEP_COUNT: usize = 5;
@@ -22,6 +23,7 @@ const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) struct AnalysisRuntimeOverrides {
     pub(crate) python_path: Option<PathBuf>,
     pub(crate) filter_config_path: Option<PathBuf>,
+    pub(crate) annotation_csv_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +34,7 @@ pub(crate) struct AnalysisRuntimeConfig {
     pub(crate) project_root: PathBuf,
     pub(crate) script_path: PathBuf,
     pub(crate) filter_config_path: PathBuf,
+    pub(crate) annotation_csv_path: PathBuf,
     pub(crate) jobs_root: PathBuf,
 }
 
@@ -45,6 +48,7 @@ pub(crate) struct AnalysisJobRequest {
 pub(crate) struct AnalysisExportRequest {
     pub(crate) db_path: PathBuf,
     pub(crate) filter_config_path: PathBuf,
+    pub(crate) annotation_csv_path: PathBuf,
     pub(crate) output_csv_path: PathBuf,
     pub(crate) runtime: AnalysisRuntimeConfig,
 }
@@ -165,19 +169,38 @@ pub(crate) struct AnalysisMeta {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct AnalysisJsonRecord {
+    #[serde(default)]
     paragraph_id: String,
+    #[serde(default)]
     document_id: String,
+    #[serde(default)]
     municipality_name: String,
+    #[serde(default)]
     ordinance_or_rule: String,
+    #[serde(default)]
     doc_type: String,
+    #[serde(default)]
     sentence_count: String,
+    #[serde(default)]
     paragraph_text: String,
+    #[serde(default)]
     paragraph_text_tagged: String,
+    #[serde(default)]
     matched_condition_ids_text: String,
+    #[serde(default)]
     matched_categories_text: String,
+    #[serde(default)]
     match_group_ids_text: String,
+    #[serde(default)]
     match_group_count: String,
+    #[serde(default)]
     annotated_token_count: String,
+    #[serde(default)]
+    manual_annotation_count: String,
+    #[serde(default)]
+    manual_annotation_pairs_text: String,
+    #[serde(default)]
+    manual_annotation_namespaces_text: String,
 }
 
 impl AnalysisJsonRecord {
@@ -197,6 +220,9 @@ impl AnalysisJsonRecord {
             match_group_ids_text: self.match_group_ids_text,
             match_group_count: self.match_group_count,
             annotated_token_count: self.annotated_token_count,
+            manual_annotation_count: self.manual_annotation_count,
+            manual_annotation_pairs_text: self.manual_annotation_pairs_text,
+            manual_annotation_namespaces_text: self.manual_annotation_namespaces_text,
         }
     }
 }
@@ -252,6 +278,7 @@ struct WorkerAnalyzeRequest {
     job_id: String,
     db_path: String,
     filter_config_path: String,
+    annotation_csv_path: String,
     limit_rows: Option<i64>,
     force_reload: bool,
 }
@@ -264,6 +291,7 @@ struct WorkerExportRequest {
     job_id: String,
     db_path: String,
     filter_config_path: String,
+    annotation_csv_path: String,
     output_path: String,
     force_reload: bool,
 }
@@ -303,6 +331,7 @@ pub(crate) fn build_runtime_config(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let filter_config_path = resolve_filter_config_path(overrides)?;
+    let annotation_csv_path = resolve_annotation_csv_path(overrides)?;
     let jobs_root = project_root.join(DEFAULT_JOBS_RELATIVE_PATH);
     let (python_command, python_args, python_label) =
         resolve_python_command(&project_root, overrides)?;
@@ -314,6 +343,7 @@ pub(crate) fn build_runtime_config(
         project_root,
         script_path,
         filter_config_path,
+        annotation_csv_path,
         jobs_root,
     })
 }
@@ -396,6 +426,7 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
         job_id,
         db_path: request.db_path.display().to_string(),
         filter_config_path: request.runtime.filter_config_path.display().to_string(),
+        annotation_csv_path: request.runtime.annotation_csv_path.display().to_string(),
         limit_rows: None,
         force_reload: false,
     };
@@ -451,6 +482,7 @@ fn run_export_job(job_id: String, request: AnalysisExportRequest) -> AnalysisJob
         job_id,
         db_path: request.db_path.display().to_string(),
         filter_config_path: request.filter_config_path.display().to_string(),
+        annotation_csv_path: request.annotation_csv_path.display().to_string(),
         output_path: request.output_csv_path.display().to_string(),
         force_reload: false,
     };
@@ -1030,7 +1062,10 @@ mod tests {
       "matched_categories_text": "抑制区域",
       "match_group_ids_text": "",
       "match_group_count": "1",
-      "annotated_token_count": "2"
+      "annotated_token_count": "2",
+      "manual_annotation_count": "1",
+      "manual_annotation_pairs_text": "zoning:zone_strength=suppression",
+      "manual_annotation_namespaces_text": "zoning"
     }
   ]
 }"#;
@@ -1049,6 +1084,7 @@ mod tests {
         assert_eq!(first_record.paragraph_id, "1");
         assert_eq!(first_record.municipality_name, "札幌市");
         assert_eq!(first_record.annotated_token_count, "2");
+        assert_eq!(first_record.manual_annotation_count, "1");
     }
 }
 
@@ -1077,6 +1113,22 @@ fn resolve_filter_config_path(overrides: &AnalysisRuntimeOverrides) -> Result<Pa
             "条件 JSON が見つかりません: {DEFAULT_FILTER_CONFIG_RELATIVE_PATH}"
         )
     })
+}
+
+pub(crate) fn resolve_annotation_csv_path(
+    overrides: &AnalysisRuntimeOverrides,
+) -> Result<PathBuf, String> {
+    if let Some(path) = overrides.annotation_csv_path.as_ref() {
+        return absolutize_path(path);
+    }
+
+    let script_path = resolve_project_file(DEFAULT_SCRIPT_RELATIVE_PATH)
+        .ok_or_else(|| format!("分析スクリプトが見つかりません: {DEFAULT_SCRIPT_RELATIVE_PATH}"))?;
+    let project_root = script_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    Ok(project_root.join(DEFAULT_ANNOTATION_CSV_RELATIVE_PATH))
 }
 
 fn resolve_python_command(
@@ -1175,4 +1227,14 @@ fn resolve_project_path(relative_path: &str) -> Option<PathBuf> {
     }
 
     Some(relative_path)
+}
+
+fn absolutize_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    env::current_dir()
+        .map(|current_dir| current_dir.join(path))
+        .map_err(|error| format!("カレントディレクトリを解決できません: {error}"))
 }
