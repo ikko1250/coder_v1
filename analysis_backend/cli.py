@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
+from typing import Any
 
 import polars as pl
 
@@ -36,6 +37,12 @@ def _build_parser() -> ArgumentParser:
         default=None,
         help="Optional LIMIT for analysis_tokens reads.",
     )
+    parser.add_argument(
+        "--output-format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Output mode. 'csv' writes result.csv, 'json' emits GUI DTO payload to stdout.",
+    )
     return parser
 
 
@@ -60,6 +67,12 @@ def _write_meta_json(output_meta_json_path: Path, payload: dict[str, object]) ->
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _emit_json_payload(payload: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def _build_failure_payload(
@@ -87,6 +100,16 @@ def _build_failure_payload(
         "selectedParagraphCount": 0,
         "warningMessages": warning_messages,
         "errorSummary": error_summary,
+    }
+
+
+def _build_json_response_payload(
+    meta: dict[str, object],
+    records: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    return {
+        "meta": meta,
+        "records": records or [],
     }
 
 
@@ -149,6 +172,19 @@ def _build_error_summary_from_result_issues(issues: list[object], default_messag
     return default_message
 
 
+def _validate_selected_count(
+    *,
+    expected_selected_count: int,
+    records: list[dict[str, str]],
+) -> str | None:
+    if expected_selected_count != len(records):
+        return (
+            "selectedParagraphCount mismatch: "
+            f"meta={expected_selected_count}, records={len(records)}"
+        )
+    return None
+
+
 def _filter_sentences_for_tokens(
     analysis_tokens_df: pl.DataFrame,
     analysis_sentences_df: pl.DataFrame,
@@ -183,17 +219,16 @@ def run_analysis_job(args: Namespace) -> int:
     try:
         from .analysis_core import (
             build_condition_hit_result,
-            build_reconstructed_paragraphs_export_df,
             build_rendered_paragraphs_df,
             build_token_annotations_df,
             build_tokens_with_position_df,
             enrich_reconstructed_paragraphs_result,
-            load_filter_config,
             load_filter_config_result,
             read_analysis_sentences_result,
             read_analysis_tokens_result,
             select_target_ids_by_cooccurrence_conditions,
         )
+        from .export_formatter import build_gui_records, build_reconstructed_paragraphs_export_df
 
         load_filter_config_result_value = load_filter_config_result(filter_config_path)
         filter_config = load_filter_config_result_value.filter_config
@@ -326,7 +361,36 @@ def run_analysis_job(args: Namespace) -> int:
         reconstructed_paragraphs_export_df = build_reconstructed_paragraphs_export_df(
             reconstructed_paragraphs_df=reconstructed_paragraphs_result.data_frame,
         )
-        reconstructed_paragraphs_export_df.write_csv(output_csv_path)
+        gui_records = build_gui_records(reconstructed_paragraphs_result.data_frame)
+        selected_paragraph_count = len(target_paragraph_ids)
+        selected_count_error = _validate_selected_count(
+            expected_selected_count=selected_paragraph_count,
+            records=gui_records,
+        )
+        if selected_count_error is not None:
+            failure_payload = _build_failure_payload(
+                job_id=args.job_id,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+                duration_seconds=round(
+                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                    6,
+                ),
+                db_path=db_path,
+                filter_config_path=filter_config_path,
+                output_csv_path=output_csv_path,
+                warning_messages=_serialize_warning_messages(
+                    load_filter_config_result_value.issues + condition_hit_result.warning_messages
+                ),
+                error_summary=selected_count_error,
+            )
+            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+            if args.output_format == "json":
+                _emit_json_payload(_build_json_response_payload(meta=failure_payload))
+            print(selected_count_error, file=sys.stderr)
+            return 1
+        if args.output_format == "csv":
+            reconstructed_paragraphs_export_df.write_csv(output_csv_path)
 
         finished_at = _utc_now_iso()
         duration_seconds = round(
@@ -345,11 +409,19 @@ def run_analysis_job(args: Namespace) -> int:
             filter_config_path=filter_config_path,
             output_csv_path=output_csv_path,
             target_paragraph_count=paragraph_match_summary_df.height,
-            selected_paragraph_count=len(target_paragraph_ids),
+            selected_paragraph_count=selected_paragraph_count,
             warning_messages=serialized_warning_messages,
         )
         _write_meta_json(output_meta_json_path=output_meta_json_path, payload=success_payload)
-        print(json.dumps(success_payload, ensure_ascii=False))
+        if args.output_format == "json":
+            _emit_json_payload(
+                _build_json_response_payload(
+                    meta=success_payload,
+                    records=gui_records,
+                )
+            )
+        else:
+            print(json.dumps(success_payload, ensure_ascii=False))
         return 0
     except Exception as exc:
         finished_at = _utc_now_iso()
@@ -376,6 +448,8 @@ def run_analysis_job(args: Namespace) -> int:
                 file=sys.stderr,
             )
 
+        if args.output_format == "json":
+            _emit_json_payload(_build_json_response_payload(meta=failure_payload))
         print(str(exc), file=sys.stderr)
         return 1
 
