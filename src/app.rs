@@ -1,7 +1,7 @@
 use crate::analysis_runner::{
-    build_runtime_config, cleanup_job_directories, spawn_analysis_job, AnalysisJobEvent,
-    AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
-    AnalysisRuntimeOverrides,
+    build_runtime_config, cleanup_job_directories, spawn_analysis_job, spawn_export_job,
+    AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure,
+    AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig, AnalysisRuntimeOverrides,
     AnalysisWarningMessage,
 };
 use crate::csv_loader::load_records;
@@ -87,9 +87,16 @@ struct RunningAnalysisJob {
     receiver: Receiver<AnalysisJobEvent>,
 }
 
+#[derive(Clone)]
+struct AnalysisExportContext {
+    db_path: PathBuf,
+    filter_config_path: PathBuf,
+}
+
 enum AnalysisJobStatus {
     Idle,
-    Running { job_id: String },
+    RunningAnalysis { job_id: String },
+    RunningExport { job_id: String },
     Succeeded { summary: String },
     Failed { summary: String },
 }
@@ -100,6 +107,7 @@ struct AnalysisRuntimeState {
     status: AnalysisJobStatus,
     last_warnings: Vec<AnalysisWarningMessage>,
     warning_window_open: bool,
+    last_export_context: Option<AnalysisExportContext>,
 }
 
 impl AnalysisRuntimeState {
@@ -111,6 +119,7 @@ impl AnalysisRuntimeState {
                 status: AnalysisJobStatus::Idle,
                 last_warnings: Vec::new(),
                 warning_window_open: false,
+                last_export_context: None,
             },
             Err(error) => Self {
                 runtime: None,
@@ -118,6 +127,7 @@ impl AnalysisRuntimeState {
                 status: AnalysisJobStatus::Failed { summary: error },
                 last_warnings: Vec::new(),
                 warning_window_open: false,
+                last_export_context: None,
             },
         }
     }
@@ -129,7 +139,8 @@ impl AnalysisRuntimeState {
     fn status_text(&self) -> String {
         match &self.status {
             AnalysisJobStatus::Idle => "分析待機中".to_string(),
-            AnalysisJobStatus::Running { job_id } => format!("分析実行中: {job_id}"),
+            AnalysisJobStatus::RunningAnalysis { job_id } => format!("分析実行中: {job_id}"),
+            AnalysisJobStatus::RunningExport { job_id } => format!("CSV 保存中: {job_id}"),
             AnalysisJobStatus::Succeeded { summary } => format!("分析成功: {summary}"),
             AnalysisJobStatus::Failed { summary } => format!("分析失敗: {summary}"),
         }
@@ -137,6 +148,10 @@ impl AnalysisRuntimeState {
 
     fn has_warning_details(&self) -> bool {
         !self.last_warnings.is_empty()
+    }
+
+    fn can_export(&self) -> bool {
+        self.runtime.is_some() && self.current_job.is_none() && self.last_export_context.is_some()
     }
 }
 
@@ -244,6 +259,7 @@ impl App {
         match load_records(&path) {
             Ok(records) => {
                 self.replace_records(records, path.display().to_string(), Some(path));
+                self.analysis_runtime_state.last_export_context = None;
             }
             Err(e) => {
                 self.error_message = Some(e);
@@ -514,7 +530,35 @@ impl App {
         self.analysis_runtime_state.last_warnings.clear();
         self.analysis_runtime_state.warning_window_open = false;
         self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-        self.analysis_runtime_state.status = AnalysisJobStatus::Running { job_id };
+        self.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis { job_id };
+        Ok(())
+    }
+
+    fn start_export_job(&mut self, output_csv_path: PathBuf) -> Result<(), String> {
+        if self.analysis_runtime_state.current_job.is_some() {
+            return Err("分析ジョブは既に実行中です".to_string());
+        }
+
+        let runtime = self
+            .analysis_runtime_state
+            .runtime
+            .clone()
+            .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
+        let export_context = self
+            .analysis_runtime_state
+            .last_export_context
+            .clone()
+            .ok_or_else(|| "保存対象の分析結果がありません".to_string())?;
+
+        let (job_id, receiver) = spawn_export_job(AnalysisExportRequest {
+            db_path: export_context.db_path,
+            filter_config_path: export_context.filter_config_path,
+            output_csv_path,
+            runtime,
+        });
+
+        self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
+        self.analysis_runtime_state.status = AnalysisJobStatus::RunningExport { job_id };
         Ok(())
     }
 
@@ -524,10 +568,18 @@ impl App {
         };
 
         match running_job.receiver.try_recv() {
-            Ok(AnalysisJobEvent::Completed(result)) => {
+            Ok(AnalysisJobEvent::AnalysisCompleted(result)) => {
                 self.analysis_runtime_state.current_job = None;
                 match result {
                     Ok(success) => self.handle_analysis_success(success),
+                    Err(failure) => self.handle_analysis_failure(failure),
+                }
+                ctx.request_repaint();
+            }
+            Ok(AnalysisJobEvent::ExportCompleted(result)) => {
+                self.analysis_runtime_state.current_job = None;
+                match result {
+                    Ok(success) => self.handle_export_success(success),
                     Err(failure) => self.handle_analysis_failure(failure),
                 }
                 ctx.request_repaint();
@@ -559,7 +611,24 @@ impl App {
         }
         self.analysis_runtime_state.last_warnings = warnings;
         self.analysis_runtime_state.warning_window_open = false;
+        self.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
+            db_path: PathBuf::from(&success.meta.db_path),
+            filter_config_path: PathBuf::from(&success.meta.filter_config_path),
+        });
         self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    }
+
+    fn handle_export_success(&mut self, success: AnalysisExportSuccess) {
+        self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded {
+            summary: format!(
+                "CSV 保存完了: {}",
+                success.output_csv_path.display()
+            ),
+        };
+        self.error_message = Some(format!(
+            "CSV を保存しました。\n\n保存先:\n{}",
+            success.output_csv_path.display()
+        ));
     }
 
     fn handle_analysis_failure(&mut self, failure: AnalysisJobFailure) {
@@ -945,6 +1014,7 @@ impl App {
 
             ui.horizontal_wrapped(|ui| {
                 let can_start = self.analysis_runtime_state.can_start();
+                let can_export = self.analysis_runtime_state.can_export();
                 let settings_enabled = self.analysis_runtime_state.current_job.is_none();
                 let python_label = self
                     .analysis_runtime_state
@@ -960,7 +1030,10 @@ impl App {
                     .unwrap_or_else(|| "-".to_string());
                 let db_label = self.db_viewer_state.db_path.display().to_string();
 
-                if matches!(self.analysis_runtime_state.status, AnalysisJobStatus::Running { .. }) {
+                if matches!(
+                    self.analysis_runtime_state.status,
+                    AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. }
+                ) {
                     ui.add(egui::Spinner::new());
                 }
 
@@ -974,6 +1047,21 @@ impl App {
                 }
 
                 if ui
+                    .add_enabled(can_export, egui::Button::new("CSV保存(全件)"))
+                    .clicked()
+                {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("CSV files", &["csv"])
+                        .set_file_name("analysis-result.csv")
+                        .save_file()
+                    {
+                        if let Err(error) = self.start_export_job(path) {
+                            self.error_message = Some(error);
+                        }
+                    }
+                }
+
+                if ui
                     .add_enabled(settings_enabled, egui::Button::new("分析設定"))
                     .clicked()
                 {
@@ -983,6 +1071,9 @@ impl App {
                 ui.label(format!("DB: {db_label}"));
                 ui.label(format!("条件: {filter_config_label}"));
                 ui.label(format!("Python: {python_label}"));
+                if can_export {
+                    ui.label("保存対象は直近分析結果の全件です");
+                }
                 if self.analysis_runtime_state.has_warning_details()
                     && ui.button("警告詳細").clicked()
                 {
@@ -992,7 +1083,9 @@ impl App {
                 let status_text = self.analysis_runtime_state.status_text();
                 let status_color = match &self.analysis_runtime_state.status {
                     AnalysisJobStatus::Idle => ui.visuals().text_color(),
-                    AnalysisJobStatus::Running { .. } => Color32::from_rgb(70, 130, 180),
+                    AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. } => {
+                        Color32::from_rgb(70, 130, 180)
+                    }
                     AnalysisJobStatus::Succeeded { .. } => Color32::from_rgb(70, 130, 70),
                     AnalysisJobStatus::Failed { .. } => Color32::from_rgb(200, 64, 64),
                 };

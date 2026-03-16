@@ -210,6 +210,67 @@ def _handle_analyze_request(
     return response_payload
 
 
+def _handle_export_csv_request(
+    request: dict[str, Any],
+    cache: WorkerCache,
+) -> dict[str, Any]:
+    request_id = str(request.get("requestId", "")).strip()
+    job_id = str(request.get("jobId", "")).strip()
+    db_path = Path(str(request.get("dbPath", ""))).expanduser()
+    filter_config_path = Path(str(request.get("filterConfigPath", ""))).expanduser()
+    output_path = Path(str(request.get("outputPath", ""))).expanduser().resolve()
+    force_reload = bool(request.get("forceReload", False))
+
+    try:
+        cache_entry = cache.get_or_load(db_path=db_path, force_reload=force_reload)
+    except Exception as exc:
+        return _build_request_failure_response(
+            request_id=request_id,
+            job_id=job_id,
+            db_path=db_path,
+            filter_config_path=filter_config_path,
+            error_summary=str(exc),
+        )
+
+    from .cli import run_analysis_job
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="csv-viewer-worker-export-") as temp_dir:
+        meta_json_path = Path(temp_dir) / "meta.json"
+        namespace = Namespace(
+            job_id=job_id,
+            db_path=str(db_path),
+            filter_config_path=str(filter_config_path),
+            output_dir=temp_dir,
+            output_csv_path=str(output_path),
+            output_meta_json_path=str(meta_json_path),
+            limit_rows=None,
+            output_format="csv",
+        )
+        stdout_buffer = io.StringIO()
+        with _patched_cached_frames(cache_entry), redirect_stdout(stdout_buffer):
+            exit_code = run_analysis_job(namespace)
+        payload_text = stdout_buffer.getvalue().strip()
+
+    if not payload_text:
+        return _build_request_failure_response(
+            request_id=request_id,
+            job_id=job_id,
+            db_path=db_path,
+            filter_config_path=filter_config_path,
+            error_summary="worker received empty export payload",
+        )
+
+    response_payload = json.loads(payload_text)
+    return {
+        "requestId": request_id,
+        "status": "succeeded" if exit_code == 0 else "failed",
+        "meta": response_payload,
+        "records": [],
+        "message": "",
+    }
+
+
 def _handle_health_request(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "requestId": str(request.get("requestId", "")),
@@ -236,6 +297,8 @@ def _handle_request(request: dict[str, Any], cache: WorkerCache) -> tuple[dict[s
     request_type = str(request.get("requestType", "")).strip().lower()
     if request_type == "analyze":
         return _handle_analyze_request(request, cache), False
+    if request_type == "export_csv":
+        return _handle_export_csv_request(request, cache), False
     if request_type == "health":
         return _handle_health_request(request), False
     if request_type == "invalidate_cache":

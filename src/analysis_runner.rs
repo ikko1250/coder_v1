@@ -41,10 +41,24 @@ pub(crate) struct AnalysisJobRequest {
     pub(crate) runtime: AnalysisRuntimeConfig,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnalysisExportRequest {
+    pub(crate) db_path: PathBuf,
+    pub(crate) filter_config_path: PathBuf,
+    pub(crate) output_csv_path: PathBuf,
+    pub(crate) runtime: AnalysisRuntimeConfig,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnalysisJobSuccess {
     pub(crate) meta: AnalysisMeta,
     pub(crate) records: Vec<CsvRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AnalysisExportSuccess {
+    pub(crate) meta: AnalysisMeta,
+    pub(crate) output_csv_path: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,7 +70,8 @@ pub(crate) struct AnalysisJobFailure {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum AnalysisJobEvent {
-    Completed(Result<AnalysisJobSuccess, AnalysisJobFailure>),
+    AnalysisCompleted(Result<AnalysisJobSuccess, AnalysisJobFailure>),
+    ExportCompleted(Result<AnalysisExportSuccess, AnalysisJobFailure>),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -243,6 +258,18 @@ struct WorkerAnalyzeRequest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WorkerExportRequest {
+    request_id: String,
+    request_type: &'static str,
+    job_id: String,
+    db_path: String,
+    filter_config_path: String,
+    output_path: String,
+    force_reload: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WorkerSimpleRequest {
     request_id: String,
     request_type: &'static str,
@@ -343,6 +370,19 @@ pub(crate) fn spawn_analysis_job(request: AnalysisJobRequest) -> (String, Receiv
     (job_id, receiver)
 }
 
+pub(crate) fn spawn_export_job(request: AnalysisExportRequest) -> (String, Receiver<AnalysisJobEvent>) {
+    let (sender, receiver) = mpsc::channel();
+    let job_id = build_job_id();
+    let request_job_id = job_id.clone();
+
+    thread::spawn(move || {
+        let event = run_export_job(request_job_id, request);
+        let _ = sender.send(event);
+    });
+
+    (job_id, receiver)
+}
+
 fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobEvent {
     let worker_handle = match ensure_worker(&request.runtime) {
         Ok(worker_handle) => worker_handle,
@@ -371,12 +411,12 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
     });
 
     match receiver.recv_timeout(WORKER_REQUEST_TIMEOUT) {
-        Ok(result) => AnalysisJobEvent::Completed(result),
+        Ok(result) => AnalysisJobEvent::AnalysisCompleted(result),
         Err(RecvTimeoutError::Timeout) => {
             let stderr = worker_stderr_snapshot(&worker_handle);
             shutdown_worker(&worker_handle);
             invalidate_worker_slot(&worker_handle.fingerprint);
-            AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
+            AnalysisJobEvent::AnalysisCompleted(Err(AnalysisJobFailure {
                 meta: None,
                 stderr,
                 message: format!(
@@ -389,10 +429,66 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
             let stderr = worker_stderr_snapshot(&worker_handle);
             shutdown_worker(&worker_handle);
             invalidate_worker_slot(&worker_handle.fingerprint);
-            AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
+            AnalysisJobEvent::AnalysisCompleted(Err(AnalysisJobFailure {
                 meta: None,
                 stderr,
                 message: "Python worker 応答待機中にチャネルが切断されました".to_string(),
+            }))
+        }
+    }
+}
+
+fn run_export_job(job_id: String, request: AnalysisExportRequest) -> AnalysisJobEvent {
+    let worker_handle = match ensure_worker(&request.runtime) {
+        Ok(worker_handle) => worker_handle,
+        Err(message) => {
+            return AnalysisJobEvent::ExportCompleted(Err(AnalysisJobFailure {
+                meta: None,
+                stderr: String::new(),
+                message,
+            }));
+        }
+    };
+    let worker_request = WorkerExportRequest {
+        request_id: job_id.clone(),
+        request_type: "export_csv",
+        job_id,
+        db_path: request.db_path.display().to_string(),
+        filter_config_path: request.filter_config_path.display().to_string(),
+        output_path: request.output_csv_path.display().to_string(),
+        force_reload: false,
+    };
+    let worker_handle_for_request = worker_handle.clone();
+    let output_csv_path = request.output_csv_path;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = send_export_request(worker_handle_for_request, worker_request, output_csv_path);
+        let _ = sender.send(result);
+    });
+
+    match receiver.recv_timeout(WORKER_REQUEST_TIMEOUT) {
+        Ok(result) => AnalysisJobEvent::ExportCompleted(result),
+        Err(RecvTimeoutError::Timeout) => {
+            let stderr = worker_stderr_snapshot(&worker_handle);
+            shutdown_worker(&worker_handle);
+            invalidate_worker_slot(&worker_handle.fingerprint);
+            AnalysisJobEvent::ExportCompleted(Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message: format!(
+                    "Python worker が {} 秒以内に CSV 保存へ応答しませんでした",
+                    WORKER_REQUEST_TIMEOUT.as_secs()
+                ),
+            }))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            let stderr = worker_stderr_snapshot(&worker_handle);
+            shutdown_worker(&worker_handle);
+            invalidate_worker_slot(&worker_handle.fingerprint);
+            AnalysisJobEvent::ExportCompleted(Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message: "Python worker の CSV 保存応答待機中にチャネルが切断されました".to_string(),
             }))
         }
     }
@@ -611,6 +707,71 @@ fn send_analyze_request(
             &response,
             &worker_stderr_snapshot(&handle),
             "Python worker が分析要求に失敗しました".to_string(),
+        ),
+    })
+}
+
+fn send_export_request(
+    handle: WorkerHandle,
+    request: WorkerExportRequest,
+    output_csv_path: PathBuf,
+) -> Result<AnalysisExportSuccess, AnalysisJobFailure> {
+    let stderr = worker_stderr_snapshot(&handle);
+    let response = match send_worker_request(&handle, &request) {
+        Ok(response) => response,
+        Err(message) => {
+            shutdown_worker(&handle);
+            invalidate_worker_slot(&handle.fingerprint);
+            return Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message,
+            });
+        }
+    };
+
+    if response.request_id != request.request_id {
+        shutdown_worker(&handle);
+        invalidate_worker_slot(&handle.fingerprint);
+        return Err(AnalysisJobFailure {
+            meta: response.meta,
+            stderr,
+            message: format!(
+                "Python worker export 応答の requestId が一致しません: expected={}, actual={}",
+                request.request_id, response.request_id
+            ),
+        });
+    }
+
+    let meta = response.meta.clone();
+    if response.status == "succeeded" {
+        let Some(meta) = meta else {
+            return Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message: "Python worker export 成功応答に meta が含まれていません".to_string(),
+            });
+        };
+        if !output_csv_path.is_file() {
+            return Err(AnalysisJobFailure {
+                meta: Some(meta),
+                stderr,
+                message: format!("保存先 CSV が見つかりません: {}", output_csv_path.display()),
+            });
+        }
+        return Ok(AnalysisExportSuccess {
+            meta,
+            output_csv_path,
+        });
+    }
+
+    Err(AnalysisJobFailure {
+        meta,
+        stderr,
+        message: build_worker_response_message(
+            &response,
+            &worker_stderr_snapshot(&handle),
+            "Python worker が CSV 保存要求に失敗しました".to_string(),
         ),
     })
 }
