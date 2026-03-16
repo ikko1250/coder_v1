@@ -51,6 +51,9 @@ class BuildGuiRecordsTest(unittest.TestCase):
                     "match_group_ids_text": "",
                     "match_group_count": "4",
                     "annotated_token_count": "",
+                    "manual_annotation_count": "0",
+                    "manual_annotation_pairs_text": "",
+                    "manual_annotation_namespaces_text": "",
                 }
             ],
         )

@@ -372,6 +372,20 @@ def build_strict_limit_filter_config(filter_config_path: Path) -> None:
     )
 
 
+def build_manual_annotations_csv(annotation_csv_path: Path) -> None:
+    annotation_csv_path.write_text(
+        "\n".join(
+            [
+                "target_type,target_id,label_namespace,label_key,label_value,tagged_by,tagged_at,confidence,note",
+                "paragraph,1,zoning,zone_strength,suppression,alice,2026-03-17,high,first",
+                "paragraph,1,zoning,zone_strength,suppression,alice,2026-03-17,high,duplicate",
+                "paragraph,1,procedure,requires_prior_consultation,true,alice,2026-03-17,high,second",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 class CliContractTests(unittest.TestCase):
     def test_filter_sentences_for_tokens_keeps_only_sentence_keys_present_in_limited_tokens(self) -> None:
         analysis_tokens_df = pl.DataFrame(
@@ -410,10 +424,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="failure-job",
                 db_path=str(Path(temp_dir) / "missing.db"),
                 filter_config_path=str(Path(temp_dir) / "missing.json"),
+                annotation_csv_path=str(Path(temp_dir) / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -442,10 +458,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="data-access-failure-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -479,10 +497,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="metadata-failure-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -515,10 +535,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="success-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -563,13 +585,65 @@ class CliContractTests(unittest.TestCase):
                     "match_group_ids_text",
                     "match_group_count",
                     "annotated_token_count",
+                    "manual_annotation_count",
+                    "manual_annotation_pairs_text",
+                    "manual_annotation_namespaces_text",
                 ],
             )
             self.assertEqual(rows[0]["paragraph_id"], "1")
             self.assertEqual(rows[0]["municipality_name"], "テスト市")
             self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area")
             self.assertEqual(rows[0]["matched_categories_text"], "概念:抑制区域")
+            self.assertEqual(rows[0]["manual_annotation_count"], "0")
+            self.assertEqual(rows[0]["manual_annotation_pairs_text"], "")
+            self.assertEqual(rows[0]["manual_annotation_namespaces_text"], "")
             self.assertIn("[[HIT ", rows[0]["paragraph_text_tagged"])
+
+    def test_run_analysis_job_merges_manual_annotations_into_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            annotation_csv_path = temp_path / "manual-annotations.csv"
+            output_dir = temp_path / "job"
+            build_test_db(db_path)
+            build_filter_config(filter_config_path)
+            build_manual_annotations_csv(annotation_csv_path)
+            args = Namespace(
+                job_id="annotation-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(annotation_csv_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="json",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertEqual(payload["meta"]["status"], "succeeded")
+            self.assertEqual(len(payload["meta"]["warningMessages"]), 1)
+            self.assertEqual(
+                payload["meta"]["warningMessages"][0]["code"],
+                "annotation_duplicate_deduplicated",
+            )
+            self.assertEqual(len(payload["records"]), 1)
+            first_record = payload["records"][0]
+            self.assertEqual(first_record["manual_annotation_count"], "2")
+            self.assertEqual(
+                first_record["manual_annotation_pairs_text"],
+                "procedure:requires_prior_consultation=true\nzoning:zone_strength=suppression",
+            )
+            self.assertEqual(first_record["manual_annotation_namespaces_text"], "procedure, zoning")
 
     def test_run_analysis_job_inserts_newlines_for_table_paragraph_csv_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -583,10 +657,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="table-paragraph-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -619,10 +695,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="warning-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -658,10 +736,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="config-warning-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()
@@ -696,10 +776,12 @@ class CliContractTests(unittest.TestCase):
                 job_id="strict-failure-job",
                 db_path=str(db_path),
                 filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
                 output_dir=str(output_dir),
                 output_csv_path=None,
                 output_meta_json_path=None,
                 limit_rows=None,
+                output_format="csv",
             )
 
             stdout_buffer = io.StringIO()

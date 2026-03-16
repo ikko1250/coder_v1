@@ -10,6 +10,9 @@ from typing import Any
 import polars as pl
 
 
+DEFAULT_MANUAL_ANNOTATION_CSV_RELATIVE_PATH = Path("asset") / "manual-annotations.csv"
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -43,6 +46,10 @@ def _build_parser() -> ArgumentParser:
         default="csv",
         help="Output mode. 'csv' writes result.csv, 'json' emits GUI DTO payload to stdout.",
     )
+    parser.add_argument(
+        "--annotation-csv-path",
+        help="Optional manual annotation CSV path. Defaults to project-root asset/manual-annotations.csv.",
+    )
     return parser
 
 
@@ -59,6 +66,13 @@ def _resolve_output_paths(args: Namespace) -> tuple[Path, Path, Path]:
         else output_dir / "meta.json"
     )
     return output_dir, output_csv_path, output_meta_json_path
+
+
+def _resolve_annotation_csv_path(args: Namespace) -> Path:
+    raw_annotation_csv_path = getattr(args, "annotation_csv_path", None)
+    if raw_annotation_csv_path:
+        return Path(raw_annotation_csv_path).expanduser().resolve()
+    return (Path(__file__).resolve().parents[1] / DEFAULT_MANUAL_ANNOTATION_CSV_RELATIVE_PATH).resolve()
 
 
 def _write_meta_json(output_meta_json_path: Path, payload: dict[str, object]) -> None:
@@ -161,6 +175,8 @@ def _serialize_warning_messages(warning_messages: list[object]) -> list[dict[str
                 "fieldName": getattr(warning_message, "field_name", None),
                 "queryName": getattr(warning_message, "query_name", None),
                 "dbPath": getattr(warning_message, "db_path", None),
+                "targetId": getattr(warning_message, "target_id", None),
+                "rowNumber": getattr(warning_message, "row_number", None),
             }
         )
     return serialized_messages
@@ -207,6 +223,7 @@ def _filter_sentences_for_tokens(
 def run_analysis_job(args: Namespace) -> int:
     started_at = _utc_now_iso()
     start_timestamp = datetime.now(timezone.utc)
+    output_format = getattr(args, "output_format", "csv")
 
     output_dir, output_csv_path, output_meta_json_path = _resolve_output_paths(args)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +232,7 @@ def run_analysis_job(args: Namespace) -> int:
 
     db_path = Path(args.db_path).expanduser().resolve()
     filter_config_path = Path(args.filter_config_path).expanduser().resolve()
+    annotation_csv_path = _resolve_annotation_csv_path(args)
 
     try:
         from .analysis_core import (
@@ -229,8 +247,34 @@ def run_analysis_job(args: Namespace) -> int:
             select_target_ids_by_cooccurrence_conditions,
         )
         from .export_formatter import build_gui_records, build_reconstructed_paragraphs_export_df
+        from .manual_annotations import load_manual_annotations_result
 
         load_filter_config_result_value = load_filter_config_result(filter_config_path)
+        manual_annotations_result_value = load_manual_annotations_result(annotation_csv_path)
+        if manual_annotations_result_value.paragraph_annotations_df is None:
+            error_summary = _build_error_summary_from_result_issues(
+                manual_annotations_result_value.issues,
+                "manual annotations load failed",
+            )
+            failure_payload = _build_failure_payload(
+                job_id=args.job_id,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+                duration_seconds=round(
+                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                    6,
+                ),
+                db_path=db_path,
+                filter_config_path=filter_config_path,
+                output_csv_path=output_csv_path,
+                warning_messages=_serialize_warning_messages(
+                    load_filter_config_result_value.issues + manual_annotations_result_value.issues
+                ),
+                error_summary=error_summary,
+            )
+            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+            print(error_summary, file=sys.stderr)
+            return 1
         filter_config = load_filter_config_result_value.filter_config
         analysis_tokens_result = read_analysis_tokens_result(
             db_path=db_path,
@@ -253,7 +297,9 @@ def run_analysis_job(args: Namespace) -> int:
                 filter_config_path=filter_config_path,
                 output_csv_path=output_csv_path,
                 warning_messages=_serialize_warning_messages(
-                    load_filter_config_result_value.issues + analysis_tokens_result.issues
+                    load_filter_config_result_value.issues
+                    + manual_annotations_result_value.issues
+                    + analysis_tokens_result.issues
                 ),
                 error_summary=error_summary,
             )
@@ -279,7 +325,9 @@ def run_analysis_job(args: Namespace) -> int:
                 filter_config_path=filter_config_path,
                 output_csv_path=output_csv_path,
                 warning_messages=_serialize_warning_messages(
-                    load_filter_config_result_value.issues + analysis_sentences_result.issues
+                    load_filter_config_result_value.issues
+                    + manual_annotations_result_value.issues
+                    + analysis_sentences_result.issues
                 ),
                 error_summary=error_summary,
             )
@@ -331,6 +379,7 @@ def run_analysis_job(args: Namespace) -> int:
         reconstructed_paragraphs_result = enrich_reconstructed_paragraphs_result(
             db_path=db_path,
             reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
+            manual_annotation_summary_df=manual_annotations_result_value.paragraph_annotations_df,
         )
         if reconstructed_paragraphs_result.data_frame is None:
             error_summary = _build_error_summary_from_result_issues(
@@ -350,6 +399,7 @@ def run_analysis_job(args: Namespace) -> int:
                 output_csv_path=output_csv_path,
                 warning_messages=_serialize_warning_messages(
                     load_filter_config_result_value.issues
+                    + manual_annotations_result_value.issues
                     + condition_hit_result.warning_messages
                     + reconstructed_paragraphs_result.issues
                 ),
@@ -380,16 +430,18 @@ def run_analysis_job(args: Namespace) -> int:
                 filter_config_path=filter_config_path,
                 output_csv_path=output_csv_path,
                 warning_messages=_serialize_warning_messages(
-                    load_filter_config_result_value.issues + condition_hit_result.warning_messages
+                    load_filter_config_result_value.issues
+                    + manual_annotations_result_value.issues
+                    + condition_hit_result.warning_messages
                 ),
                 error_summary=selected_count_error,
             )
             _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
-            if args.output_format == "json":
+            if output_format == "json":
                 _emit_json_payload(_build_json_response_payload(meta=failure_payload))
             print(selected_count_error, file=sys.stderr)
             return 1
-        if args.output_format == "csv":
+        if output_format == "csv":
             reconstructed_paragraphs_export_df.write_csv(output_csv_path)
 
         finished_at = _utc_now_iso()
@@ -398,7 +450,9 @@ def run_analysis_job(args: Namespace) -> int:
             6,
         )
         serialized_warning_messages = _serialize_warning_messages(
-            load_filter_config_result_value.issues + condition_hit_result.warning_messages
+            load_filter_config_result_value.issues
+            + manual_annotations_result_value.issues
+            + condition_hit_result.warning_messages
         )
         success_payload = _build_success_payload(
             job_id=args.job_id,
@@ -413,7 +467,7 @@ def run_analysis_job(args: Namespace) -> int:
             warning_messages=serialized_warning_messages,
         )
         _write_meta_json(output_meta_json_path=output_meta_json_path, payload=success_payload)
-        if args.output_format == "json":
+        if output_format == "json":
             _emit_json_payload(
                 _build_json_response_payload(
                     meta=success_payload,
@@ -448,7 +502,7 @@ def run_analysis_job(args: Namespace) -> int:
                 file=sys.stderr,
             )
 
-        if args.output_format == "json":
+        if output_format == "json":
             _emit_json_payload(_build_json_response_payload(meta=failure_payload))
         print(str(exc), file=sys.stderr)
         return 1

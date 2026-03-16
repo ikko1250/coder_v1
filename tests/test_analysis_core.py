@@ -897,9 +897,13 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "match_group_ids_text",
                 "match_group_count",
                 "annotated_token_count",
+                "manual_annotation_count",
+                "manual_annotation_pairs_text",
+                "manual_annotation_namespaces_text",
             ],
         )
         self.assertEqual(export_df.get_column("match_group_ids_text").to_list(), ["c, d"])
+        self.assertEqual(export_df.get_column("manual_annotation_count").to_list(), [0])
 
     def test_build_reconstructed_paragraphs_export_df_keeps_existing_scalar_dtypes(self) -> None:
         reconstructed_paragraphs_df = pl.DataFrame(
@@ -954,6 +958,9 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(export_df.schema["match_group_count"], pl.UInt32)
         self.assertEqual(export_df.schema["annotated_token_count"], pl.UInt32)
         self.assertEqual(export_df.schema["match_group_ids_text"], pl.String)
+        self.assertEqual(export_df.schema["manual_annotation_count"], pl.UInt32)
+        self.assertEqual(export_df.schema["manual_annotation_pairs_text"], pl.String)
+        self.assertEqual(export_df.schema["manual_annotation_namespaces_text"], pl.String)
 
 
 if __name__ == "__main__":

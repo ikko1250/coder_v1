@@ -200,10 +200,12 @@ def build_rendered_paragraphs_df(
 def enrich_reconstructed_paragraphs_result(
     db_path: Path,
     reconstructed_paragraphs_base_df: pl.DataFrame,
+    manual_annotation_summary_df: pl.DataFrame | None = None,
 ) -> DataAccessResult:
     return _enrich_reconstructed_paragraphs_result_impl(
         db_path=db_path,
         reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
+        manual_annotation_summary_df=manual_annotation_summary_df,
     )
 
 
@@ -333,10 +335,12 @@ def reconstruct_paragraphs_by_ids(
 def enrich_reconstructed_paragraphs_df(
     db_path: Path,
     reconstructed_paragraphs_base_df: pl.DataFrame,
+    manual_annotation_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     return _enrich_reconstructed_paragraphs_df_impl(
         db_path=db_path,
         reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
+        manual_annotation_summary_df=manual_annotation_summary_df,
     )
 
 

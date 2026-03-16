@@ -21,12 +21,79 @@ GUI_RECORD_COLUMNS = [
     "match_group_ids_text",
     "match_group_count",
     "annotated_token_count",
+    "manual_annotation_count",
+    "manual_annotation_pairs_text",
+    "manual_annotation_namespaces_text",
 ]
+MANUAL_ANNOTATION_EXPORT_COLUMNS = [
+    "manual_annotation_count",
+    "manual_annotation_pairs_text",
+    "manual_annotation_namespaces_text",
+]
+MANUAL_ANNOTATION_SUMMARY_JOIN_COLUMNS = [
+    "paragraph_id",
+    *MANUAL_ANNOTATION_EXPORT_COLUMNS,
+]
+
+
+def _build_manual_annotation_summary_join_df(
+    manual_annotation_summary_df: pl.DataFrame | None,
+) -> pl.DataFrame:
+    if manual_annotation_summary_df is None or manual_annotation_summary_df.is_empty():
+        return pl.DataFrame(
+            schema={
+                "paragraph_id": pl.Int64,
+                "manual_annotation_count": pl.UInt32,
+                "manual_annotation_pairs_text": pl.String,
+                "manual_annotation_namespaces_text": pl.String,
+            }
+        )
+
+    export_df = manual_annotation_summary_df
+    if "paragraph_id" not in export_df.columns:
+        return pl.DataFrame(
+            schema={
+                "paragraph_id": pl.Int64,
+                "manual_annotation_count": pl.UInt32,
+                "manual_annotation_pairs_text": pl.String,
+                "manual_annotation_namespaces_text": pl.String,
+            }
+        )
+    if "manual_annotation_count" not in export_df.columns:
+        export_df = export_df.with_columns(pl.lit(0).cast(pl.UInt32).alias("manual_annotation_count"))
+    if "manual_annotation_pairs_text" not in export_df.columns:
+        export_df = export_df.with_columns(pl.lit("").alias("manual_annotation_pairs_text"))
+    if "manual_annotation_namespaces_text" not in export_df.columns:
+        export_df = export_df.with_columns(pl.lit("").alias("manual_annotation_namespaces_text"))
+    return export_df.with_columns([
+        pl.col("paragraph_id").cast(pl.Int64),
+        pl.col("manual_annotation_count").cast(pl.UInt32).fill_null(0),
+        pl.col("manual_annotation_pairs_text").cast(pl.String).fill_null(""),
+        pl.col("manual_annotation_namespaces_text").cast(pl.String).fill_null(""),
+    ]).select(MANUAL_ANNOTATION_SUMMARY_JOIN_COLUMNS)
+
+
+def _with_manual_annotation_export_columns(
+    reconstructed_paragraphs_df: pl.DataFrame,
+) -> pl.DataFrame:
+    export_df = reconstructed_paragraphs_df
+    if "manual_annotation_count" not in export_df.columns:
+        export_df = export_df.with_columns(pl.lit(0).cast(pl.UInt32).alias("manual_annotation_count"))
+    if "manual_annotation_pairs_text" not in export_df.columns:
+        export_df = export_df.with_columns(pl.lit("").alias("manual_annotation_pairs_text"))
+    if "manual_annotation_namespaces_text" not in export_df.columns:
+        export_df = export_df.with_columns(pl.lit("").alias("manual_annotation_namespaces_text"))
+    return export_df.with_columns([
+        pl.col("manual_annotation_count").cast(pl.UInt32).fill_null(0),
+        pl.col("manual_annotation_pairs_text").cast(pl.String).fill_null(""),
+        pl.col("manual_annotation_namespaces_text").cast(pl.String).fill_null(""),
+    ])
 
 
 def enrich_reconstructed_paragraphs_result(
     db_path: Path,
     reconstructed_paragraphs_base_df: pl.DataFrame,
+    manual_annotation_summary_df: pl.DataFrame | None = None,
 ) -> DataAccessResult:
     paragraph_ids = (
         reconstructed_paragraphs_base_df.get_column("paragraph_id").to_list()
@@ -46,13 +113,23 @@ def enrich_reconstructed_paragraphs_result(
         data_frame=(
             reconstructed_paragraphs_base_df
             .join(paragraph_metadata_result.data_frame, on="paragraph_id", how="left")
+            .join(
+                _build_manual_annotation_summary_join_df(manual_annotation_summary_df),
+                on="paragraph_id",
+                how="left",
+            )
             .with_columns(
-                pl.when(pl.col("doc_type").fill_null("").str.contains("施行規則", literal=True))
-                .then(pl.lit("施行規則"))
-                .when(pl.col("doc_type").fill_null("").str.contains("条例", literal=True))
-                .then(pl.lit("条例"))
-                .otherwise(pl.lit("不明"))
-                .alias("ordinance_or_rule")
+                [
+                    pl.when(pl.col("doc_type").fill_null("").str.contains("施行規則", literal=True))
+                    .then(pl.lit("施行規則"))
+                    .when(pl.col("doc_type").fill_null("").str.contains("条例", literal=True))
+                    .then(pl.lit("条例"))
+                    .otherwise(pl.lit("不明"))
+                    .alias("ordinance_or_rule"),
+                    pl.col("manual_annotation_count").fill_null(0).cast(pl.UInt32),
+                    pl.col("manual_annotation_pairs_text").fill_null(""),
+                    pl.col("manual_annotation_namespaces_text").fill_null(""),
+                ]
             )
             .select([
                 "paragraph_id",
@@ -71,6 +148,9 @@ def enrich_reconstructed_paragraphs_result(
                 "match_group_ids",
                 "match_group_count",
                 "annotated_token_count",
+                "manual_annotation_count",
+                "manual_annotation_pairs_text",
+                "manual_annotation_namespaces_text",
             ])
         ),
         issues=[],
@@ -80,10 +160,12 @@ def enrich_reconstructed_paragraphs_result(
 def enrich_reconstructed_paragraphs_df(
     db_path: Path,
     reconstructed_paragraphs_base_df: pl.DataFrame,
+    manual_annotation_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     enrichment_result = enrich_reconstructed_paragraphs_result(
         db_path=db_path,
         reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
+        manual_annotation_summary_df=manual_annotation_summary_df,
     )
     if enrichment_result.data_frame is not None:
         return enrichment_result.data_frame
@@ -95,7 +177,7 @@ def build_reconstructed_paragraphs_export_df(
     reconstructed_paragraphs_df: pl.DataFrame,
 ) -> pl.DataFrame:
     return (
-        reconstructed_paragraphs_df
+        _with_manual_annotation_export_columns(reconstructed_paragraphs_df)
         .with_columns(
             pl.col("match_group_ids")
             .cast(pl.List(pl.String))
@@ -118,6 +200,9 @@ def build_reconstructed_paragraphs_export_df(
             "match_group_ids_text",
             "match_group_count",
             "annotated_token_count",
+            "manual_annotation_count",
+            "manual_annotation_pairs_text",
+            "manual_annotation_namespaces_text",
         ])
     )
 
@@ -143,6 +228,9 @@ def build_gui_records_df(
             pl.col("match_group_ids_text").cast(pl.String).fill_null(""),
             pl.col("match_group_count").cast(pl.String).fill_null(""),
             pl.col("annotated_token_count").cast(pl.String).fill_null(""),
+            pl.col("manual_annotation_count").cast(pl.String).fill_null(""),
+            pl.col("manual_annotation_pairs_text").cast(pl.String).fill_null(""),
+            pl.col("manual_annotation_namespaces_text").cast(pl.String).fill_null(""),
         ])
     )
 
