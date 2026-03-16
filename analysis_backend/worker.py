@@ -104,16 +104,28 @@ def _patched_cached_frames(cache_entry: CachedFrames):
     original_tokens_result = analysis_core.read_analysis_tokens_result
     original_sentences_result = analysis_core.read_analysis_sentences_result
 
-    def _cached_tokens_result(_db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
+    def _resolve_requested_db_path(db_path: Path) -> Path:
+        return db_path.expanduser().resolve()
+
+    def _cached_tokens_result(
+        db_path: Path,
+        limit_rows: int | None = None,
+        **_: Any,
+    ) -> DataAccessResult:
+        if _resolve_requested_db_path(db_path) != cache_entry.db_path:
+            raise RuntimeError(f"cached tokens requested for unexpected db_path: {db_path}")
         data_frame = cache_entry.tokens_df
         if limit_rows is not None:
             data_frame = data_frame.head(limit_rows)
         return DataAccessResult(data_frame=data_frame.clone(), issues=[])
 
     def _cached_sentences_result(
-        _db_path: Path,
+        db_path: Path,
         limit_rows: int | None = None,
+        **_: Any,
     ) -> DataAccessResult:
+        if _resolve_requested_db_path(db_path) != cache_entry.db_path:
+            raise RuntimeError(f"cached sentences requested for unexpected db_path: {db_path}")
         data_frame = cache_entry.sentences_df
         if limit_rows is not None:
             data_frame = data_frame.head(limit_rows)
