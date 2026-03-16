@@ -387,7 +387,7 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
     let worker_handle = match ensure_worker(&request.runtime) {
         Ok(worker_handle) => worker_handle,
         Err(message) => {
-            return AnalysisJobEvent::Completed(Err(AnalysisJobFailure {
+            return AnalysisJobEvent::AnalysisCompleted(Err(AnalysisJobFailure {
                 meta: None,
                 stderr: String::new(),
                 message,
