@@ -1745,7 +1745,7 @@ impl App {
                         .fill(panel_fill)
                         .inner_margin(egui::Margin {
                             left: 32,
-                            right: 32,
+                            right: 64,
                             top: 10,
                             bottom: 10,
                         })
