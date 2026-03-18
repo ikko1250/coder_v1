@@ -1689,8 +1689,10 @@ impl App {
         requested_selection: &mut Option<usize>,
         should_add_condition: &mut bool,
     ) {
+        let panel_fill = ui.style().visuals.panel_fill;
         StripBuilder::new(ui)
             .size(Size::exact(340.0))
+            .size(Size::exact(16.0))
             .size(Size::remainder())
             .horizontal(|mut strip| {
                 strip.cell(|ui| {
@@ -1739,130 +1741,147 @@ impl App {
                     });
                 });
 
-                strip.cell(|ui| {
-                    ScrollArea::vertical()
-                        .id_salt("condition_editor_detail_scroll")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let should_mark_dirty = if let Some(document) =
-                                self.condition_editor_state.document.as_mut()
-                            {
-                                let mut changed = false;
-                                *requested_selection = clamp_condition_index(
-                                    *requested_selection,
-                                    document.cooccurrence_conditions.len(),
-                                );
-                                if let Some(selected_index) = *requested_selection {
-                                    if let Some(condition) =
-                                        document.cooccurrence_conditions.get_mut(selected_index)
-                                    {
-                                        ui.label(RichText::new("condition 詳細").strong());
-                                        ui.horizontal(|ui| {
-                                            ui.label("condition_id");
-                                            let response =
-                                                ui.text_edit_singleline(&mut condition.condition_id);
-                                            changed |= response.changed();
-                                        });
+                strip.empty();
 
-                                        ui.horizontal(|ui| {
-                                            ui.label("form_match_logic");
-                                            changed |= edit_optional_choice(
-                                                ui,
-                                                &mut condition.form_match_logic,
-                                                &["all", "any"],
-                                            );
-                                            ui.label("search_scope");
-                                            let search_scope_locked =
-                                                !condition.annotation_filters.is_empty();
-                                            if search_scope_locked {
-                                                if condition.search_scope.as_deref()
-                                                    != Some("paragraph")
-                                                {
-                                                    condition.search_scope =
-                                                        Some("paragraph".to_string());
-                                                    changed = true;
-                                                }
-                                                ui.add_enabled(
-                                                    false,
-                                                    egui::TextEdit::singleline(
-                                                        condition.search_scope.get_or_insert_with(
-                                                            || "paragraph".to_string(),
-                                                        ),
-                                                    )
-                                                    .desired_width(100.0),
+                strip.cell(|ui| {
+                    egui::Frame::default()
+                        .fill(panel_fill)
+                        .inner_margin(egui::Margin {
+                            left: 14,
+                            right: 14,
+                            top: 10,
+                            bottom: 10,
+                        })
+                        .show(ui, |ui| {
+                            ScrollArea::vertical()
+                                .id_salt("condition_editor_detail_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let should_mark_dirty = if let Some(document) =
+                                        self.condition_editor_state.document.as_mut()
+                                    {
+                                        let mut changed = false;
+                                        *requested_selection = clamp_condition_index(
+                                            *requested_selection,
+                                            document.cooccurrence_conditions.len(),
+                                        );
+                                        if let Some(selected_index) = *requested_selection {
+                                            if let Some(condition) =
+                                                document.cooccurrence_conditions.get_mut(selected_index)
+                                            {
+                                                ui.label(RichText::new("condition 詳細").strong());
+                                                ui.horizontal(|ui| {
+                                                    ui.label("condition_id");
+                                                    let response = ui.text_edit_singleline(
+                                                        &mut condition.condition_id,
+                                                    );
+                                                    changed |= response.changed();
+                                                });
+
+                                                ui.horizontal(|ui| {
+                                                    ui.label("form_match_logic");
+                                                    changed |= edit_optional_choice(
+                                                        ui,
+                                                        &mut condition.form_match_logic,
+                                                        &["all", "any"],
+                                                    );
+                                                    ui.label("search_scope");
+                                                    let search_scope_locked =
+                                                        !condition.annotation_filters.is_empty();
+                                                    if search_scope_locked {
+                                                        if condition.search_scope.as_deref()
+                                                            != Some("paragraph")
+                                                        {
+                                                            condition.search_scope =
+                                                                Some("paragraph".to_string());
+                                                            changed = true;
+                                                        }
+                                                        ui.add_enabled(
+                                                            false,
+                                                            egui::TextEdit::singleline(
+                                                                condition.search_scope.get_or_insert_with(
+                                                                    || "paragraph".to_string(),
+                                                                ),
+                                                            )
+                                                            .desired_width(100.0),
+                                                        );
+                                                        ui.label(
+                                                            "annotation_filters ありのため paragraph 固定",
+                                                        );
+                                                    } else {
+                                                        changed |= edit_optional_choice(
+                                                            ui,
+                                                            &mut condition.search_scope,
+                                                            &["paragraph", "sentence"],
+                                                        );
+                                                    }
+                                                });
+
+                                                ui.horizontal(|ui| {
+                                                    ui.label("max_token_distance");
+                                                    changed |= edit_optional_i64(
+                                                        ui,
+                                                        &mut condition.max_token_distance,
+                                                        5,
+                                                    );
+                                                });
+
+                                                ui.add_space(8.0);
+                                                changed |= draw_string_list_editor(
+                                                    ui,
+                                                    "condition_categories_editor",
+                                                    "categories",
+                                                    &mut condition.categories,
+                                                    110.0,
                                                 );
-                                                ui.label(
-                                                    "annotation_filters ありのため paragraph 固定",
+                                                changed |= draw_string_list_editor(
+                                                    ui,
+                                                    "condition_forms_editor",
+                                                    "forms",
+                                                    &mut condition.forms,
+                                                    150.0,
+                                                );
+                                                changed |= draw_annotation_filter_editor(
+                                                    ui,
+                                                    "condition_annotation_filters_editor",
+                                                    &mut condition.annotation_filters,
+                                                );
+                                                changed |= draw_string_list_editor(
+                                                    ui,
+                                                    "condition_required_categories_all_editor",
+                                                    "required_categories_all",
+                                                    &mut condition.required_categories_all,
+                                                    96.0,
+                                                );
+                                                changed |= draw_string_list_editor(
+                                                    ui,
+                                                    "condition_required_categories_any_editor",
+                                                    "required_categories_any",
+                                                    &mut condition.required_categories_any,
+                                                    96.0,
                                                 );
                                             } else {
-                                                changed |= edit_optional_choice(
-                                                    ui,
-                                                    &mut condition.search_scope,
-                                                    &["paragraph", "sentence"],
+                                                ui.label(
+                                                    RichText::new("condition を選択してください")
+                                                        .italics(),
                                                 );
                                             }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            ui.label("max_token_distance");
-                                            changed |= edit_optional_i64(
-                                                ui,
-                                                &mut condition.max_token_distance,
-                                                5,
+                                        } else {
+                                            ui.label(
+                                                RichText::new("condition を選択してください")
+                                                    .italics(),
                                             );
-                                        });
-
-                                        ui.add_space(8.0);
-                                        changed |= draw_string_list_editor(
-                                            ui,
-                                            "condition_categories_editor",
-                                            "categories",
-                                            &mut condition.categories,
-                                            110.0,
-                                        );
-                                        changed |= draw_string_list_editor(
-                                            ui,
-                                            "condition_forms_editor",
-                                            "forms",
-                                            &mut condition.forms,
-                                            150.0,
-                                        );
-                                        changed |= draw_annotation_filter_editor(
-                                            ui,
-                                            "condition_annotation_filters_editor",
-                                            &mut condition.annotation_filters,
-                                        );
-                                        changed |= draw_string_list_editor(
-                                            ui,
-                                            "condition_required_categories_all_editor",
-                                            "required_categories_all",
-                                            &mut condition.required_categories_all,
-                                            96.0,
-                                        );
-                                        changed |= draw_string_list_editor(
-                                            ui,
-                                            "condition_required_categories_any_editor",
-                                            "required_categories_any",
-                                            &mut condition.required_categories_any,
-                                            96.0,
-                                        );
+                                        }
+                                        changed
                                     } else {
-                                        ui.label(
-                                            RichText::new("condition を選択してください").italics(),
-                                        );
-                                    }
-                                } else {
-                                    ui.label(RichText::new("condition を選択してください").italics());
-                                }
-                                changed
-                            } else {
-                                ui.label(RichText::new("条件 JSON 未読込").italics());
-                                false
-                            };
+                                        ui.label(RichText::new("条件 JSON 未読込").italics());
+                                        false
+                                    };
 
-                            if should_mark_dirty {
-                                self.mark_condition_editor_dirty();
-                            }
+                                    if should_mark_dirty {
+                                        self.mark_condition_editor_dirty();
+                                    }
+                                });
                         });
                 });
             });
