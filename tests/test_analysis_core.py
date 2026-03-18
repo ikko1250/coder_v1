@@ -243,6 +243,44 @@ class AnalysisCoreContractTests(unittest.TestCase):
             ["annotation_filters_search_scope_normalized"],
         )
 
+    def test_normalize_cooccurrence_conditions_result_accepts_required_categories_reference_only_condition(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "derived_condition",
+                    "forms": [],
+                    "required_categories_all": ["概念:抑制区域"],
+                    "required_categories_any": ["複合条件", "概念:抑制区域"],
+                }
+            ]
+        )
+
+        self.assertEqual(len(normalization_result.normalized_conditions), 1)
+        normalized_condition = normalization_result.normalized_conditions[0]
+        self.assertEqual(normalized_condition.required_categories_all, ["概念:抑制区域"])
+        self.assertEqual(normalized_condition.required_categories_any, ["複合条件", "概念:抑制区域"])
+        self.assertEqual(normalized_condition.forms, [])
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["categories_defaulted"],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_reports_required_categories_not_list(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "derived_condition",
+                    "required_categories_all": "概念:抑制区域",
+                }
+            ]
+        )
+
+        self.assertEqual(normalization_result.normalized_conditions, [])
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["required_categories_all_not_list"],
+        )
+
     def test_load_filter_config_reads_explicit_matching_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             filter_config_path = Path(temp_dir) / "conditions.json"
@@ -1081,6 +1119,120 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertTrue(eval_rows[0]["is_match"])
         self.assertFalse(eval_rows[1]["annotation_is_match"])
         self.assertFalse(eval_rows[1]["is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_required_categories_reference_only_condition(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 2, 2],
+                "sentence_id": [11, 11, 21, 21],
+                "token_no": [0, 1, 0, 1],
+                "normalized_form": ["抑制", "区域", "その他", "規定"],
+                "surface": ["抑制", "区域", "その他", "規定"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="suppress_area",
+                    categories=["概念:抑制区域"],
+                    category_text="概念:抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="derived_condition",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    required_categories_all=["概念:抑制区域"],
+                ),
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        summary_row = result.paragraph_match_summary_df.row(0, named=True)
+        self.assertEqual(summary_row["matched_condition_ids"], ["derived_condition", "suppress_area"])
+        self.assertEqual(summary_row["matched_categories"], ["概念:抑制区域", "複合条件"])
+        eval_rows = {
+            (row["paragraph_id"], row["condition_id"]): row
+            for row in result.condition_eval_df.to_dicts()
+        }
+        self.assertTrue(eval_rows[(1, "derived_condition")]["reference_is_match"])
+        self.assertTrue(eval_rows[(1, "derived_condition")]["is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_required_categories_mixed_condition(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 1, 2, 2, 2, 2],
+                "sentence_id": [11, 11, 11, 11, 21, 21, 21, 21],
+                "token_no": [0, 1, 2, 3, 0, 1, 2, 3],
+                "normalized_form": ["抑制", "区域", "土砂", "災害", "土砂", "災害", "その他", "規定"],
+                "surface": ["抑制", "区域", "土砂", "災害", "土砂", "災害", "その他", "規定"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="suppress_area",
+                    categories=["概念:抑制区域"],
+                    category_text="概念:抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="sabo_reference",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["土砂", "災害"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    required_categories_all=["概念:抑制区域"],
+                ),
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = {
+            (row["paragraph_id"], row["condition_id"]): row
+            for row in result.condition_eval_df.to_dicts()
+        }
+        self.assertTrue(eval_rows[(1, "sabo_reference")]["base_is_match"])
+        self.assertTrue(eval_rows[(1, "sabo_reference")]["reference_is_match"])
+        self.assertTrue(eval_rows[(1, "sabo_reference")]["is_match"])
+        self.assertFalse(eval_rows[(2, "sabo_reference")]["reference_is_match"])
+        self.assertFalse(eval_rows[(2, "sabo_reference")]["is_match"])
 
     def test_build_rendered_paragraphs_df_uses_paragraph_match_summary_for_annotation_only_conditions(self) -> None:
         tokens_with_position_df = pl.DataFrame(

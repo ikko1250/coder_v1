@@ -142,6 +142,8 @@ def _normalized_conditions_to_dicts(
                 }
                 for annotation_filter in condition.annotation_filters
             ],
+            "required_categories_all": condition.required_categories_all,
+            "required_categories_any": condition.required_categories_any,
             "search_scope": condition.search_scope,
             "form_match_logic": condition.form_match_logic,
             "requested_max_token_distance": condition.requested_max_token_distance,

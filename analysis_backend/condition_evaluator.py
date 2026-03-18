@@ -22,18 +22,27 @@ CONDITION_EVAL_SCHEMA = {
     "form_match_logic": pl.String,
     "condition_forms": pl.String,
     "annotation_filters_text": pl.String,
+    "required_categories_all_text": pl.String,
+    "required_categories_any_text": pl.String,
     "required_form_count": pl.UInt32,
     "matched_form_count": pl.UInt32,
     "evaluated_unit_count": pl.UInt32,
     "matched_unit_count": pl.UInt32,
     "required_annotation_filter_count": pl.UInt32,
     "matched_annotation_filter_count": pl.UInt32,
+    "required_category_all_count": pl.UInt32,
+    "required_category_any_count": pl.UInt32,
+    "matched_required_category_count": pl.UInt32,
     "requested_max_token_distance": pl.Int64,
     "effective_max_token_distance": pl.Int64,
     "distance_check_applied": pl.Boolean,
     "distance_is_match": pl.Boolean,
+    "has_base_clause": pl.Boolean,
+    "has_reference_clause": pl.Boolean,
     "token_is_match": pl.Boolean,
     "annotation_is_match": pl.Boolean,
+    "base_is_match": pl.Boolean,
+    "reference_is_match": pl.Boolean,
     "is_match": pl.Boolean,
 }
 PARAGRAPH_SUMMARY_SCHEMA = {
@@ -217,6 +226,59 @@ def _annotation_filters_text(annotation_filters: list[AnnotationFilter]) -> str:
     )
 
 
+def _normalize_string_clause_list(
+    raw_values: object,
+    *,
+    condition_index: int,
+    condition_id: str,
+    field_name: str,
+    not_list_code: str,
+) -> tuple[list[str], list[ConfigIssue], bool]:
+    if raw_values is None:
+        return [], [], False
+    if not isinstance(raw_values, list):
+        return (
+            [],
+            [
+                _build_condition_issue(
+                    code=not_list_code,
+                    severity="error",
+                    message=f"'{field_name}' must be a list.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name=field_name,
+                )
+            ],
+            True,
+        )
+
+    normalized_values: list[str] = []
+    for raw_value in raw_values:
+        value = str(raw_value).strip()
+        if value and value not in normalized_values:
+            normalized_values.append(value)
+    if raw_values and not normalized_values:
+        return (
+            [],
+            [
+                _build_condition_issue(
+                    code="reference_clause_empty",
+                    severity="error",
+                    message=f"'{field_name}' must contain at least one non-empty value.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name=field_name,
+                )
+            ],
+            True,
+        )
+    return normalized_values, [], False
+
+
+def _required_categories_text(categories: list[str]) -> str:
+    return ", ".join(categories)
+
+
 def _build_global_candidate_paragraphs_df(
     candidate_tokens_df: pl.DataFrame,
     normalized_paragraph_annotations_df: pl.DataFrame,
@@ -397,7 +459,7 @@ def _build_annotation_paragraph_eval_df(
     )
 
 
-def _build_condition_eval_df(
+def _build_base_condition_eval_df(
     *,
     global_candidate_paragraphs_df: pl.DataFrame,
     token_paragraph_eval_df: pl.DataFrame,
@@ -406,7 +468,13 @@ def _build_condition_eval_df(
 ) -> pl.DataFrame:
     required_form_count = len(condition.forms)
     required_annotation_filter_count = len(condition.annotation_filters)
+    required_category_all_count = len(condition.required_categories_all)
+    required_category_any_count = len(condition.required_categories_any)
     distance_check_applied = condition.effective_max_token_distance is not None
+    has_base_clause = bool(condition.forms or condition.annotation_filters)
+    has_reference_clause = bool(
+        condition.required_categories_all or condition.required_categories_any
+    )
     return (
         global_candidate_paragraphs_df
         .join(token_paragraph_eval_df, on="paragraph_id", how="left")
@@ -419,8 +487,18 @@ def _build_condition_eval_df(
             pl.col("token_is_match").fill_null(True if not condition.forms else False),
             pl.col("matched_annotation_filter_count").fill_null(0).cast(pl.UInt32),
             pl.col("annotation_is_match").fill_null(True if not condition.annotation_filters else False),
+            pl.lit(0).cast(pl.UInt32).alias("matched_required_category_count"),
+            pl.lit(True).alias("reference_is_match"),
         ])
-        .with_columns((pl.col("token_is_match") & pl.col("annotation_is_match")).alias("is_match"))
+        .with_columns([
+            pl.lit(has_base_clause).alias("has_base_clause"),
+            pl.lit(has_reference_clause).alias("has_reference_clause"),
+            pl.when(pl.lit(has_base_clause))
+            .then(pl.col("token_is_match") & pl.col("annotation_is_match"))
+            .otherwise(pl.lit(False))
+            .alias("base_is_match"),
+        ])
+        .with_columns(pl.col("base_is_match").alias("is_match"))
         .with_columns([
             pl.lit(condition.condition_id).alias("condition_id"),
             pl.lit(condition.categories).alias("categories"),
@@ -429,8 +507,12 @@ def _build_condition_eval_df(
             pl.lit(condition.form_match_logic).alias("form_match_logic"),
             pl.lit(", ".join(condition.forms)).alias("condition_forms"),
             pl.lit(_annotation_filters_text(condition.annotation_filters)).alias("annotation_filters_text"),
+            pl.lit(_required_categories_text(condition.required_categories_all)).alias("required_categories_all_text"),
+            pl.lit(_required_categories_text(condition.required_categories_any)).alias("required_categories_any_text"),
             pl.lit(required_form_count).cast(pl.UInt32).alias("required_form_count"),
             pl.lit(required_annotation_filter_count).cast(pl.UInt32).alias("required_annotation_filter_count"),
+            pl.lit(required_category_all_count).cast(pl.UInt32).alias("required_category_all_count"),
+            pl.lit(required_category_any_count).cast(pl.UInt32).alias("required_category_any_count"),
             pl.lit(condition.requested_max_token_distance, dtype=pl.Int64).alias("requested_max_token_distance"),
             pl.lit(condition.effective_max_token_distance, dtype=pl.Int64).alias("effective_max_token_distance"),
             pl.lit(distance_check_applied).alias("distance_check_applied"),
@@ -442,52 +524,163 @@ def _build_condition_eval_df(
 def _build_paragraph_match_summary_df(
     condition_eval_df: pl.DataFrame,
     condition_match_logic: str,
+    *,
+    match_column: str = "is_match",
 ) -> pl.DataFrame:
     if condition_eval_df.is_empty():
         return _empty_paragraph_summary_df()
 
     normalized_match_logic = condition_match_logic.strip().lower()
-    paragraph_rows: list[dict[str, object]] = []
-    for paragraph_df in condition_eval_df.sort(["paragraph_id", "condition_id"]).partition_by("paragraph_id"):
-        paragraph_id = int(paragraph_df.get_column("paragraph_id")[0])
-        condition_count = int(paragraph_df.height)
-        matched_condition_count = 0
-        matched_condition_ids: list[str] = []
-        matched_categories: list[str] = []
-        any_match = False
-        all_match = True
+    sorted_eval_df = condition_eval_df.sort(["paragraph_id", "condition_id"])
+    selected_expr = (
+        pl.col(match_column).all()
+        if normalized_match_logic == "all"
+        else pl.col(match_column).any()
+    )
+    base_summary_df = (
+        sorted_eval_df
+        .group_by("paragraph_id")
+        .agg([
+            pl.len().cast(pl.UInt32).alias("condition_count"),
+            pl.col(match_column).sum().cast(pl.UInt32).alias("matched_condition_count"),
+            selected_expr.alias("is_selected"),
+        ])
+    )
+    matched_condition_ids_df = (
+        sorted_eval_df
+        .filter(pl.col(match_column))
+        .group_by("paragraph_id")
+        .agg(pl.col("condition_id").sort().unique().alias("matched_condition_ids"))
+    )
+    matched_categories_df = (
+        sorted_eval_df
+        .filter(pl.col(match_column))
+        .explode("categories")
+        .filter(pl.col("categories").is_not_null() & (pl.col("categories") != ""))
+        .group_by("paragraph_id")
+        .agg(pl.col("categories").sort().unique().alias("matched_categories"))
+    )
+    return (
+        base_summary_df
+        .join(matched_condition_ids_df, on="paragraph_id", how="left")
+        .join(matched_categories_df, on="paragraph_id", how="left")
+        .with_columns([
+            pl.when(pl.col("matched_condition_ids").is_null())
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(pl.col("matched_condition_ids"))
+            .alias("matched_condition_ids"),
+            pl.when(pl.col("matched_categories").is_null())
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(pl.col("matched_categories"))
+            .alias("matched_categories"),
+        ])
+        .with_columns([
+            pl.col("matched_condition_ids").list.join(", ").alias("matched_condition_ids_text"),
+            pl.col("matched_categories").list.join(", ").alias("matched_categories_text"),
+        ])
+        .select(list(PARAGRAPH_SUMMARY_SCHEMA.keys()))
+        .sort("paragraph_id")
+    )
 
-        for row in paragraph_df.iter_rows(named=True):
-            is_match = bool(row["is_match"])
-            any_match = any_match or is_match
-            all_match = all_match and is_match
-            if not is_match:
-                continue
-            matched_condition_count += 1
-            condition_id = str(row["condition_id"])
-            if condition_id not in matched_condition_ids:
-                matched_condition_ids.append(condition_id)
-            for category in row["categories"]:
-                category_value = str(category)
-                if category_value and category_value not in matched_categories:
-                    matched_categories.append(category_value)
 
-        paragraph_rows.append(
-            {
-                "paragraph_id": paragraph_id,
-                "condition_count": condition_count,
-                "matched_condition_count": matched_condition_count,
-                "is_selected": all_match if normalized_match_logic == "all" else any_match,
-                "matched_condition_ids": matched_condition_ids,
-                "matched_condition_ids_text": ", ".join(matched_condition_ids),
-                "matched_categories": matched_categories,
-                "matched_categories_text": ", ".join(matched_categories),
-            }
+def _build_category_reference_eval_df(
+    *,
+    global_candidate_paragraphs_df: pl.DataFrame,
+    base_paragraph_match_summary_df: pl.DataFrame,
+    condition: NormalizedCondition,
+) -> pl.DataFrame:
+    reference_schema = {
+        "paragraph_id": pl.Int64,
+        "matched_required_category_count": pl.UInt32,
+        "reference_is_match": pl.Boolean,
+    }
+    if not condition.required_categories_all and not condition.required_categories_any:
+        return empty_df(reference_schema)
+
+    all_required_categories = list(
+        dict.fromkeys(condition.required_categories_all + condition.required_categories_any)
+    )
+    available_categories_df = (
+        global_candidate_paragraphs_df
+        .join(
+            base_paragraph_match_summary_df.select(["paragraph_id", "matched_categories"]),
+            on="paragraph_id",
+            how="left",
+        )
+        .with_columns(
+            pl.when(pl.col("matched_categories").is_null())
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(pl.col("matched_categories"))
+            .alias("matched_categories")
+        )
+    )
+    if all_required_categories:
+        available_categories_df = available_categories_df.with_columns(
+            pl.col("matched_categories")
+            .list.set_intersection(pl.lit(all_required_categories, dtype=pl.List(pl.String)))
+            .list.len()
+            .cast(pl.UInt32)
+            .alias("matched_required_category_count")
+        )
+    else:
+        available_categories_df = available_categories_df.with_columns(
+            pl.lit(0).cast(pl.UInt32).alias("matched_required_category_count")
+        )
+
+    reference_match_expr = pl.lit(True)
+    if condition.required_categories_all:
+        reference_match_expr = reference_match_expr & (
+            pl.col("matched_categories")
+            .list.set_intersection(
+                pl.lit(condition.required_categories_all, dtype=pl.List(pl.String))
+            )
+            .list.len()
+            >= len(condition.required_categories_all)
+        )
+    if condition.required_categories_any:
+        reference_match_expr = reference_match_expr & (
+            pl.col("matched_categories")
+            .list.set_intersection(
+                pl.lit(condition.required_categories_any, dtype=pl.List(pl.String))
+            )
+            .list.len()
+            >= 1
         )
 
     return (
-        pl.DataFrame(paragraph_rows, schema=PARAGRAPH_SUMMARY_SCHEMA)
-        .sort("paragraph_id")
+        available_categories_df
+        .with_columns(reference_match_expr.alias("reference_is_match"))
+        .select(list(reference_schema.keys()))
+    )
+
+
+def _apply_category_reference_eval(
+    *,
+    base_condition_eval_df: pl.DataFrame,
+    category_reference_eval_df: pl.DataFrame,
+) -> pl.DataFrame:
+    return (
+        base_condition_eval_df
+        .join(category_reference_eval_df, on="paragraph_id", how="left", suffix="_reference")
+        .with_columns([
+            pl.col("matched_required_category_count_reference")
+            .fill_null(0)
+            .cast(pl.UInt32)
+            .alias("matched_required_category_count"),
+            pl.when(pl.col("has_reference_clause"))
+            .then(pl.col("reference_is_match_reference").fill_null(False))
+            .otherwise(pl.lit(True))
+            .alias("reference_is_match"),
+        ])
+        .with_columns(
+            (
+                pl.when(pl.col("has_base_clause"))
+                .then(pl.col("base_is_match"))
+                .otherwise(pl.lit(True))
+                & pl.col("reference_is_match")
+            ).alias("is_match")
+        )
+        .select(list(CONDITION_EVAL_SCHEMA.keys()))
     )
 
 
@@ -547,12 +740,42 @@ def normalize_cooccurrence_conditions_result(
         if invalid_annotation_filters:
             continue
 
-        if not unique_forms and not normalized_annotation_filters:
+        required_categories_all, required_categories_all_issues, invalid_required_categories_all = (
+            _normalize_string_clause_list(
+                raw_condition.get("required_categories_all"),
+                condition_index=idx,
+                condition_id=provisional_condition_id,
+                field_name="required_categories_all",
+                not_list_code="required_categories_all_not_list",
+            )
+        )
+        issues.extend(required_categories_all_issues)
+        if invalid_required_categories_all:
+            continue
+
+        required_categories_any, required_categories_any_issues, invalid_required_categories_any = (
+            _normalize_string_clause_list(
+                raw_condition.get("required_categories_any"),
+                condition_index=idx,
+                condition_id=provisional_condition_id,
+                field_name="required_categories_any",
+                not_list_code="required_categories_any_not_list",
+            )
+        )
+        issues.extend(required_categories_any_issues)
+        if invalid_required_categories_any:
+            continue
+
+        has_reference_clause = bool(required_categories_all or required_categories_any)
+        if not unique_forms and not normalized_annotation_filters and not has_reference_clause:
             issues.append(
                 _build_condition_issue(
                     code="forms_empty",
                     severity="error",
-                    message="Normalized 'forms' must not be empty unless annotation_filters are present.",
+                    message=(
+                        "Condition must define at least one clause: forms, annotation_filters, "
+                        "required_categories_all, or required_categories_any."
+                    ),
                     condition_index=idx,
                     condition_id=provisional_condition_id,
                     field_name="forms",
@@ -700,6 +923,8 @@ def normalize_cooccurrence_conditions_result(
                 requested_max_token_distance=requested_max_token_distance,
                 effective_max_token_distance=effective_max_token_distance,
                 annotation_filters=normalized_annotation_filters,
+                required_categories_all=required_categories_all,
+                required_categories_any=required_categories_any,
             )
         )
 
@@ -764,7 +989,7 @@ def select_target_ids_by_conditions_result(
             target_sentence_ids=[],
         )
 
-    condition_eval_frames: list[pl.DataFrame] = []
+    base_condition_eval_frames: list[pl.DataFrame] = []
     for condition in normalized_conditions:
         token_paragraph_eval_df = _build_token_paragraph_eval_df(
             candidate_tokens_df=candidate_tokens_df,
@@ -774,8 +999,8 @@ def select_target_ids_by_conditions_result(
             normalized_paragraph_annotations_df=normalized_annotations_df,
             condition=condition,
         )
-        condition_eval_frames.append(
-            _build_condition_eval_df(
+        base_condition_eval_frames.append(
+            _build_base_condition_eval_df(
                 global_candidate_paragraphs_df=global_candidate_paragraphs_df,
                 token_paragraph_eval_df=token_paragraph_eval_df,
                 annotation_paragraph_eval_df=annotation_paragraph_eval_df,
@@ -783,13 +1008,33 @@ def select_target_ids_by_conditions_result(
             )
         )
 
-    if not condition_eval_frames:
+    if not base_condition_eval_frames:
         return TargetSelectionResult(
             candidate_tokens_df=candidate_tokens_df,
             condition_eval_df=_empty_condition_eval_df(),
             paragraph_match_summary_df=_empty_paragraph_summary_df(),
             target_paragraph_ids=[],
             target_sentence_ids=[],
+        )
+
+    base_condition_eval_df = pl.concat(base_condition_eval_frames, how="vertical")
+    base_paragraph_match_summary_df = _build_paragraph_match_summary_df(
+        condition_eval_df=base_condition_eval_df,
+        condition_match_logic=condition_match_logic,
+        match_column="base_is_match",
+    )
+    condition_eval_frames: list[pl.DataFrame] = []
+    for condition, base_condition_df in zip(normalized_conditions, base_condition_eval_frames):
+        category_reference_eval_df = _build_category_reference_eval_df(
+            global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+            base_paragraph_match_summary_df=base_paragraph_match_summary_df,
+            condition=condition,
+        )
+        condition_eval_frames.append(
+            _apply_category_reference_eval(
+                base_condition_eval_df=base_condition_df,
+                category_reference_eval_df=category_reference_eval_df,
+            )
         )
 
     condition_eval_df = pl.concat(condition_eval_frames, how="vertical")

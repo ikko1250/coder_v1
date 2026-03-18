@@ -63,6 +63,8 @@ class NormalizedCondition:
     requested_max_token_distance: int | None
     effective_max_token_distance: int | None
     annotation_filters: list[AnnotationFilter] = field(default_factory=list)
+    required_categories_all: list[str] = field(default_factory=list)
+    required_categories_any: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
