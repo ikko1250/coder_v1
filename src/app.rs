@@ -97,6 +97,12 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
 
 const DB_VIEWER_VIEWPORT_ID: &str = "db_viewer_viewport";
 const CONDITION_EDITOR_VIEWPORT_ID: &str = "condition_editor_viewport";
+const CONDITION_EDITOR_FIELD_LABEL_WIDTH: f32 = 156.0;
+const CONDITION_EDITOR_TEXT_INPUT_WIDTH: f32 = 280.0;
+const CONDITION_EDITOR_CHOICE_WIDTH: f32 = 140.0;
+const CONDITION_EDITOR_NUMBER_WIDTH: f32 = 120.0;
+const CONDITION_EDITOR_LIST_INPUT_WIDTH: f32 = 280.0;
+const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
 
 struct RunningAnalysisJob {
     receiver: Receiver<AnalysisJobEvent>,
@@ -1768,21 +1774,37 @@ impl App {
                                             {
                                                 ui.label(RichText::new("condition 詳細").strong());
                                                 ui.horizontal(|ui| {
-                                                    ui.label("condition_id");
-                                                    let response = ui.text_edit_singleline(
-                                                        &mut condition.condition_id,
+                                                    ui.add_sized(
+                                                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                                        egui::Label::new("condition_id"),
+                                                    );
+                                                    let response = ui.add_sized(
+                                                        [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                                                        egui::TextEdit::singleline(
+                                                            &mut condition.condition_id,
+                                                        ),
                                                     );
                                                     changed |= response.changed();
                                                 });
 
                                                 ui.horizontal(|ui| {
-                                                    ui.label("form_match_logic");
+                                                    ui.add_sized(
+                                                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                                        egui::Label::new("form_match_logic"),
+                                                    );
                                                     changed |= edit_optional_choice(
                                                         ui,
                                                         &mut condition.form_match_logic,
                                                         &["all", "any"],
+                                                        CONDITION_EDITOR_CHOICE_WIDTH,
                                                     );
-                                                    ui.label("search_scope");
+                                                });
+
+                                                ui.horizontal(|ui| {
+                                                    ui.add_sized(
+                                                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                                        egui::Label::new("search_scope"),
+                                                    );
                                                     let search_scope_locked =
                                                         !condition.annotation_filters.is_empty();
                                                     if search_scope_locked {
@@ -1796,30 +1818,41 @@ impl App {
                                                         ui.add_enabled(
                                                             false,
                                                             egui::TextEdit::singleline(
-                                                                condition.search_scope.get_or_insert_with(
-                                                                    || "paragraph".to_string(),
-                                                                ),
+                                                                condition
+                                                                    .search_scope
+                                                                    .get_or_insert_with(
+                                                                        || "paragraph".to_string(),
+                                                                    ),
                                                             )
-                                                            .desired_width(100.0),
-                                                        );
-                                                        ui.label(
-                                                            "annotation_filters ありのため paragraph 固定",
+                                                            .desired_width(
+                                                                CONDITION_EDITOR_CHOICE_WIDTH,
+                                                            ),
                                                         );
                                                     } else {
                                                         changed |= edit_optional_choice(
                                                             ui,
                                                             &mut condition.search_scope,
                                                             &["paragraph", "sentence"],
+                                                            CONDITION_EDITOR_CHOICE_WIDTH,
                                                         );
                                                     }
                                                 });
+                                                if !condition.annotation_filters.is_empty() {
+                                                    ui.label(
+                                                        "annotation_filters ありのため paragraph 固定",
+                                                    );
+                                                }
 
                                                 ui.horizontal(|ui| {
-                                                    ui.label("max_token_distance");
+                                                    ui.add_sized(
+                                                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                                        egui::Label::new("max_token_distance"),
+                                                    );
                                                     changed |= edit_optional_i64(
                                                         ui,
                                                         &mut condition.max_token_distance,
                                                         5,
+                                                        CONDITION_EDITOR_NUMBER_WIDTH,
                                                     );
                                                 });
 
@@ -2596,7 +2629,12 @@ fn summarize_condition_list(values: &[String], preview_count: usize) -> String {
     preview.join(", ")
 }
 
-fn edit_optional_choice(ui: &mut Ui, value: &mut Option<String>, options: &[&str]) -> bool {
+fn edit_optional_choice(
+    ui: &mut Ui,
+    value: &mut Option<String>,
+    options: &[&str],
+    width: f32,
+) -> bool {
     let current_value = value.clone().unwrap_or_default();
     let selected_text = if current_value.trim().is_empty() {
         "(未設定)".to_string()
@@ -2606,6 +2644,7 @@ fn edit_optional_choice(ui: &mut Ui, value: &mut Option<String>, options: &[&str
     let mut changed = false;
 
     egui::ComboBox::from_id_salt(ui.next_auto_id())
+        .width(width)
         .selected_text(selected_text)
         .show_ui(ui, |ui| {
             if ui
@@ -2626,7 +2665,12 @@ fn edit_optional_choice(ui: &mut Ui, value: &mut Option<String>, options: &[&str
     changed
 }
 
-fn edit_optional_i64(ui: &mut Ui, value: &mut Option<i64>, default_value: i64) -> bool {
+fn edit_optional_i64(
+    ui: &mut Ui,
+    value: &mut Option<i64>,
+    default_value: i64,
+    width: f32,
+) -> bool {
     let mut changed = false;
     let mut enabled = value.is_some();
     if ui.checkbox(&mut enabled, "有効").changed() {
@@ -2640,7 +2684,13 @@ fn edit_optional_i64(ui: &mut Ui, value: &mut Option<i64>, default_value: i64) -
 
     let mut number = value.unwrap_or(default_value);
     if ui
-        .add_enabled(enabled, egui::DragValue::new(&mut number).range(1..=999_999))
+        .add_enabled_ui(enabled, |ui| {
+            ui.add_sized(
+                [width, 0.0],
+                egui::DragValue::new(&mut number).range(1..=999_999),
+            )
+        })
+        .inner
         .changed()
     {
         *value = Some(number);
@@ -2680,9 +2730,9 @@ fn draw_string_list_editor(
                 for (index, value) in values.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{:02}", index + 1));
-                        let response = ui.add(
-                            egui::TextEdit::singleline(value)
-                                .desired_width(f32::INFINITY),
+                        let response = ui.add_sized(
+                            [CONDITION_EDITOR_LIST_INPUT_WIDTH, 0.0],
+                            egui::TextEdit::singleline(value),
                         );
                         if response.changed() {
                             changed = true;
@@ -2737,24 +2787,64 @@ fn draw_annotation_filter_editor(
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.label("namespace");
-                            if ui.text_edit_singleline(&mut filter.namespace).changed() {
-                                changed = true;
-                            }
-                            ui.label("key");
-                            if ui.text_edit_singleline(&mut filter.key).changed() {
+                            ui.add_sized(
+                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                egui::Label::new("namespace"),
+                            );
+                            if ui
+                                .add_sized(
+                                    [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                                    egui::TextEdit::singleline(&mut filter.namespace),
+                                )
+                                .changed()
+                            {
                                 changed = true;
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.label("value");
-                            if ui.text_edit_singleline(&mut filter.value).changed() {
+                            ui.add_sized(
+                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                egui::Label::new("key"),
+                            );
+                            if ui
+                                .add_sized(
+                                    [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                                    egui::TextEdit::singleline(&mut filter.key),
+                                )
+                                .changed()
+                            {
                                 changed = true;
                             }
-                            ui.label("operator");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                egui::Label::new("value"),
+                            );
+                            if ui
+                                .add_sized(
+                                    [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                                    egui::TextEdit::singleline(&mut filter.value),
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                                egui::Label::new("operator"),
+                            );
                             let operator_text =
                                 filter.operator.get_or_insert_with(|| "eq".to_string());
-                            if ui.text_edit_singleline(operator_text).changed() {
+                            if ui
+                                .add_sized(
+                                    [CONDITION_EDITOR_FILTER_OPERATOR_WIDTH, 0.0],
+                                    egui::TextEdit::singleline(operator_text),
+                                )
+                                .changed()
+                            {
                                 changed = true;
                             }
                         });
