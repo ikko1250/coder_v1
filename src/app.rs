@@ -23,7 +23,7 @@ use crate::tagged_text::parse_tagged_text;
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, RichText, ScrollArea, TextStyle, TextWrapMode, Ui};
-use egui_extras::{Column, TableBuilder};
+use egui_extras::{Column, Size, StripBuilder, TableBuilder};
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -1689,166 +1689,183 @@ impl App {
         requested_selection: &mut Option<usize>,
         should_add_condition: &mut bool,
     ) {
-        ui.columns(2, |columns| {
-            columns[0].vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("condition 一覧").strong());
-                    if ui
-                        .add_enabled(can_modify, egui::Button::new("追加"))
-                        .clicked()
-                    {
-                        *should_add_condition = true;
-                    }
+        StripBuilder::new(ui)
+            .size(Size::exact(340.0))
+            .size(Size::remainder())
+            .horizontal(|mut strip| {
+                strip.cell(|ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("condition 一覧").strong());
+                            if ui
+                                .add_enabled(can_modify, egui::Button::new("追加"))
+                                .clicked()
+                            {
+                                *should_add_condition = true;
+                            }
+                        });
+
+                        ScrollArea::vertical()
+                            .id_salt("condition_editor_list_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let Some(document) = self.condition_editor_state.document.as_ref() else {
+                                    ui.label(RichText::new("条件 JSON 未読込").italics());
+                                    return;
+                                };
+                                if document.cooccurrence_conditions.is_empty() {
+                                    ui.label(RichText::new("condition がありません").italics());
+                                } else {
+                                    for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
+                                        let selected = *requested_selection == Some(index);
+                                        let categories_preview =
+                                            summarize_condition_list(&condition.categories, 2);
+                                        let label = format!(
+                                            "{}. {} [{}] forms:{} filters:{} refs:{}",
+                                            index + 1,
+                                            condition.condition_id,
+                                            categories_preview,
+                                            condition.forms.len(),
+                                            condition.annotation_filters.len(),
+                                            condition.required_categories_all.len()
+                                                + condition.required_categories_any.len()
+                                        );
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            *requested_selection = Some(index);
+                                        }
+                                    }
+                                }
+                            });
+                    });
                 });
 
-                ScrollArea::vertical()
-                    .id_salt("condition_editor_list_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let Some(document) = self.condition_editor_state.document.as_ref() else {
-                            ui.label(RichText::new("条件 JSON 未読込").italics());
-                            return;
-                        };
-                        if document.cooccurrence_conditions.is_empty() {
-                            ui.label(RichText::new("condition がありません").italics());
-                        } else {
-                            for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
-                                let selected = *requested_selection == Some(index);
-                                let categories_preview =
-                                    summarize_condition_list(&condition.categories, 2);
-                                let label = format!(
-                                    "{}. {} [{}] forms:{} filters:{} refs:{}",
-                                    index + 1,
-                                    condition.condition_id,
-                                    categories_preview,
-                                    condition.forms.len(),
-                                    condition.annotation_filters.len(),
-                                    condition.required_categories_all.len()
-                                        + condition.required_categories_any.len()
+                strip.cell(|ui| {
+                    ScrollArea::vertical()
+                        .id_salt("condition_editor_detail_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let should_mark_dirty = if let Some(document) =
+                                self.condition_editor_state.document.as_mut()
+                            {
+                                let mut changed = false;
+                                *requested_selection = clamp_condition_index(
+                                    *requested_selection,
+                                    document.cooccurrence_conditions.len(),
                                 );
-                                if ui.selectable_label(selected, label).clicked() {
-                                    *requested_selection = Some(index);
-                                }
-                            }
-                        }
-                    });
-            });
+                                if let Some(selected_index) = *requested_selection {
+                                    if let Some(condition) =
+                                        document.cooccurrence_conditions.get_mut(selected_index)
+                                    {
+                                        ui.label(RichText::new("condition 詳細").strong());
+                                        ui.horizontal(|ui| {
+                                            ui.label("condition_id");
+                                            let response =
+                                                ui.text_edit_singleline(&mut condition.condition_id);
+                                            changed |= response.changed();
+                                        });
 
-            columns[1].vertical(|ui| {
-                let should_mark_dirty = if let Some(document) =
-                    self.condition_editor_state.document.as_mut()
-                {
-                    let mut changed = false;
-                    *requested_selection = clamp_condition_index(
-                        *requested_selection,
-                        document.cooccurrence_conditions.len(),
-                    );
-                    if let Some(selected_index) = *requested_selection {
-                        if let Some(condition) =
-                            document.cooccurrence_conditions.get_mut(selected_index)
-                        {
-                            ui.label(RichText::new("condition 詳細").strong());
-                            ui.horizontal(|ui| {
-                                ui.label("condition_id");
-                                let response =
-                                    ui.text_edit_singleline(&mut condition.condition_id);
-                                changed |= response.changed();
-                            });
+                                        ui.horizontal(|ui| {
+                                            ui.label("form_match_logic");
+                                            changed |= edit_optional_choice(
+                                                ui,
+                                                &mut condition.form_match_logic,
+                                                &["all", "any"],
+                                            );
+                                            ui.label("search_scope");
+                                            let search_scope_locked =
+                                                !condition.annotation_filters.is_empty();
+                                            if search_scope_locked {
+                                                if condition.search_scope.as_deref()
+                                                    != Some("paragraph")
+                                                {
+                                                    condition.search_scope =
+                                                        Some("paragraph".to_string());
+                                                    changed = true;
+                                                }
+                                                ui.add_enabled(
+                                                    false,
+                                                    egui::TextEdit::singleline(
+                                                        condition.search_scope.get_or_insert_with(
+                                                            || "paragraph".to_string(),
+                                                        ),
+                                                    )
+                                                    .desired_width(100.0),
+                                                );
+                                                ui.label(
+                                                    "annotation_filters ありのため paragraph 固定",
+                                                );
+                                            } else {
+                                                changed |= edit_optional_choice(
+                                                    ui,
+                                                    &mut condition.search_scope,
+                                                    &["paragraph", "sentence"],
+                                                );
+                                            }
+                                        });
 
-                            ui.horizontal(|ui| {
-                                ui.label("form_match_logic");
-                                changed |= edit_optional_choice(
-                                    ui,
-                                    &mut condition.form_match_logic,
-                                    &["all", "any"],
-                                );
-                                ui.label("search_scope");
-                                let search_scope_locked =
-                                    !condition.annotation_filters.is_empty();
-                                if search_scope_locked {
-                                    if condition.search_scope.as_deref() != Some("paragraph") {
-                                        condition.search_scope = Some("paragraph".to_string());
-                                        changed = true;
+                                        ui.horizontal(|ui| {
+                                            ui.label("max_token_distance");
+                                            changed |= edit_optional_i64(
+                                                ui,
+                                                &mut condition.max_token_distance,
+                                                5,
+                                            );
+                                        });
+
+                                        ui.add_space(8.0);
+                                        changed |= draw_string_list_editor(
+                                            ui,
+                                            "condition_categories_editor",
+                                            "categories",
+                                            &mut condition.categories,
+                                            110.0,
+                                        );
+                                        changed |= draw_string_list_editor(
+                                            ui,
+                                            "condition_forms_editor",
+                                            "forms",
+                                            &mut condition.forms,
+                                            150.0,
+                                        );
+                                        changed |= draw_annotation_filter_editor(
+                                            ui,
+                                            "condition_annotation_filters_editor",
+                                            &mut condition.annotation_filters,
+                                        );
+                                        changed |= draw_string_list_editor(
+                                            ui,
+                                            "condition_required_categories_all_editor",
+                                            "required_categories_all",
+                                            &mut condition.required_categories_all,
+                                            96.0,
+                                        );
+                                        changed |= draw_string_list_editor(
+                                            ui,
+                                            "condition_required_categories_any_editor",
+                                            "required_categories_any",
+                                            &mut condition.required_categories_any,
+                                            96.0,
+                                        );
+                                    } else {
+                                        ui.label(
+                                            RichText::new("condition を選択してください").italics(),
+                                        );
                                     }
-                                    ui.add_enabled(
-                                        false,
-                                        egui::TextEdit::singleline(
-                                            condition
-                                                .search_scope
-                                                .get_or_insert_with(|| "paragraph".to_string()),
-                                        )
-                                        .desired_width(100.0),
-                                    );
-                                    ui.label("annotation_filters ありのため paragraph 固定");
                                 } else {
-                                    changed |= edit_optional_choice(
-                                        ui,
-                                        &mut condition.search_scope,
-                                        &["paragraph", "sentence"],
-                                    );
+                                    ui.label(RichText::new("condition を選択してください").italics());
                                 }
-                            });
+                                changed
+                            } else {
+                                ui.label(RichText::new("条件 JSON 未読込").italics());
+                                false
+                            };
 
-                            ui.horizontal(|ui| {
-                                ui.label("max_token_distance");
-                                changed |= edit_optional_i64(
-                                    ui,
-                                    &mut condition.max_token_distance,
-                                    5,
-                                );
-                            });
-
-                            ui.add_space(8.0);
-                            changed |= draw_string_list_editor(
-                                ui,
-                                "condition_categories_editor",
-                                "categories",
-                                &mut condition.categories,
-                                110.0,
-                            );
-                            changed |= draw_string_list_editor(
-                                ui,
-                                "condition_forms_editor",
-                                "forms",
-                                &mut condition.forms,
-                                150.0,
-                            );
-                            changed |= draw_annotation_filter_editor(
-                                ui,
-                                "condition_annotation_filters_editor",
-                                &mut condition.annotation_filters,
-                            );
-                            changed |= draw_string_list_editor(
-                                ui,
-                                "condition_required_categories_all_editor",
-                                "required_categories_all",
-                                &mut condition.required_categories_all,
-                                96.0,
-                            );
-                            changed |= draw_string_list_editor(
-                                ui,
-                                "condition_required_categories_any_editor",
-                                "required_categories_any",
-                                &mut condition.required_categories_any,
-                                96.0,
-                            );
-                        } else {
-                            ui.label(RichText::new("condition を選択してください").italics());
-                        }
-                    } else {
-                        ui.label(RichText::new("condition を選択してください").italics());
-                    }
-                    changed
-                } else {
-                    ui.label(RichText::new("条件 JSON 未読込").italics());
-                    false
-                };
-
-                if should_mark_dirty {
-                    self.mark_condition_editor_dirty();
-                }
+                            if should_mark_dirty {
+                                self.mark_condition_editor_dirty();
+                            }
+                        });
+                });
             });
-        });
     }
 
     fn draw_condition_editor_footer_panel(
@@ -1967,6 +1984,7 @@ impl App {
         let mut close_requested = false;
         let current_confirm_action = self.condition_editor_state.confirm_action.clone();
         let mut modal_response = None;
+        let panel_fill = ctx.style().visuals.panel_fill;
 
         ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
             close_requested = viewport_ctx.input(|input| input.viewport().close_requested());
@@ -2011,7 +2029,11 @@ impl App {
                 }
                 _ => {
                     egui::TopBottomPanel::top("condition_editor_viewport_header")
-                        .frame(egui::Frame::default().inner_margin(egui::Margin::same(10)))
+                        .frame(
+                            egui::Frame::default()
+                                .fill(panel_fill)
+                                .inner_margin(egui::Margin::same(10)),
+                        )
                         .show(viewport_ctx, |ui| {
                             self.draw_condition_editor_header_panel(
                                 ui,
@@ -2022,7 +2044,11 @@ impl App {
                         });
 
                     egui::TopBottomPanel::bottom("condition_editor_viewport_footer")
-                        .frame(egui::Frame::default().inner_margin(egui::Margin::same(10)))
+                        .frame(
+                            egui::Frame::default()
+                                .fill(panel_fill)
+                                .inner_margin(egui::Margin::same(10)),
+                        )
                         .show(viewport_ctx, |ui| {
                             self.draw_condition_editor_footer_panel(
                                 ui,
@@ -2034,7 +2060,11 @@ impl App {
                         });
 
                     egui::CentralPanel::default()
-                        .frame(egui::Frame::default().inner_margin(egui::Margin::same(10)))
+                        .frame(
+                            egui::Frame::default()
+                                .fill(panel_fill)
+                                .inner_margin(egui::Margin::same(10)),
+                        )
                         .show(viewport_ctx, |ui| {
                             self.draw_condition_editor_body_panel(
                                 ui,
