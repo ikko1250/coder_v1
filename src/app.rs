@@ -1692,7 +1692,6 @@ impl App {
         let panel_fill = ui.style().visuals.panel_fill;
         StripBuilder::new(ui)
             .size(Size::exact(340.0))
-            .size(Size::exact(16.0))
             .size(Size::remainder())
             .horizontal(|mut strip| {
                 strip.cell(|ui| {
@@ -1741,14 +1740,12 @@ impl App {
                     });
                 });
 
-                strip.empty();
-
                 strip.cell(|ui| {
                     egui::Frame::default()
                         .fill(panel_fill)
                         .inner_margin(egui::Margin {
-                            left: 14,
-                            right: 14,
+                            left: 32,
+                            right: 32,
                             top: 10,
                             bottom: 10,
                         })
