@@ -3,6 +3,7 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "AnnotationFilter",
     "ConfigIssue",
     "ConditionHitResult",
     "DataAccessIssue",
@@ -39,6 +40,7 @@ __all__ = [
 def __getattr__(name: str):
     if name in __all__:
         module_name = ".condition_model" if name in {
+            "AnnotationFilter",
             "ConfigIssue",
             "ConditionHitResult",
             "DataAccessIssue",

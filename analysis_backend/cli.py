@@ -353,6 +353,7 @@ def run_analysis_job(args: Namespace) -> int:
             cooccurrence_conditions=filter_config.cooccurrence_conditions,
             condition_match_logic=filter_config.condition_match_logic,
             max_paragraph_ids=filter_config.max_reconstructed_paragraphs,
+            normalized_paragraph_annotations_df=manual_annotations_result_value.normalized_paragraph_annotations_df,
         )
 
         selected_tokens_with_position_df = build_tokens_with_position_df(
@@ -375,6 +376,7 @@ def run_analysis_job(args: Namespace) -> int:
         reconstructed_paragraphs_base_df = build_rendered_paragraphs_df(
             tokens_with_position_df=selected_tokens_with_position_df,
             token_annotations_df=token_annotations_df,
+            paragraph_match_summary_df=paragraph_match_summary_df,
         )
         reconstructed_paragraphs_result = enrich_reconstructed_paragraphs_result(
             db_path=db_path,

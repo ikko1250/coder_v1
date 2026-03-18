@@ -4,10 +4,10 @@ from pathlib import Path
 
 import polars as pl
 
-from .condition_model import DistanceMatchingMode
-from .condition_model import FilterConfig
 from .condition_model import ConditionHitResult
 from .condition_model import DataAccessResult
+from .condition_model import DistanceMatchingMode
+from .condition_model import FilterConfig
 from .condition_model import LoadFilterConfigResult
 from .condition_model import NormalizedCondition
 from .condition_evaluator import normalize_cooccurrence_conditions as _normalize_cooccurrence_conditions_impl
@@ -133,6 +133,15 @@ def _normalized_conditions_to_dicts(
             "categories": condition.categories,
             "category_text": condition.category_text,
             "forms": condition.forms,
+            "annotation_filters": [
+                {
+                    "namespace": annotation_filter.label_namespace,
+                    "key": annotation_filter.label_key,
+                    "value": annotation_filter.label_value,
+                    "operator": annotation_filter.operator,
+                }
+                for annotation_filter in condition.annotation_filters
+            ],
             "search_scope": condition.search_scope,
             "form_match_logic": condition.form_match_logic,
             "requested_max_token_distance": condition.requested_max_token_distance,
@@ -190,10 +199,12 @@ def build_token_annotations_df(condition_hit_tokens_df: pl.DataFrame) -> pl.Data
 def build_rendered_paragraphs_df(
     tokens_with_position_df: pl.DataFrame,
     token_annotations_df: pl.DataFrame,
+    paragraph_match_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     return _build_rendered_paragraphs_df_impl(
         tokens_with_position_df=tokens_with_position_df,
         token_annotations_df=token_annotations_df,
+        paragraph_match_summary_df=paragraph_match_summary_df,
     )
 
 
@@ -215,6 +226,7 @@ def select_target_ids_by_cooccurrence_conditions(
     cooccurrence_conditions: list[dict[str, object]],
     condition_match_logic: str = "any",
     max_paragraph_ids: int = 100,
+    normalized_paragraph_annotations_df: pl.DataFrame | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, list[int], list[int]]:
     # Legacy facade: keep returning the historical 5-item tuple for existing callers.
     normalized_conditions = _normalize_cooccurrence_conditions_impl(cooccurrence_conditions)
@@ -224,6 +236,7 @@ def select_target_ids_by_cooccurrence_conditions(
         normalized_conditions=normalized_conditions,
         condition_match_logic=condition_match_logic,
         max_paragraph_ids=max_paragraph_ids,
+        normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
     )
     return (
         selection_result.candidate_tokens_df,

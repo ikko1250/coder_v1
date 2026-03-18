@@ -45,6 +45,14 @@ class DataAccessResult:
 
 
 @dataclass(frozen=True)
+class AnnotationFilter:
+    label_namespace: str
+    label_key: str
+    label_value: str
+    operator: str = "eq"
+
+
+@dataclass(frozen=True)
 class NormalizedCondition:
     condition_id: str
     categories: list[str]
@@ -54,6 +62,7 @@ class NormalizedCondition:
     form_match_logic: str
     requested_max_token_distance: int | None
     effective_max_token_distance: int | None
+    annotation_filters: list[AnnotationFilter] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

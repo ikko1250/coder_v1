@@ -42,6 +42,16 @@ PARAGRAPH_ANNOTATION_SUMMARY_SCHEMA = {
     "manual_annotation_namespaces": pl.List(pl.String),
     "manual_annotation_namespaces_text": pl.String,
 }
+NORMALIZED_PARAGRAPH_ANNOTATION_SCHEMA = {
+    "paragraph_id": pl.Int64,
+    "label_namespace": pl.String,
+    "label_key": pl.String,
+    "label_value": pl.String,
+    "tagged_by": pl.String,
+    "tagged_at": pl.String,
+    "confidence": pl.String,
+    "note": pl.String,
+}
 KNOWN_TARGET_TYPES = {"paragraph", "document", "sentence"}
 
 
@@ -60,6 +70,7 @@ class AnnotationIssue:
 class LoadManualAnnotationsResult:
     raw_annotations_df: pl.DataFrame | None
     paragraph_annotations_df: pl.DataFrame | None
+    normalized_paragraph_annotations_df: pl.DataFrame | None
     issues: list[AnnotationIssue] = field(default_factory=list)
 
 
@@ -69,6 +80,10 @@ def _empty_raw_annotations_df() -> pl.DataFrame:
 
 def _empty_paragraph_annotations_df() -> pl.DataFrame:
     return pl.DataFrame(schema=PARAGRAPH_ANNOTATION_SUMMARY_SCHEMA)
+
+
+def _empty_normalized_paragraph_annotations_df() -> pl.DataFrame:
+    return pl.DataFrame(schema=NORMALIZED_PARAGRAPH_ANNOTATION_SCHEMA)
 
 
 def _build_annotation_issue(
@@ -253,6 +268,7 @@ def load_manual_annotations_result(annotation_csv_path: Path) -> LoadManualAnnot
         return LoadManualAnnotationsResult(
             raw_annotations_df=_empty_raw_annotations_df(),
             paragraph_annotations_df=_empty_paragraph_annotations_df(),
+            normalized_paragraph_annotations_df=_empty_normalized_paragraph_annotations_df(),
             issues=[],
         )
 
@@ -262,6 +278,7 @@ def load_manual_annotations_result(annotation_csv_path: Path) -> LoadManualAnnot
         return LoadManualAnnotationsResult(
             raw_annotations_df=raw_annotations_df,
             paragraph_annotations_df=None,
+            normalized_paragraph_annotations_df=None,
             issues=required_column_issues,
         )
 
@@ -291,6 +308,7 @@ def load_manual_annotations_result(annotation_csv_path: Path) -> LoadManualAnnot
         return LoadManualAnnotationsResult(
             raw_annotations_df=raw_annotations_df,
             paragraph_annotations_df=None,
+            normalized_paragraph_annotations_df=None,
             issues=issues,
         )
 
@@ -318,10 +336,11 @@ def load_manual_annotations_result(annotation_csv_path: Path) -> LoadManualAnnot
         return LoadManualAnnotationsResult(
             raw_annotations_df=raw_annotations_df,
             paragraph_annotations_df=None,
+            normalized_paragraph_annotations_df=None,
             issues=issues,
         )
 
-    paragraph_annotations_df = paragraph_candidate_df.select([
+    normalized_paragraph_annotations_df = paragraph_candidate_df.select([
         "row_number",
         "paragraph_id",
         "label_namespace",
@@ -332,12 +351,15 @@ def load_manual_annotations_result(annotation_csv_path: Path) -> LoadManualAnnot
         "confidence",
         "note",
     ])
-    issues = _build_duplicate_and_conflict_issues(paragraph_annotations_df)
+    issues = _build_duplicate_and_conflict_issues(normalized_paragraph_annotations_df)
     paragraph_annotations_summary_df = _build_paragraph_annotations_summary_df(
-        paragraph_annotations_df=paragraph_annotations_df,
+        paragraph_annotations_df=normalized_paragraph_annotations_df,
     )
     return LoadManualAnnotationsResult(
         raw_annotations_df=raw_annotations_df,
         paragraph_annotations_df=paragraph_annotations_summary_df,
+        normalized_paragraph_annotations_df=normalized_paragraph_annotations_df.select(
+            list(NORMALIZED_PARAGRAPH_ANNOTATION_SCHEMA.keys())
+        ),
         issues=issues,
     )

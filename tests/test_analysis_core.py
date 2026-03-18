@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class AnalysisCoreContractTests(unittest.TestCase):
     def test_condition_models_are_exported_via_package_api(self) -> None:
+        self.assertIs(analysis_backend.AnnotationFilter, condition_model.AnnotationFilter)
         self.assertIs(analysis_backend.ConfigIssue, condition_model.ConfigIssue)
         self.assertIs(analysis_backend.FilterConfig, condition_model.FilterConfig)
         self.assertIs(analysis_backend.DataAccessIssue, condition_model.DataAccessIssue)
@@ -90,6 +91,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
         )
 
         self.assertTrue(is_dataclass(condition_model.FilterConfig))
+        self.assertTrue(is_dataclass(condition_model.AnnotationFilter))
         self.assertTrue(is_dataclass(condition_model.ConfigIssue))
         self.assertTrue(is_dataclass(condition_model.DataAccessIssue))
         self.assertTrue(is_dataclass(condition_model.DataAccessResult))
@@ -200,6 +202,45 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(
             condition_evaluator.normalize_cooccurrence_conditions(raw_conditions),
             normalization_result.normalized_conditions,
+        )
+
+    def test_normalize_cooccurrence_conditions_result_accepts_annotation_only_condition(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "manual_zone",
+                    "categories": ["区域類型:抑制"],
+                    "forms": [],
+                    "search_scope": "sentence",
+                    "annotation_filters": [
+                        {
+                            "namespace": "zoning",
+                            "key": "zone_strength",
+                            "value": "suppression",
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(len(normalization_result.normalized_conditions), 1)
+        normalized_condition = normalization_result.normalized_conditions[0]
+        self.assertEqual(normalized_condition.forms, [])
+        self.assertEqual(normalized_condition.search_scope, "paragraph")
+        self.assertEqual(
+            normalized_condition.annotation_filters,
+            [
+                condition_model.AnnotationFilter(
+                    label_namespace="zoning",
+                    label_key="zone_strength",
+                    label_value="suppression",
+                    operator="eq",
+                )
+            ],
+        )
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["annotation_filters_search_scope_normalized"],
         )
 
     def test_load_filter_config_reads_explicit_matching_settings(self) -> None:
@@ -853,6 +894,229 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(condition_eval_row["evaluated_unit_count"], 2)
         self.assertEqual(condition_eval_row["matched_unit_count"], 1)
         self.assertTrue(condition_eval_row["is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_annotation_only_conditions(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 2, 2],
+                "sentence_id": [11, 11, 21, 21],
+                "token_no": [0, 1, 0, 1],
+                "normalized_form": ["抑制", "区域", "その他", "規定"],
+                "surface": ["抑制", "区域", "その他", "規定"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+        normalized_paragraph_annotations_df = pl.DataFrame(
+            {
+                "paragraph_id": [2],
+                "label_namespace": ["zoning"],
+                "label_key": ["zone_strength"],
+                "label_value": ["suppression"],
+                "tagged_by": ["alice"],
+                "tagged_at": ["2026-03-18"],
+                "confidence": ["high"],
+                "note": [""],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="manual_zone",
+                    categories=["区域類型:抑制"],
+                    category_text="区域類型:抑制",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    annotation_filters=[
+                        condition_model.AnnotationFilter(
+                            label_namespace="zoning",
+                            label_key="zone_strength",
+                            label_value="suppression",
+                            operator="eq",
+                        )
+                    ],
+                )
+            ],
+            normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
+        )
+
+        self.assertTrue(result.candidate_tokens_df.is_empty())
+        self.assertEqual(result.target_paragraph_ids, [2])
+        self.assertEqual(result.target_sentence_ids, [21])
+        self.assertEqual(result.paragraph_match_summary_df.get_column("matched_condition_ids_text").to_list(), ["manual_zone"])
+        self.assertEqual(result.paragraph_match_summary_df.get_column("matched_categories_text").to_list(), ["区域類型:抑制"])
+        condition_eval_row = result.condition_eval_df.row(0, named=True)
+        self.assertTrue(condition_eval_row["annotation_is_match"])
+        self.assertTrue(condition_eval_row["token_is_match"])
+        self.assertTrue(condition_eval_row["is_match"])
+
+    def test_select_target_ids_by_conditions_result_handles_all_forms_empty_for_annotation_only_condition(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [2],
+                "sentence_id": [21],
+                "token_no": [0],
+                "normalized_form": ["その他"],
+                "surface": ["その他"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [21],
+                "paragraph_id": [2],
+                "sentence_no_in_paragraph": [1],
+            }
+        )
+        normalized_paragraph_annotations_df = pl.DataFrame(
+            {
+                "paragraph_id": [2],
+                "label_namespace": ["zoning"],
+                "label_key": ["zone_strength"],
+                "label_value": ["suppression"],
+                "tagged_by": ["alice"],
+                "tagged_at": ["2026-03-18"],
+                "confidence": ["high"],
+                "note": [""],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="manual_zone",
+                    categories=["区域類型:抑制"],
+                    category_text="区域類型:抑制",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    annotation_filters=[
+                        condition_model.AnnotationFilter(
+                            label_namespace="zoning",
+                            label_key="zone_strength",
+                            label_value="suppression",
+                            operator="eq",
+                        )
+                    ],
+                )
+            ],
+            normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [2])
+        self.assertEqual(result.condition_eval_df.get_column("condition_forms").to_list(), [""])
+
+    def test_select_target_ids_by_conditions_result_requires_both_token_and_annotation_match_for_mixed_condition(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 2, 2],
+                "sentence_id": [11, 11, 21, 21],
+                "token_no": [0, 1, 0, 1],
+                "normalized_form": ["土砂", "災害", "土砂", "災害"],
+                "surface": ["土砂", "災害", "土砂", "災害"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+        normalized_paragraph_annotations_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 2],
+                "label_namespace": ["zoning", "zoning"],
+                "label_key": ["zone_strength", "zone_strength"],
+                "label_value": ["suppression", "prohibition"],
+                "tagged_by": ["alice", "alice"],
+                "tagged_at": ["2026-03-18", "2026-03-18"],
+                "confidence": ["high", "high"],
+                "note": ["", ""],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="mixed_condition",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["土砂", "災害"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    annotation_filters=[
+                        condition_model.AnnotationFilter(
+                            label_namespace="zoning",
+                            label_key="zone_strength",
+                            label_value="suppression",
+                            operator="eq",
+                        )
+                    ],
+                )
+            ],
+            normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
+        self.assertTrue(eval_rows[0]["is_match"])
+        self.assertFalse(eval_rows[1]["annotation_is_match"])
+        self.assertFalse(eval_rows[1]["is_match"])
+
+    def test_build_rendered_paragraphs_df_uses_paragraph_match_summary_for_annotation_only_conditions(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [2, 2],
+                "sentence_id": [21, 21],
+                "sentence_no_in_paragraph": [1, 1],
+                "is_table_paragraph": [0, 0],
+                "token_no": [0, 1],
+                "sentence_token_position": [0, 1],
+                "paragraph_token_position": [0, 1],
+                "normalized_form": ["その他", "規定"],
+                "surface": ["その他", "規定"],
+            }
+        )
+        paragraph_match_summary_df = pl.DataFrame(
+            {
+                "paragraph_id": [2],
+                "condition_count": [1],
+                "matched_condition_count": [1],
+                "is_selected": [True],
+                "matched_condition_ids": [["manual_zone"]],
+                "matched_condition_ids_text": ["manual_zone"],
+                "matched_categories": [["区域類型:抑制"]],
+                "matched_categories_text": ["区域類型:抑制"],
+            }
+        )
+
+        rendered_df = analysis_core.build_rendered_paragraphs_df(
+            tokens_with_position_df=tokens_with_position_df,
+            token_annotations_df=pl.DataFrame(),
+            paragraph_match_summary_df=paragraph_match_summary_df,
+        )
+
+        self.assertEqual(rendered_df.get_column("matched_condition_ids_text").to_list(), ["manual_zone"])
+        self.assertEqual(rendered_df.get_column("matched_categories_text").to_list(), ["区域類型:抑制"])
 
     def test_build_reconstructed_paragraphs_export_df_keeps_required_columns(self) -> None:
         reconstructed_paragraphs_df = pl.DataFrame(

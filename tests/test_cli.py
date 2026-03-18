@@ -386,6 +386,31 @@ def build_manual_annotations_csv(annotation_csv_path: Path) -> None:
     )
 
 
+def build_annotation_only_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "condition_match_logic": "any",
+        "max_reconstructed_paragraphs": 10,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "manual_zone",
+                "categories": ["区域類型:抑制"],
+                "forms": [],
+                "annotation_filters": [
+                    {
+                        "namespace": "zoning",
+                        "key": "zone_strength",
+                        "value": "suppression",
+                    }
+                ],
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 class CliContractTests(unittest.TestCase):
     def test_filter_sentences_for_tokens_keeps_only_sentence_keys_present_in_limited_tokens(self) -> None:
         analysis_tokens_df = pl.DataFrame(
@@ -644,6 +669,46 @@ class CliContractTests(unittest.TestCase):
                 "procedure:requires_prior_consultation=true\nzoning:zone_strength=suppression",
             )
             self.assertEqual(first_record["manual_annotation_namespaces_text"], "procedure, zoning")
+
+    def test_run_analysis_job_supports_annotation_only_condition_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            annotation_csv_path = temp_path / "manual-annotations.csv"
+            output_dir = temp_path / "job"
+            build_test_db(db_path)
+            build_annotation_only_filter_config(filter_config_path)
+            build_manual_annotations_csv(annotation_csv_path)
+            args = Namespace(
+                job_id="annotation-only-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(annotation_csv_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="json",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertEqual(payload["meta"]["status"], "succeeded")
+            self.assertEqual(payload["meta"]["selectedParagraphCount"], 1)
+            self.assertEqual(len(payload["records"]), 1)
+            first_record = payload["records"][0]
+            self.assertEqual(first_record["paragraph_id"], "1")
+            self.assertEqual(first_record["matched_condition_ids_text"], "manual_zone")
+            self.assertEqual(first_record["matched_categories_text"], "区域類型:抑制")
+            self.assertEqual(first_record["annotated_token_count"], "0")
 
     def test_run_analysis_job_inserts_newlines_for_table_paragraph_csv_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

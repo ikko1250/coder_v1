@@ -29,6 +29,7 @@ class ManualAnnotationsLoaderTest(unittest.TestCase):
             self.assertEqual(result.issues, [])
             self.assertTrue(result.raw_annotations_df.is_empty())
             self.assertTrue(result.paragraph_annotations_df.is_empty())
+            self.assertTrue(result.normalized_paragraph_annotations_df.is_empty())
             self.assertEqual(
                 list(result.paragraph_annotations_df.columns),
                 [
@@ -76,6 +77,41 @@ class ManualAnnotationsLoaderTest(unittest.TestCase):
                     }
                 ],
             )
+            self.assertEqual(
+                result.normalized_paragraph_annotations_df.to_dicts(),
+                [
+                    {
+                        "paragraph_id": 3036,
+                        "label_namespace": "zoning",
+                        "label_key": "zone_strength",
+                        "label_value": "suppression",
+                        "tagged_by": "alice",
+                        "tagged_at": "2026-03-17",
+                        "confidence": "high",
+                        "note": "first",
+                    },
+                    {
+                        "paragraph_id": 3036,
+                        "label_namespace": "zoning",
+                        "label_key": "zone_strength",
+                        "label_value": "suppression",
+                        "tagged_by": "alice",
+                        "tagged_at": "2026-03-17",
+                        "confidence": "high",
+                        "note": "first",
+                    },
+                    {
+                        "paragraph_id": 3036,
+                        "label_namespace": "zoning",
+                        "label_key": "zone_strength",
+                        "label_value": "prohibition",
+                        "tagged_by": "alice",
+                        "tagged_at": "2026-03-17",
+                        "confidence": "high",
+                        "note": "conflict",
+                    },
+                ],
+            )
 
     def test_invalid_paragraph_target_id_returns_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -90,6 +126,7 @@ class ManualAnnotationsLoaderTest(unittest.TestCase):
             result = load_manual_annotations_result(csv_path)
 
             self.assertIsNone(result.paragraph_annotations_df)
+            self.assertIsNone(result.normalized_paragraph_annotations_df)
             self.assertEqual(len(result.issues), 1)
             self.assertEqual(result.issues[0].code, "annotation_target_id_invalid")
 
@@ -106,6 +143,7 @@ class ManualAnnotationsLoaderTest(unittest.TestCase):
             result = load_manual_annotations_result(csv_path)
 
             self.assertIsNone(result.paragraph_annotations_df)
+            self.assertIsNone(result.normalized_paragraph_annotations_df)
             self.assertEqual(len(result.issues), 1)
             self.assertEqual(result.issues[0].code, "annotation_target_type_unknown")
 

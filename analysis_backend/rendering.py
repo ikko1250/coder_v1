@@ -85,6 +85,58 @@ def _paragraph_join_separator(paragraph_df: pl.DataFrame) -> str:
     return "\n" if int(paragraph_df.get_column("is_table_paragraph")[0]) == 1 else ""
 
 
+def _merge_paragraph_match_summary(
+    rendered_paragraphs_df: pl.DataFrame,
+    paragraph_match_summary_df: pl.DataFrame | None,
+) -> pl.DataFrame:
+    if paragraph_match_summary_df is None or paragraph_match_summary_df.is_empty():
+        return rendered_paragraphs_df
+
+    summary_columns = [
+        "paragraph_id",
+        "matched_condition_ids",
+        "matched_condition_ids_text",
+        "matched_categories",
+        "matched_categories_text",
+    ]
+    available_summary_columns = [
+        column_name
+        for column_name in summary_columns
+        if column_name in paragraph_match_summary_df.columns
+    ]
+    if available_summary_columns == ["paragraph_id"] or "paragraph_id" not in available_summary_columns:
+        return rendered_paragraphs_df
+
+    merged_df = rendered_paragraphs_df.join(
+        paragraph_match_summary_df.select(available_summary_columns),
+        on="paragraph_id",
+        how="left",
+        suffix="_summary",
+    )
+    return (
+        merged_df
+        .with_columns([
+            pl.when(pl.col("matched_condition_ids_summary").is_not_null())
+            .then(pl.col("matched_condition_ids_summary"))
+            .otherwise(pl.col("matched_condition_ids"))
+            .alias("matched_condition_ids"),
+            pl.when(pl.col("matched_condition_ids_text_summary").is_not_null())
+            .then(pl.col("matched_condition_ids_text_summary"))
+            .otherwise(pl.col("matched_condition_ids_text"))
+            .alias("matched_condition_ids_text"),
+            pl.when(pl.col("matched_categories_summary").is_not_null())
+            .then(pl.col("matched_categories_summary"))
+            .otherwise(pl.col("matched_categories"))
+            .alias("matched_categories"),
+            pl.when(pl.col("matched_categories_text_summary").is_not_null())
+            .then(pl.col("matched_categories_text_summary"))
+            .otherwise(pl.col("matched_categories_text"))
+            .alias("matched_categories_text"),
+        ])
+        .select(list(RENDERED_PARAGRAPH_SCHEMA.keys()))
+    )
+
+
 def render_tagged_token(
     surface: str,
     annotation: dict[str, object] | None,
@@ -238,6 +290,7 @@ def _render_sentence_fragment(
 def build_rendered_paragraphs_df(
     tokens_with_position_df: pl.DataFrame,
     token_annotations_df: pl.DataFrame,
+    paragraph_match_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     if tokens_with_position_df.is_empty():
         return _empty_rendered_paragraphs_df()
@@ -290,7 +343,7 @@ def build_rendered_paragraphs_df(
             }
         )
 
-    return (
+    rendered_paragraphs_df = (
         pl.DataFrame(paragraph_rows)
         .with_columns([
             pl.col(PARAGRAPH_ID_COL).cast(pl.Int64),
@@ -299,4 +352,8 @@ def build_rendered_paragraphs_df(
             pl.col("annotated_token_count").cast(pl.UInt32),
         ])
         .sort(PARAGRAPH_ID_COL)
+    )
+    return _merge_paragraph_match_summary(
+        rendered_paragraphs_df=rendered_paragraphs_df,
+        paragraph_match_summary_df=paragraph_match_summary_df,
     )
