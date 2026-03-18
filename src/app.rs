@@ -2,7 +2,11 @@ use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, spawn_analysis_job, spawn_export_job,
     resolve_annotation_csv_path, AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent,
     AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
-    AnalysisRuntimeOverrides, AnalysisWarningMessage,
+    AnalysisRuntimeOverrides, AnalysisWarningMessage, resolve_filter_config_path,
+};
+use crate::condition_editor::{
+    build_default_condition_item, load_condition_document, save_condition_document_atomic,
+    AnnotationFilterItem, FilterConfigDocument,
 };
 use crate::csv_loader::load_records;
 use crate::db::{
@@ -196,6 +200,25 @@ struct AnnotationEditorState {
     status_is_error: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ConditionEditorConfirmAction {
+    CloseWindow,
+    ReloadPath(PathBuf),
+}
+
+#[derive(Clone, Debug, Default)]
+struct ConditionEditorState {
+    window_open: bool,
+    loaded_path: Option<PathBuf>,
+    pending_path_sync: Option<PathBuf>,
+    document: Option<FilterConfigDocument>,
+    selected_index: Option<usize>,
+    status_message: Option<String>,
+    status_is_error: bool,
+    is_dirty: bool,
+    confirm_action: Option<ConditionEditorConfirmAction>,
+}
+
 impl SelectionChange {
     fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
         Self {
@@ -253,6 +276,7 @@ pub(crate) struct App {
     pub(crate) error_message: Option<String>,
     cached_segments: Option<(usize, Vec<TextSegment>)>,
     annotation_editor_state: AnnotationEditorState,
+    condition_editor_state: ConditionEditorState,
 }
 
 impl App {
@@ -274,6 +298,7 @@ impl App {
             error_message: None,
             cached_segments: None,
             annotation_editor_state: AnnotationEditorState::default(),
+            condition_editor_state: ConditionEditorState::default(),
         };
         app.try_cleanup_analysis_jobs();
         if let Some(csv_path) = initial_csv_path {
@@ -665,6 +690,139 @@ impl App {
         let runtime = build_runtime_config(&self.analysis_request_state.runtime_overrides());
         self.analysis_runtime_state = AnalysisRuntimeState::from_runtime(runtime);
         self.try_cleanup_analysis_jobs();
+        self.sync_condition_editor_with_runtime_path();
+    }
+
+    fn resolved_filter_config_path(&self) -> Result<PathBuf, String> {
+        if let Some(runtime) = self.analysis_runtime_state.runtime.as_ref() {
+            return Ok(runtime.filter_config_path.clone());
+        }
+        resolve_filter_config_path(&self.analysis_request_state.runtime_overrides())
+    }
+
+    fn open_condition_editor(&mut self) -> Result<(), String> {
+        if self.condition_editor_state.window_open {
+            self.condition_editor_state.status_message =
+                Some("condition editor は既に開いています。".to_string());
+            self.condition_editor_state.status_is_error = false;
+            return Ok(());
+        }
+        let path = self.resolved_filter_config_path()?;
+        self.load_condition_editor_from_path(
+            path,
+            "条件 JSON を読み込みました。",
+        )
+    }
+
+    fn load_condition_editor_from_path(
+        &mut self,
+        path: PathBuf,
+        status_message: &str,
+    ) -> Result<(), String> {
+        let document = load_condition_document(&path)?;
+        self.condition_editor_state.window_open = true;
+        self.condition_editor_state.loaded_path = Some(path);
+        self.condition_editor_state.pending_path_sync = None;
+        self.condition_editor_state.document = Some(document);
+        self.condition_editor_state.selected_index =
+            self.clamp_condition_editor_selection(Some(0));
+        self.condition_editor_state.status_message = Some(status_message.to_string());
+        self.condition_editor_state.status_is_error = false;
+        self.condition_editor_state.is_dirty = false;
+        self.condition_editor_state.confirm_action = None;
+        Ok(())
+    }
+
+    fn clamp_condition_editor_selection(&self, selected_index: Option<usize>) -> Option<usize> {
+        let Some(document) = self.condition_editor_state.document.as_ref() else {
+            return None;
+        };
+        match (selected_index, document.cooccurrence_conditions.len()) {
+            (_, 0) => None,
+            (Some(index), len) => Some(index.min(len - 1)),
+            (None, len) => Some(len - 1),
+        }
+    }
+
+    fn mark_condition_editor_dirty(&mut self) {
+        self.condition_editor_state.is_dirty = true;
+        self.condition_editor_state.status_message = Some("未保存の変更があります。".to_string());
+        self.condition_editor_state.status_is_error = false;
+    }
+
+    fn reload_condition_editor(&mut self, path: PathBuf) -> Result<(), String> {
+        self.load_condition_editor_from_path(path, "条件 JSON を再読込しました。")
+    }
+
+    fn request_condition_editor_reload(&mut self, path: PathBuf) -> Result<(), String> {
+        if self.condition_editor_state.is_dirty {
+            self.condition_editor_state.confirm_action =
+                Some(ConditionEditorConfirmAction::ReloadPath(path));
+            return Ok(());
+        }
+        self.reload_condition_editor(path)
+    }
+
+    fn save_condition_editor_document(&mut self) -> Result<(), String> {
+        let path = self
+            .condition_editor_state
+            .loaded_path
+            .clone()
+            .ok_or_else(|| "保存先の条件 JSON パスが未設定です".to_string())?;
+        let document = self
+            .condition_editor_state
+            .document
+            .as_ref()
+            .ok_or_else(|| "保存対象の条件 JSON が読み込まれていません".to_string())?;
+        save_condition_document_atomic(&path, document)?;
+        self.condition_editor_state.is_dirty = false;
+        self.condition_editor_state.status_message =
+            Some(format!("条件 JSON を保存しました: {}", path.display()));
+        self.condition_editor_state.status_is_error = false;
+        Ok(())
+    }
+
+    fn sync_condition_editor_with_runtime_path(&mut self) {
+        if !self.condition_editor_state.window_open {
+            return;
+        }
+
+        let Ok(resolved_path) = self.resolved_filter_config_path() else {
+            return;
+        };
+        let Some(loaded_path) = self.condition_editor_state.loaded_path.clone() else {
+            return;
+        };
+        if resolved_path == loaded_path {
+            self.condition_editor_state.pending_path_sync = None;
+            return;
+        }
+
+        if self.condition_editor_state.is_dirty {
+            self.condition_editor_state.pending_path_sync = Some(resolved_path.clone());
+            self.condition_editor_state.status_message = Some(format!(
+                "分析設定で条件 JSON の解決先が変更されました。再読込が必要です: {}",
+                resolved_path.display()
+            ));
+            self.condition_editor_state.status_is_error = true;
+            return;
+        }
+
+        match self.reload_condition_editor(resolved_path.clone()) {
+            Ok(()) => {
+                self.condition_editor_state.pending_path_sync = None;
+                self.condition_editor_state.status_message = Some(format!(
+                    "分析設定の変更に合わせて条件 JSON を再読込しました: {}",
+                    resolved_path.display()
+                ));
+                self.condition_editor_state.status_is_error = false;
+            }
+            Err(error) => {
+                self.condition_editor_state.pending_path_sync = Some(resolved_path);
+                self.condition_editor_state.status_message = Some(error);
+                self.condition_editor_state.status_is_error = true;
+            }
+        }
     }
 
     fn start_analysis_job(&mut self) -> Result<(), String> {
@@ -982,6 +1140,7 @@ impl eframe::App for App {
 
         self.draw_db_viewer_window(ctx);
         self.draw_analysis_settings_window(ctx);
+        self.draw_condition_editor_window(ctx);
 
         if let Some(row_index) = clicked_row {
             if self.apply_selection_change(SelectionChange::new(
@@ -1239,6 +1398,15 @@ impl App {
                     self.analysis_request_state.settings_window_open = true;
                 }
 
+                if ui
+                    .add_enabled(settings_enabled, egui::Button::new("条件編集"))
+                    .clicked()
+                {
+                    if let Err(error) = self.open_condition_editor() {
+                        self.error_message = Some(error);
+                    }
+                }
+
                 ui.label(format!("DB: {db_label}"));
                 ui.label(format!("条件: {filter_config_label}"));
                 ui.label(format!("Annotation: {annotation_label}"));
@@ -1441,6 +1609,354 @@ impl App {
         if runtime_changed {
             self.refresh_analysis_runtime();
             ctx.request_repaint();
+        }
+    }
+
+    fn draw_condition_editor_window(&mut self, ctx: &egui::Context) {
+        if !self.condition_editor_state.window_open {
+            self.draw_condition_editor_confirm_window(ctx);
+            return;
+        }
+
+        let mut window_open = self.condition_editor_state.window_open;
+        let can_modify = self.analysis_runtime_state.current_job.is_none();
+        let resolved_path_result = self.resolved_filter_config_path();
+        let resolved_path_label = resolved_path_result
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("解決失敗: {error}"));
+        let loaded_path_label = self
+            .condition_editor_state
+            .loaded_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let mut should_save = false;
+        let mut should_reload = false;
+        let mut should_add_condition = false;
+        let mut requested_selection = self.condition_editor_state.selected_index;
+        let mut save_error = None;
+        let mut reload_error = None;
+
+        egui::Window::new("条件編集")
+            .open(&mut window_open)
+            .resizable(true)
+            .default_width(1120.0)
+            .default_height(760.0)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("読込中: {loaded_path_label}"));
+                    ui.label(format!("現在の解決先: {resolved_path_label}"));
+                });
+
+                if let Some(pending_path) = self.condition_editor_state.pending_path_sync.as_ref() {
+                    ui.colored_label(
+                        Color32::from_rgb(200, 64, 64),
+                        format!(
+                            "分析設定で条件 JSON の解決先が変更されています。保存前に再読込してください: {}",
+                            pending_path.display()
+                        ),
+                    );
+                }
+
+                if let Some(status_message) = &self.condition_editor_state.status_message {
+                    let status_color = if self.condition_editor_state.status_is_error {
+                        Color32::from_rgb(200, 64, 64)
+                    } else {
+                        Color32::from_rgb(70, 130, 70)
+                    };
+                    ui.colored_label(status_color, status_message);
+                }
+
+                if !can_modify {
+                    ui.label("分析ジョブ実行中は条件 JSON を保存・再読込できません。");
+                }
+
+                ui.separator();
+
+                ui.columns(2, |columns| {
+                    columns[0].vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("condition 一覧").strong());
+                            if ui
+                                .add_enabled(can_modify, egui::Button::new("追加"))
+                                .clicked()
+                            {
+                                should_add_condition = true;
+                            }
+                        });
+
+                        ScrollArea::vertical()
+                            .id_salt("condition_editor_list_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let Some(document) = self.condition_editor_state.document.as_ref() else {
+                                    ui.label(RichText::new("条件 JSON 未読込").italics());
+                                    return;
+                                };
+                                if document.cooccurrence_conditions.is_empty() {
+                                    ui.label(RichText::new("condition がありません").italics());
+                                } else {
+                                    for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
+                                        let selected = requested_selection == Some(index);
+                                        let categories_preview =
+                                            summarize_condition_list(&condition.categories, 2);
+                                        let label = format!(
+                                            "{}. {} [{}] forms:{} filters:{} refs:{}",
+                                            index + 1,
+                                            condition.condition_id,
+                                            categories_preview,
+                                            condition.forms.len(),
+                                            condition.annotation_filters.len(),
+                                            condition.required_categories_all.len()
+                                                + condition.required_categories_any.len()
+                                        );
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            requested_selection = Some(index);
+                                        }
+                                    }
+                                }
+                            });
+                    });
+
+                    columns[1].vertical(|ui| {
+                        let should_mark_dirty = if let Some(document) =
+                            self.condition_editor_state.document.as_mut()
+                        {
+                            let mut changed = false;
+                            requested_selection = clamp_condition_index(
+                                requested_selection,
+                                document.cooccurrence_conditions.len(),
+                            );
+                            if let Some(selected_index) = requested_selection {
+                                if let Some(condition) =
+                                    document.cooccurrence_conditions.get_mut(selected_index)
+                                {
+                                    ui.label(RichText::new("condition 詳細").strong());
+                                    ui.horizontal(|ui| {
+                                        ui.label("condition_id");
+                                        let response =
+                                            ui.text_edit_singleline(&mut condition.condition_id);
+                                        changed |= response.changed();
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("form_match_logic");
+                                        changed |= edit_optional_choice(
+                                            ui,
+                                            &mut condition.form_match_logic,
+                                            &["all", "any"],
+                                        );
+                                        ui.label("search_scope");
+                                        let search_scope_locked =
+                                            !condition.annotation_filters.is_empty();
+                                        if search_scope_locked {
+                                            if condition.search_scope.as_deref() != Some("paragraph") {
+                                                condition.search_scope = Some("paragraph".to_string());
+                                                changed = true;
+                                            }
+                                            ui.add_enabled(
+                                                false,
+                                                egui::TextEdit::singleline(
+                                                    condition
+                                                        .search_scope
+                                                        .get_or_insert_with(|| "paragraph".to_string()),
+                                                )
+                                                .desired_width(100.0),
+                                            );
+                                            ui.label("annotation_filters ありのため paragraph 固定");
+                                        } else {
+                                            changed |= edit_optional_choice(
+                                                ui,
+                                                &mut condition.search_scope,
+                                                &["paragraph", "sentence"],
+                                            );
+                                        }
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("max_token_distance");
+                                        changed |= edit_optional_i64(
+                                            ui,
+                                            &mut condition.max_token_distance,
+                                            5,
+                                        );
+                                    });
+
+                                    ui.add_space(8.0);
+                                    changed |= draw_string_list_editor(
+                                        ui,
+                                        "condition_categories_editor",
+                                        "categories",
+                                        &mut condition.categories,
+                                        110.0,
+                                    );
+                                    changed |= draw_string_list_editor(
+                                        ui,
+                                        "condition_forms_editor",
+                                        "forms",
+                                        &mut condition.forms,
+                                        150.0,
+                                    );
+                                    changed |= draw_annotation_filter_editor(
+                                        ui,
+                                        "condition_annotation_filters_editor",
+                                        &mut condition.annotation_filters,
+                                    );
+                                    changed |= draw_string_list_editor(
+                                        ui,
+                                        "condition_required_categories_all_editor",
+                                        "required_categories_all",
+                                        &mut condition.required_categories_all,
+                                        96.0,
+                                    );
+                                    changed |= draw_string_list_editor(
+                                        ui,
+                                        "condition_required_categories_any_editor",
+                                        "required_categories_any",
+                                        &mut condition.required_categories_any,
+                                        96.0,
+                                    );
+                                } else {
+                                    ui.label(RichText::new("condition を選択してください").italics());
+                                }
+                            } else {
+                                ui.label(RichText::new("condition を選択してください").italics());
+                            }
+                            changed
+                        } else {
+                            ui.label(RichText::new("条件 JSON 未読込").italics());
+                            false
+                        };
+
+                        if should_mark_dirty {
+                            self.mark_condition_editor_dirty();
+                        }
+                    });
+                });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let save_enabled = can_modify
+                        && self.condition_editor_state.document.is_some()
+                        && self.condition_editor_state.pending_path_sync.is_none()
+                        && resolved_path_result.is_ok();
+                    if ui
+                        .add_enabled(save_enabled, egui::Button::new("保存"))
+                        .clicked()
+                    {
+                        should_save = true;
+                    }
+                    if ui
+                        .add_enabled(can_modify && resolved_path_result.is_ok(), egui::Button::new("再読込"))
+                        .clicked()
+                    {
+                        should_reload = true;
+                    }
+                    if self.condition_editor_state.is_dirty {
+                        ui.label("未保存");
+                    } else {
+                        ui.label("保存済み");
+                    }
+                });
+            });
+
+        self.condition_editor_state.window_open = window_open;
+        self.condition_editor_state.selected_index = self.clamp_condition_editor_selection(requested_selection);
+
+        if !window_open {
+            if self.condition_editor_state.is_dirty {
+                self.condition_editor_state.window_open = true;
+                self.condition_editor_state.confirm_action = Some(ConditionEditorConfirmAction::CloseWindow);
+            } else {
+                self.condition_editor_state.window_open = false;
+            }
+        }
+
+        if should_add_condition {
+            let mut new_index = None;
+            if let Some(document) = self.condition_editor_state.document.as_mut() {
+                document
+                    .cooccurrence_conditions
+                    .push(build_default_condition_item());
+                new_index = Some(document.cooccurrence_conditions.len().saturating_sub(1));
+            }
+            if let Some(index) = new_index {
+                self.condition_editor_state.selected_index = Some(index);
+                self.mark_condition_editor_dirty();
+            }
+        }
+
+        if should_save {
+            if let Err(error) = self.save_condition_editor_document() {
+                save_error = Some(error);
+            }
+        }
+        if should_reload {
+            match resolved_path_result {
+                Ok(path) => {
+                    if let Err(error) = self.request_condition_editor_reload(path) {
+                        reload_error = Some(error);
+                    }
+                }
+                Err(error) => reload_error = Some(error),
+            }
+        }
+
+        if let Some(error) = save_error.or(reload_error) {
+            self.condition_editor_state.status_message = Some(error);
+            self.condition_editor_state.status_is_error = true;
+        }
+
+        self.draw_condition_editor_confirm_window(ctx);
+    }
+
+    fn draw_condition_editor_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some(confirm_action) = self.condition_editor_state.confirm_action.clone() else {
+            return;
+        };
+
+        let mut keep_open = true;
+        egui::Window::new("確認")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut keep_open)
+            .show(ctx, |ui| {
+                match &confirm_action {
+                    ConditionEditorConfirmAction::CloseWindow => {
+                        ui.label("未保存の変更があります。condition editor を閉じますか。");
+                    }
+                    ConditionEditorConfirmAction::ReloadPath(path) => {
+                        ui.label(format!(
+                            "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
+                            path.display()
+                        ));
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("続行").clicked() {
+                        match confirm_action.clone() {
+                            ConditionEditorConfirmAction::CloseWindow => {
+                                self.condition_editor_state.window_open = false;
+                                self.condition_editor_state.confirm_action = None;
+                            }
+                            ConditionEditorConfirmAction::ReloadPath(path) => {
+                                if let Err(error) = self.reload_condition_editor(path) {
+                                    self.condition_editor_state.status_message = Some(error);
+                                    self.condition_editor_state.status_is_error = true;
+                                }
+                                self.condition_editor_state.confirm_action = None;
+                            }
+                        }
+                    }
+                    if ui.button("キャンセル").clicked() {
+                        self.condition_editor_state.confirm_action = None;
+                    }
+                });
+            });
+
+        if !keep_open {
+            self.condition_editor_state.confirm_action = None;
         }
     }
 
@@ -1834,6 +2350,209 @@ fn build_tree_annotation_column() -> Column {
 
 fn build_tree_annotated_token_count_column() -> Column {
     Column::initial(92.0).at_least(72.0).clip(true)
+}
+
+fn clamp_condition_index(selected_index: Option<usize>, len: usize) -> Option<usize> {
+    match (selected_index, len) {
+        (_, 0) => None,
+        (Some(index), _) => Some(index.min(len - 1)),
+        (None, _) => Some(0),
+    }
+}
+
+fn summarize_condition_list(values: &[String], preview_count: usize) -> String {
+    if values.is_empty() {
+        return "-".to_string();
+    }
+    let mut preview = values
+        .iter()
+        .take(preview_count)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    if preview.is_empty() {
+        return "-".to_string();
+    }
+    if values.len() > preview_count {
+        preview.push(format!("+{}", values.len() - preview_count));
+    }
+    preview.join(", ")
+}
+
+fn edit_optional_choice(ui: &mut Ui, value: &mut Option<String>, options: &[&str]) -> bool {
+    let current_value = value.clone().unwrap_or_default();
+    let selected_text = if current_value.trim().is_empty() {
+        "(未設定)".to_string()
+    } else {
+        current_value.clone()
+    };
+    let mut changed = false;
+
+    egui::ComboBox::from_id_salt(ui.next_auto_id())
+        .selected_text(selected_text)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(current_value.trim().is_empty(), "(未設定)")
+                .clicked()
+            {
+                *value = None;
+                changed = true;
+            }
+            for option in options {
+                if ui.selectable_label(current_value == *option, *option).clicked() {
+                    *value = Some((*option).to_string());
+                    changed = true;
+                }
+            }
+        });
+
+    changed
+}
+
+fn edit_optional_i64(ui: &mut Ui, value: &mut Option<i64>, default_value: i64) -> bool {
+    let mut changed = false;
+    let mut enabled = value.is_some();
+    if ui.checkbox(&mut enabled, "有効").changed() {
+        if enabled {
+            *value = Some(value.unwrap_or(default_value));
+        } else {
+            *value = None;
+        }
+        changed = true;
+    }
+
+    let mut number = value.unwrap_or(default_value);
+    if ui
+        .add_enabled(enabled, egui::DragValue::new(&mut number).range(1..=999_999))
+        .changed()
+    {
+        *value = Some(number);
+        changed = true;
+    }
+
+    changed
+}
+
+fn draw_string_list_editor(
+    ui: &mut Ui,
+    id_salt: &str,
+    label: &str,
+    values: &mut Vec<String>,
+    max_height: f32,
+) -> bool {
+    let mut changed = false;
+    let mut remove_index = None;
+
+    ui.group(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(label).strong());
+            if ui.button("行追加").clicked() {
+                values.push(String::new());
+                changed = true;
+            }
+        });
+
+        ScrollArea::vertical()
+            .id_salt(id_salt)
+            .max_height(max_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if values.is_empty() {
+                    ui.label(RichText::new("未設定").italics());
+                }
+                for (index, value) in values.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{:02}", index + 1));
+                        let response = ui.add(
+                            egui::TextEdit::singleline(value)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if response.changed() {
+                            changed = true;
+                        }
+                        if ui.button("削除").clicked() {
+                            remove_index = Some(index);
+                        }
+                    });
+                }
+            });
+    });
+
+    if let Some(index) = remove_index {
+        values.remove(index);
+        changed = true;
+    }
+
+    changed
+}
+
+fn draw_annotation_filter_editor(
+    ui: &mut Ui,
+    id_salt: &str,
+    filters: &mut Vec<AnnotationFilterItem>,
+) -> bool {
+    let mut changed = false;
+    let mut remove_index = None;
+
+    ui.group(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("annotation_filters").strong());
+            if ui.button("行追加").clicked() {
+                filters.push(AnnotationFilterItem::default());
+                changed = true;
+            }
+        });
+
+        ScrollArea::vertical()
+            .id_salt(id_salt)
+            .max_height(150.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if filters.is_empty() {
+                    ui.label(RichText::new("未設定").italics());
+                }
+                for (index, filter) in filters.iter_mut().enumerate() {
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{:02}", index + 1));
+                            if ui.button("削除").clicked() {
+                                remove_index = Some(index);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("namespace");
+                            if ui.text_edit_singleline(&mut filter.namespace).changed() {
+                                changed = true;
+                            }
+                            ui.label("key");
+                            if ui.text_edit_singleline(&mut filter.key).changed() {
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("value");
+                            if ui.text_edit_singleline(&mut filter.value).changed() {
+                                changed = true;
+                            }
+                            ui.label("operator");
+                            let operator_text =
+                                filter.operator.get_or_insert_with(|| "eq".to_string());
+                            if ui.text_edit_singleline(operator_text).changed() {
+                                changed = true;
+                            }
+                        });
+                    });
+                }
+            });
+    });
+
+    if let Some(index) = remove_index {
+        filters.remove(index);
+        changed = true;
+    }
+
+    changed
 }
 
 fn tree_row_no_value(record: &AnalysisRecord) -> String {

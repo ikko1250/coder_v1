@@ -1096,7 +1096,9 @@ fn build_job_id() -> String {
     format!("job-{millis}")
 }
 
-fn resolve_filter_config_path(overrides: &AnalysisRuntimeOverrides) -> Result<PathBuf, String> {
+pub(crate) fn resolve_filter_config_path(
+    overrides: &AnalysisRuntimeOverrides,
+) -> Result<PathBuf, String> {
     if let Some(path) = overrides.filter_config_path.as_ref() {
         if path.is_file() {
             return Ok(path.clone());

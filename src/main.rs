@@ -6,6 +6,7 @@ mod csv_loader;
 mod db;
 mod filter;
 mod font;
+mod condition_editor;
 mod manual_annotation_store;
 mod model;
 mod tagged_text;
