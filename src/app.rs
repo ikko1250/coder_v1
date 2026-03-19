@@ -1871,10 +1871,8 @@ impl App {
                                                 ui.add_space(8.0);
                                                 changed |= draw_string_list_editor(
                                                     ui,
-                                                    "condition_categories_editor",
                                                     "categories",
                                                     &mut condition.categories,
-                                                    110.0,
                                                 );
 
                                                 ui.group(|ui| {
@@ -1899,41 +1897,32 @@ impl App {
                                                         ui.label(RichText::new("group がありません").italics());
                                                     } else {
                                                         let mut remove_group_index = None;
-                                                        ScrollArea::vertical()
-                                                            .id_salt("condition_editor_group_list_scroll")
-                                                            .max_height(132.0)
-                                                            .auto_shrink([false, false])
-                                                            .show(ui, |ui| {
-                                                                for (group_index, group) in
-                                                                    condition.form_groups.iter().enumerate()
+                                                        for (group_index, group) in
+                                                            condition.form_groups.iter().enumerate()
+                                                        {
+                                                            ui.horizontal(|ui| {
+                                                                let label =
+                                                                    summarize_form_group_label(
+                                                                        group,
+                                                                        group_index,
+                                                                    );
+                                                                if ui
+                                                                    .selectable_label(
+                                                                        *requested_group_selection
+                                                                            == Some(group_index),
+                                                                        label,
+                                                                    )
+                                                                    .clicked()
                                                                 {
-                                                                    ui.horizontal(|ui| {
-                                                                        let label =
-                                                                            summarize_form_group_label(
-                                                                                group,
-                                                                                group_index,
-                                                                            );
-                                                                        if ui
-                                                                            .selectable_label(
-                                                                                *requested_group_selection
-                                                                                    == Some(group_index),
-                                                                                label,
-                                                                            )
-                                                                            .clicked()
-                                                                        {
-                                                                            *requested_group_selection =
-                                                                                Some(group_index);
-                                                                        }
-                                                                        if ui
-                                                                            .button("削除")
-                                                                            .clicked()
-                                                                        {
-                                                                            remove_group_index =
-                                                                                Some(group_index);
-                                                                        }
-                                                                    });
+                                                                    *requested_group_selection =
+                                                                        Some(group_index);
+                                                                }
+                                                                if ui.button("削除").clicked() {
+                                                                    remove_group_index =
+                                                                        Some(group_index);
                                                                 }
                                                             });
+                                                        }
 
                                                         if let Some(group_index) = remove_group_index {
                                                             condition.form_groups.remove(group_index);
@@ -1985,22 +1974,17 @@ impl App {
 
                                                 changed |= draw_annotation_filter_editor(
                                                     ui,
-                                                    "condition_annotation_filters_editor",
                                                     &mut condition.annotation_filters,
                                                 );
                                                 changed |= draw_string_list_editor(
                                                     ui,
-                                                    "condition_required_categories_all_editor",
                                                     "required_categories_all",
                                                     &mut condition.required_categories_all,
-                                                    96.0,
                                                 );
                                                 changed |= draw_string_list_editor(
                                                     ui,
-                                                    "condition_required_categories_any_editor",
                                                     "required_categories_any",
                                                     &mut condition.required_categories_any,
-                                                    96.0,
                                                 );
                                             } else {
                                                 ui.label(
@@ -3222,10 +3206,8 @@ fn ime_safe_multiline<'t>(text: &'t mut dyn egui::TextBuffer) -> egui::TextEdit<
 
 fn draw_string_list_editor(
     ui: &mut Ui,
-    id_salt: &str,
     label: &str,
     values: &mut Vec<String>,
-    max_height: f32,
 ) -> bool {
     let mut changed = false;
     let mut remove_index = None;
@@ -3239,30 +3221,24 @@ fn draw_string_list_editor(
             }
         });
 
-        ScrollArea::vertical()
-            .id_salt(id_salt)
-            .max_height(max_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if values.is_empty() {
-                    ui.label(RichText::new("未設定").italics());
+        if values.is_empty() {
+            ui.label(RichText::new("未設定").italics());
+        }
+        for (index, value) in values.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(format!("{:02}", index + 1));
+                let response = ui.add_sized(
+                    [CONDITION_EDITOR_LIST_INPUT_WIDTH, 0.0],
+                    ime_safe_singleline(value),
+                );
+                if response.changed() {
+                    changed = true;
                 }
-                for (index, value) in values.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{:02}", index + 1));
-                        let response = ui.add_sized(
-                            [CONDITION_EDITOR_LIST_INPUT_WIDTH, 0.0],
-                            ime_safe_singleline(value),
-                        );
-                        if response.changed() {
-                            changed = true;
-                        }
-                        if ui.button("削除").clicked() {
-                            remove_index = Some(index);
-                        }
-                    });
+                if ui.button("削除").clicked() {
+                    remove_index = Some(index);
                 }
             });
+        }
     });
 
     if let Some(index) = remove_index {
@@ -3275,7 +3251,6 @@ fn draw_string_list_editor(
 
 fn draw_annotation_filter_editor(
     ui: &mut Ui,
-    id_salt: &str,
     filters: &mut Vec<AnnotationFilterItem>,
 ) -> bool {
     let mut changed = false;
@@ -3290,87 +3265,81 @@ fn draw_annotation_filter_editor(
             }
         });
 
-        ScrollArea::vertical()
-            .id_salt(id_salt)
-            .max_height(150.0)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if filters.is_empty() {
-                    ui.label(RichText::new("未設定").italics());
-                }
-                for (index, filter) in filters.iter_mut().enumerate() {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{:02}", index + 1));
-                            if ui.button("削除").clicked() {
-                                remove_index = Some(index);
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                                egui::Label::new("namespace"),
-                            );
-                            if ui
-                                .add_sized(
-                                    [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                    ime_safe_singleline(&mut filter.namespace),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                                egui::Label::new("key"),
-                            );
-                            if ui
-                                .add_sized(
-                                    [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                    ime_safe_singleline(&mut filter.key),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                                egui::Label::new("value"),
-                            );
-                            if ui
-                                .add_sized(
-                                    [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                    ime_safe_singleline(&mut filter.value),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                                egui::Label::new("operator"),
-                            );
-                            let operator_text =
-                                filter.operator.get_or_insert_with(|| "eq".to_string());
-                            if ui
-                                .add_sized(
-                                    [CONDITION_EDITOR_FILTER_OPERATOR_WIDTH, 0.0],
-                                    ime_safe_singleline(operator_text),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                    });
-                }
+        if filters.is_empty() {
+            ui.label(RichText::new("未設定").italics());
+        }
+        for (index, filter) in filters.iter_mut().enumerate() {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{:02}", index + 1));
+                    if ui.button("削除").clicked() {
+                        remove_index = Some(index);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                        egui::Label::new("namespace"),
+                    );
+                    if ui
+                        .add_sized(
+                            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                            ime_safe_singleline(&mut filter.namespace),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                        egui::Label::new("key"),
+                    );
+                    if ui
+                        .add_sized(
+                            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                            ime_safe_singleline(&mut filter.key),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                        egui::Label::new("value"),
+                    );
+                    if ui
+                        .add_sized(
+                            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+                            ime_safe_singleline(&mut filter.value),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                        egui::Label::new("operator"),
+                    );
+                    let operator_text =
+                        filter.operator.get_or_insert_with(|| "eq".to_string());
+                    if ui
+                        .add_sized(
+                            [CONDITION_EDITOR_FILTER_OPERATOR_WIDTH, 0.0],
+                            ime_safe_singleline(operator_text),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
             });
+        }
     });
 
     if let Some(index) = remove_index {
