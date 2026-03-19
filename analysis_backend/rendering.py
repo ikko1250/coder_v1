@@ -31,6 +31,10 @@ RENDERED_PARAGRAPH_SCHEMA = {
     "matched_condition_ids_text": pl.String,
     "matched_categories": pl.List(pl.String),
     "matched_categories_text": pl.String,
+    "matched_form_group_ids_text": pl.String,
+    "matched_form_group_logics_text": pl.String,
+    "form_group_explanations_text": pl.String,
+    "mixed_scope_warning_text": pl.String,
     "match_group_ids": pl.List(pl.String),
     "match_group_count": pl.UInt32,
     "annotated_token_count": pl.UInt32,
@@ -98,6 +102,10 @@ def _merge_paragraph_match_summary(
         "matched_condition_ids_text",
         "matched_categories",
         "matched_categories_text",
+        "matched_form_group_ids_text",
+        "matched_form_group_logics_text",
+        "form_group_explanations_text",
+        "mixed_scope_warning_text",
     ]
     available_summary_columns = [
         column_name
@@ -132,6 +140,22 @@ def _merge_paragraph_match_summary(
             .then(pl.col("matched_categories_text_summary"))
             .otherwise(pl.col("matched_categories_text"))
             .alias("matched_categories_text"),
+            pl.when(pl.col("matched_form_group_ids_text_summary").is_not_null())
+            .then(pl.col("matched_form_group_ids_text_summary"))
+            .otherwise(pl.col("matched_form_group_ids_text"))
+            .alias("matched_form_group_ids_text"),
+            pl.when(pl.col("matched_form_group_logics_text_summary").is_not_null())
+            .then(pl.col("matched_form_group_logics_text_summary"))
+            .otherwise(pl.col("matched_form_group_logics_text"))
+            .alias("matched_form_group_logics_text"),
+            pl.when(pl.col("form_group_explanations_text_summary").is_not_null())
+            .then(pl.col("form_group_explanations_text_summary"))
+            .otherwise(pl.col("form_group_explanations_text"))
+            .alias("form_group_explanations_text"),
+            pl.when(pl.col("mixed_scope_warning_text_summary").is_not_null())
+            .then(pl.col("mixed_scope_warning_text_summary"))
+            .otherwise(pl.col("mixed_scope_warning_text"))
+            .alias("mixed_scope_warning_text"),
         ])
         .select(list(RENDERED_PARAGRAPH_SCHEMA.keys()))
     )
@@ -337,6 +361,10 @@ def build_rendered_paragraphs_df(
                 "matched_condition_ids_text": ", ".join(_unique_in_order(matched_condition_ids)),
                 "matched_categories": _unique_in_order(matched_categories),
                 "matched_categories_text": ", ".join(_unique_in_order(matched_categories)),
+                "matched_form_group_ids_text": "",
+                "matched_form_group_logics_text": "",
+                "form_group_explanations_text": "",
+                "mixed_scope_warning_text": "",
                 "match_group_ids": _unique_in_order(match_group_ids),
                 "match_group_count": len(_unique_in_order(match_group_ids)),
                 "annotated_token_count": annotated_token_count,

@@ -190,6 +190,14 @@ struct AnalysisJsonRecord {
     #[serde(default)]
     matched_categories_text: String,
     #[serde(default)]
+    matched_form_group_ids_text: String,
+    #[serde(default)]
+    matched_form_group_logics_text: String,
+    #[serde(default)]
+    form_group_explanations_text: String,
+    #[serde(default)]
+    mixed_scope_warning_text: String,
+    #[serde(default)]
     match_group_ids_text: String,
     #[serde(default)]
     match_group_count: String,
@@ -217,6 +225,10 @@ impl AnalysisJsonRecord {
             paragraph_text_tagged: self.paragraph_text_tagged,
             matched_condition_ids_text: self.matched_condition_ids_text,
             matched_categories_text: self.matched_categories_text,
+            matched_form_group_ids_text: self.matched_form_group_ids_text,
+            matched_form_group_logics_text: self.matched_form_group_logics_text,
+            form_group_explanations_text: self.form_group_explanations_text,
+            mixed_scope_warning_text: self.mixed_scope_warning_text,
             match_group_ids_text: self.match_group_ids_text,
             match_group_count: self.match_group_count,
             annotated_token_count: self.annotated_token_count,

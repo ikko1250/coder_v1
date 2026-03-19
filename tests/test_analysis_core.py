@@ -1213,6 +1213,15 @@ class AnalysisCoreContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result.target_paragraph_ids, [1])
+        summary_row = result.paragraph_match_summary_df.to_dicts()[0]
+        self.assertEqual(
+            summary_row["matched_form_group_ids_text"],
+            "multi_group:g1, multi_group:g2",
+        )
+        self.assertEqual(summary_row["mixed_scope_warning_text"], "")
+        self.assertIn("[multi_group]", summary_row["form_group_explanations_text"])
+        self.assertIn("g1: and", summary_row["form_group_explanations_text"])
+        self.assertIn("g2: and or", summary_row["form_group_explanations_text"])
         eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
         self.assertTrue(eval_rows[0]["token_is_match"])
         self.assertTrue(eval_rows[0]["is_match"])
@@ -1273,6 +1282,15 @@ class AnalysisCoreContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result.target_paragraph_ids, [1])
+        summary_row = result.paragraph_match_summary_df.to_dicts()[0]
+        self.assertEqual(
+            summary_row["matched_form_group_ids_text"],
+            "multi_group_not:g1, multi_group_not:g2",
+        )
+        self.assertEqual(summary_row["mixed_scope_warning_text"], "")
+        self.assertIn("[multi_group_not]", summary_row["form_group_explanations_text"])
+        self.assertIn("g1: and", summary_row["form_group_explanations_text"])
+        self.assertIn("g2: and not", summary_row["form_group_explanations_text"])
         eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
         self.assertTrue(eval_rows[0]["token_is_match"])
         self.assertTrue(eval_rows[0]["is_match"])
@@ -1806,6 +1824,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_condition_ids_text": ["manual_zone"],
                 "matched_categories": [["区域類型:抑制"]],
                 "matched_categories_text": ["区域類型:抑制"],
+                "matched_form_group_ids_text": ["manual_zone:g1"],
+                "matched_form_group_logics_text": ["manual_zone:g1=and"],
+                "form_group_explanations_text": ["[manual_zone]\ng1: and forms=[区域] scope=paragraph"],
+                "mixed_scope_warning_text": [""],
             }
         )
 
@@ -1817,6 +1839,14 @@ class AnalysisCoreContractTests(unittest.TestCase):
 
         self.assertEqual(rendered_df.get_column("matched_condition_ids_text").to_list(), ["manual_zone"])
         self.assertEqual(rendered_df.get_column("matched_categories_text").to_list(), ["区域類型:抑制"])
+        self.assertEqual(
+            rendered_df.get_column("matched_form_group_ids_text").to_list(),
+            ["manual_zone:g1"],
+        )
+        self.assertIn(
+            "g1: and forms=[区域] scope=paragraph",
+            rendered_df.get_column("form_group_explanations_text").to_list()[0],
+        )
 
     def test_build_reconstructed_paragraphs_export_df_keeps_required_columns(self) -> None:
         reconstructed_paragraphs_df = pl.DataFrame(
@@ -1834,6 +1864,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_condition_ids_text": ["a"],
                 "matched_categories": [["b"]],
                 "matched_categories_text": ["b"],
+                "matched_form_group_ids_text": ["a:g1"],
+                "matched_form_group_logics_text": ["a:g1=and"],
+                "form_group_explanations_text": ["[a]\ng1: and forms=[抑制区域] scope=paragraph"],
+                "mixed_scope_warning_text": [""],
                 "match_group_ids": [["c", "d"]],
                 "match_group_count": [2],
                 "annotated_token_count": [1],
@@ -1858,6 +1892,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "paragraph_text_highlight_html",
                 "matched_condition_ids_text",
                 "matched_categories_text",
+                "matched_form_group_ids_text",
+                "matched_form_group_logics_text",
+                "form_group_explanations_text",
+                "mixed_scope_warning_text",
                 "match_group_ids_text",
                 "match_group_count",
                 "annotated_token_count",
@@ -1885,6 +1923,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_condition_ids_text": pl.String,
                 "matched_categories": pl.List(pl.String),
                 "matched_categories_text": pl.String,
+                "matched_form_group_ids_text": pl.String,
+                "matched_form_group_logics_text": pl.String,
+                "form_group_explanations_text": pl.String,
+                "mixed_scope_warning_text": pl.String,
                 "match_group_ids": pl.List(pl.String),
                 "match_group_count": pl.UInt32,
                 "annotated_token_count": pl.UInt32,
@@ -1904,6 +1946,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
                     "a",
                     ["b"],
                     "b",
+                    "a:g1",
+                    "a:g1=and",
+                    "[a]\ng1: and forms=[抑制区域] scope=paragraph",
+                    "",
                     ["c", "d"],
                     2,
                     1,
@@ -1921,6 +1967,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(export_df.schema["sentence_count"], pl.UInt32)
         self.assertEqual(export_df.schema["match_group_count"], pl.UInt32)
         self.assertEqual(export_df.schema["annotated_token_count"], pl.UInt32)
+        self.assertEqual(export_df.schema["matched_form_group_ids_text"], pl.String)
+        self.assertEqual(export_df.schema["matched_form_group_logics_text"], pl.String)
+        self.assertEqual(export_df.schema["form_group_explanations_text"], pl.String)
+        self.assertEqual(export_df.schema["mixed_scope_warning_text"], pl.String)
         self.assertEqual(export_df.schema["match_group_ids_text"], pl.String)
         self.assertEqual(export_df.schema["manual_annotation_count"], pl.UInt32)
         self.assertEqual(export_df.schema["manual_annotation_pairs_text"], pl.String)

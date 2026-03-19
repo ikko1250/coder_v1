@@ -18,6 +18,10 @@ GUI_RECORD_COLUMNS = [
     "paragraph_text_tagged",
     "matched_condition_ids_text",
     "matched_categories_text",
+    "matched_form_group_ids_text",
+    "matched_form_group_logics_text",
+    "form_group_explanations_text",
+    "mixed_scope_warning_text",
     "match_group_ids_text",
     "match_group_count",
     "annotated_token_count",
@@ -33,6 +37,12 @@ MANUAL_ANNOTATION_EXPORT_COLUMNS = [
 MANUAL_ANNOTATION_SUMMARY_JOIN_COLUMNS = [
     "paragraph_id",
     *MANUAL_ANNOTATION_EXPORT_COLUMNS,
+]
+FORM_GROUP_EXPLANATION_EXPORT_COLUMNS = [
+    "matched_form_group_ids_text",
+    "matched_form_group_logics_text",
+    "form_group_explanations_text",
+    "mixed_scope_warning_text",
 ]
 
 
@@ -90,6 +100,21 @@ def _with_manual_annotation_export_columns(
     ])
 
 
+def _with_form_group_explanation_export_columns(
+    reconstructed_paragraphs_df: pl.DataFrame,
+) -> pl.DataFrame:
+    export_df = reconstructed_paragraphs_df
+    for column_name in FORM_GROUP_EXPLANATION_EXPORT_COLUMNS:
+        if column_name not in export_df.columns:
+            export_df = export_df.with_columns(pl.lit("").alias(column_name))
+    return export_df.with_columns([
+        pl.col("matched_form_group_ids_text").cast(pl.String).fill_null(""),
+        pl.col("matched_form_group_logics_text").cast(pl.String).fill_null(""),
+        pl.col("form_group_explanations_text").cast(pl.String).fill_null(""),
+        pl.col("mixed_scope_warning_text").cast(pl.String).fill_null(""),
+    ])
+
+
 def enrich_reconstructed_paragraphs_result(
     db_path: Path,
     reconstructed_paragraphs_base_df: pl.DataFrame,
@@ -111,7 +136,7 @@ def enrich_reconstructed_paragraphs_result(
         )
     return DataAccessResult(
         data_frame=(
-            reconstructed_paragraphs_base_df
+            _with_form_group_explanation_export_columns(reconstructed_paragraphs_base_df)
             .join(paragraph_metadata_result.data_frame, on="paragraph_id", how="left")
             .join(
                 _build_manual_annotation_summary_join_df(manual_annotation_summary_df),
@@ -145,6 +170,10 @@ def enrich_reconstructed_paragraphs_result(
                 "matched_condition_ids_text",
                 "matched_categories",
                 "matched_categories_text",
+                "matched_form_group_ids_text",
+                "matched_form_group_logics_text",
+                "form_group_explanations_text",
+                "mixed_scope_warning_text",
                 "match_group_ids",
                 "match_group_count",
                 "annotated_token_count",
@@ -177,7 +206,9 @@ def build_reconstructed_paragraphs_export_df(
     reconstructed_paragraphs_df: pl.DataFrame,
 ) -> pl.DataFrame:
     return (
-        _with_manual_annotation_export_columns(reconstructed_paragraphs_df)
+        _with_manual_annotation_export_columns(
+            _with_form_group_explanation_export_columns(reconstructed_paragraphs_df)
+        )
         .with_columns(
             pl.col("match_group_ids")
             .cast(pl.List(pl.String))
@@ -197,6 +228,10 @@ def build_reconstructed_paragraphs_export_df(
             "paragraph_text_highlight_html",
             "matched_condition_ids_text",
             "matched_categories_text",
+            "matched_form_group_ids_text",
+            "matched_form_group_logics_text",
+            "form_group_explanations_text",
+            "mixed_scope_warning_text",
             "match_group_ids_text",
             "match_group_count",
             "annotated_token_count",
@@ -225,6 +260,10 @@ def build_gui_records_df(
             pl.col("paragraph_text_tagged").cast(pl.String).fill_null(""),
             pl.col("matched_condition_ids_text").cast(pl.String).fill_null(""),
             pl.col("matched_categories_text").cast(pl.String).fill_null(""),
+            pl.col("matched_form_group_ids_text").cast(pl.String).fill_null(""),
+            pl.col("matched_form_group_logics_text").cast(pl.String).fill_null(""),
+            pl.col("form_group_explanations_text").cast(pl.String).fill_null(""),
+            pl.col("mixed_scope_warning_text").cast(pl.String).fill_null(""),
             pl.col("match_group_ids_text").cast(pl.String).fill_null(""),
             pl.col("match_group_count").cast(pl.String).fill_null(""),
             pl.col("annotated_token_count").cast(pl.String).fill_null(""),

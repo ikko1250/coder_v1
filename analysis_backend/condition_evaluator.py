@@ -55,6 +55,10 @@ PARAGRAPH_SUMMARY_SCHEMA = {
     "matched_condition_ids_text": pl.String,
     "matched_categories": pl.List(pl.String),
     "matched_categories_text": pl.String,
+    "matched_form_group_ids_text": pl.String,
+    "matched_form_group_logics_text": pl.String,
+    "form_group_explanations_text": pl.String,
+    "mixed_scope_warning_text": pl.String,
 }
 NORMALIZED_PARAGRAPH_ANNOTATION_SCHEMA = {
     "paragraph_id": pl.Int64,
@@ -297,6 +301,130 @@ def _normalize_string_clause_list(
 
 def _required_categories_text(categories: list[str]) -> str:
     return ", ".join(categories)
+
+
+def _form_group_logic_text(form_group: NormalizedFormGroup, group_index: int) -> str:
+    if group_index == 1:
+        return form_group.match_logic
+    return f"{form_group.combine_logic or 'and'} {form_group.match_logic}"
+
+
+def _format_scope_unit_label(search_scope: str, unit_count: int) -> str:
+    if search_scope == "sentence":
+        return f"all {unit_count} sentences"
+    return f"all {unit_count} paragraphs"
+
+
+def _build_form_group_explanation_lines(
+    *,
+    condition: NormalizedCondition,
+    eval_row: dict[str, object],
+) -> list[str]:
+    explanation_lines: list[str] = []
+    evaluated_unit_count = int(eval_row.get("evaluated_unit_count", 0) or 0)
+    for group_index, form_group in enumerate(condition.form_groups, start=1):
+        logic_text = _form_group_logic_text(form_group, group_index)
+        line_parts = [f"g{group_index}: {logic_text}"]
+        if form_group.match_logic == "not":
+            line_parts.append(
+                f"absent=[{', '.join(form_group.forms)}] in {_format_scope_unit_label(form_group.search_scope, evaluated_unit_count)}"
+            )
+        else:
+            line_parts.append(f"forms=[{', '.join(form_group.forms)}]")
+            line_parts.append(f"scope={form_group.search_scope}")
+            if form_group.anchor_form:
+                line_parts.append(f"anchor={form_group.anchor_form}")
+            if form_group.effective_max_token_distance is not None:
+                line_parts.append(f"window<=+{int(form_group.effective_max_token_distance)}")
+            if form_group.exclude_forms_any:
+                line_parts.append(f"exclude_any=[{', '.join(form_group.exclude_forms_any)}]")
+        explanation_lines.append(" ".join(line_parts))
+    return explanation_lines
+
+
+def _build_form_group_summary_df(
+    *,
+    condition_eval_df: pl.DataFrame,
+    normalized_conditions: list[NormalizedCondition],
+    match_column: str,
+) -> pl.DataFrame:
+    summary_schema = {
+        "paragraph_id": pl.Int64,
+        "matched_form_group_ids_text": pl.String,
+        "matched_form_group_logics_text": pl.String,
+        "form_group_explanations_text": pl.String,
+        "mixed_scope_warning_text": pl.String,
+    }
+    if condition_eval_df.is_empty():
+        return empty_df(summary_schema)
+
+    condition_lookup = {
+        condition.condition_id: condition
+        for condition in normalized_conditions
+        if condition.form_groups
+    }
+    if not condition_lookup:
+        return empty_df(summary_schema)
+
+    paragraph_rows: dict[int, dict[str, object]] = {}
+    matched_rows = (
+        condition_eval_df
+        .filter(pl.col(match_column))
+        .sort(["paragraph_id", "condition_id"])
+        .iter_rows(named=True)
+    )
+    for eval_row in matched_rows:
+        condition_id = str(eval_row["condition_id"])
+        condition = condition_lookup.get(condition_id)
+        if condition is None:
+            continue
+        paragraph_id = int(eval_row["paragraph_id"])
+        paragraph_row = paragraph_rows.setdefault(
+            paragraph_id,
+            {
+                "paragraph_id": paragraph_id,
+                "matched_form_group_ids_text": [],
+                "matched_form_group_logics_text": [],
+                "form_group_explanations_text": [],
+                "mixed_scope_warning_text": [],
+            },
+        )
+        scope_values = sorted({form_group.search_scope for form_group in condition.form_groups})
+        for group_index, form_group in enumerate(condition.form_groups, start=1):
+            group_id_text = f"{condition_id}:g{group_index}"
+            logic_text = _form_group_logic_text(form_group, group_index)
+            paragraph_row["matched_form_group_ids_text"].append(group_id_text)
+            paragraph_row["matched_form_group_logics_text"].append(f"{group_id_text}={logic_text}")
+        explanation_lines = _build_form_group_explanation_lines(
+            condition=condition,
+            eval_row=eval_row,
+        )
+        condition_block_lines = [f"[{condition_id}]"]
+        condition_block_lines.extend(explanation_lines)
+        paragraph_row["form_group_explanations_text"].append("\n".join(condition_block_lines))
+        if len(scope_values) >= 2:
+            paragraph_row["mixed_scope_warning_text"].append(
+                f"{condition_id}: mixed-scope promoted to paragraph ({' + '.join(scope_values)})"
+            )
+
+    if not paragraph_rows:
+        return empty_df(summary_schema)
+
+    rows: list[dict[str, object]] = []
+    for row in paragraph_rows.values():
+        rows.append(
+            {
+                "paragraph_id": row["paragraph_id"],
+                "matched_form_group_ids_text": ", ".join(row["matched_form_group_ids_text"]),
+                "matched_form_group_logics_text": " | ".join(row["matched_form_group_logics_text"]),
+                "form_group_explanations_text": "\n\n".join(row["form_group_explanations_text"]),
+                "mixed_scope_warning_text": "\n".join(row["mixed_scope_warning_text"]),
+            }
+        )
+    return (
+        pl.DataFrame(rows, schema=summary_schema)
+        .sort("paragraph_id")
+    )
 
 
 def _normalize_form_groups(
@@ -1292,6 +1420,7 @@ def _build_base_condition_eval_df(
 def _build_paragraph_match_summary_df(
     condition_eval_df: pl.DataFrame,
     condition_match_logic: str,
+    normalized_conditions: list[NormalizedCondition],
     *,
     match_column: str = "is_match",
 ) -> pl.DataFrame:
@@ -1328,10 +1457,16 @@ def _build_paragraph_match_summary_df(
         .group_by("paragraph_id")
         .agg(pl.col("categories").sort().unique().alias("matched_categories"))
     )
+    form_group_summary_df = _build_form_group_summary_df(
+        condition_eval_df=sorted_eval_df,
+        normalized_conditions=normalized_conditions,
+        match_column=match_column,
+    )
     return (
         base_summary_df
         .join(matched_condition_ids_df, on="paragraph_id", how="left")
         .join(matched_categories_df, on="paragraph_id", how="left")
+        .join(form_group_summary_df, on="paragraph_id", how="left")
         .with_columns([
             pl.when(pl.col("matched_condition_ids").is_null())
             .then(pl.lit([], dtype=pl.List(pl.String)))
@@ -1345,6 +1480,10 @@ def _build_paragraph_match_summary_df(
         .with_columns([
             pl.col("matched_condition_ids").list.join(", ").alias("matched_condition_ids_text"),
             pl.col("matched_categories").list.join(", ").alias("matched_categories_text"),
+            pl.col("matched_form_group_ids_text").fill_null(""),
+            pl.col("matched_form_group_logics_text").fill_null(""),
+            pl.col("form_group_explanations_text").fill_null(""),
+            pl.col("mixed_scope_warning_text").fill_null(""),
         ])
         .select(list(PARAGRAPH_SUMMARY_SCHEMA.keys()))
         .sort("paragraph_id")
@@ -1901,6 +2040,7 @@ def select_target_ids_by_conditions_result(
     base_paragraph_match_summary_df = _build_paragraph_match_summary_df(
         condition_eval_df=base_condition_eval_df,
         condition_match_logic=condition_match_logic,
+        normalized_conditions=normalized_conditions,
         match_column="base_is_match",
     )
     condition_eval_frames: list[pl.DataFrame] = []
@@ -1921,6 +2061,7 @@ def select_target_ids_by_conditions_result(
     paragraph_match_summary_df = _build_paragraph_match_summary_df(
         condition_eval_df=condition_eval_df,
         condition_match_logic=condition_match_logic,
+        normalized_conditions=normalized_conditions,
     )
 
     target_paragraph_ids = (

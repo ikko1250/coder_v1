@@ -2434,6 +2434,12 @@ impl App {
                 "manual_annotations: {}",
                 record.manual_annotation_count
             ));
+            if !record.mixed_scope_warning_text.trim().is_empty() {
+                ui.colored_label(
+                    Color32::from_rgb(196, 110, 0),
+                    format!("promotion warning: {}", record.mixed_scope_warning_text),
+                );
+            }
 
             ui.separator();
 
@@ -2470,6 +2476,7 @@ impl App {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|error| format!("解決失敗: {error}"));
             let annotation_save_enabled = self.annotation_save_enabled();
+            let has_form_group_explanations = !record.form_group_explanations_text.trim().is_empty();
 
             egui::TopBottomPanel::bottom("annotation_editor_panel")
                 .resizable(false)
@@ -2563,6 +2570,49 @@ impl App {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.add(egui::Label::new(job).wrap());
+                        if has_form_group_explanations {
+                            ui.add_space(10.0);
+                            egui::CollapsingHeader::new("高度条件の説明")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(
+                                            "高度条件の説明を表示中。本文強調は一部未対応です。",
+                                        )
+                                        .italics(),
+                                    );
+                                    if !record.matched_form_group_ids_text.trim().is_empty() {
+                                        ui.label(format!(
+                                            "group_ids: {}",
+                                            record.matched_form_group_ids_text
+                                        ));
+                                    }
+                                    if !record.matched_form_group_logics_text.trim().is_empty() {
+                                        ui.label(format!(
+                                            "group_logics: {}",
+                                            record.matched_form_group_logics_text
+                                        ));
+                                    }
+                                    if !record.mixed_scope_warning_text.trim().is_empty() {
+                                        ui.colored_label(
+                                            Color32::from_rgb(196, 110, 0),
+                                            record.mixed_scope_warning_text.as_str(),
+                                        );
+                                    }
+                                    ScrollArea::vertical()
+                                        .id_salt("form_group_explanations_scroll")
+                                        .max_height(160.0)
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    record.form_group_explanations_text.as_str(),
+                                                )
+                                                .wrap_mode(TextWrapMode::Wrap),
+                                            );
+                                        });
+                                });
+                        }
                     });
             });
         } else {
