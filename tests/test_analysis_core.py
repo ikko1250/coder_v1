@@ -1010,6 +1010,114 @@ class AnalysisCoreContractTests(unittest.TestCase):
 
         self.assertIn("distance_match_strict_limit_exceeded", str(context.exception))
 
+    def test_build_condition_hit_result_supports_anchor_window_form_group(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 2, 2],
+                "sentence_id": [10, 10, 10, 20, 20],
+                "sentence_no_in_paragraph": [1, 1, 1, 1, 1],
+                "token_no": [0, 1, 2, 0, 1],
+                "sentence_token_position": [0, 1, 2, 0, 1],
+                "paragraph_token_position": [0, 1, 2, 0, 1],
+                "normalized_form": ["抑制", "区域", "その他", "区域", "抑制"],
+                "surface": ["抑制", "区域", "その他", "区域", "抑制"],
+            }
+        )
+
+        hit_result = distance_matcher.build_condition_hit_result(
+            tokens_with_position_df=tokens_with_position_df,
+            cooccurrence_conditions=[
+                {
+                    "condition_id": "anchor_group",
+                    "categories": ["複合条件"],
+                    "forms": ["抑制", "区域"],
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "search_scope": "sentence",
+                            "requested_max_token_distance": 1,
+                            "effective_max_token_distance": 1,
+                            "anchor_form": "抑制",
+                            "exclude_forms_any": [],
+                        }
+                    ],
+                    "search_scope": "sentence",
+                    "form_match_logic": "all",
+                    "effective_max_token_distance": None,
+                }
+            ],
+        )
+
+        hit_df = hit_result.condition_hit_tokens_df.sort(
+            ["paragraph_id", "sentence_id", "token_no"]
+        )
+        self.assertEqual(hit_df.get_column("paragraph_id").to_list(), [1, 1])
+        self.assertEqual(hit_df.get_column("normalized_form").to_list(), ["抑制", "区域"])
+
+    def test_build_rendered_paragraphs_df_highlights_advanced_form_groups(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1],
+                "sentence_id": [10, 10, 10],
+                "sentence_no_in_paragraph": [1, 1, 1],
+                "is_table_paragraph": [0, 0, 0],
+                "token_no": [0, 1, 2],
+                "sentence_token_position": [0, 1, 2],
+                "paragraph_token_position": [0, 1, 2],
+                "normalized_form": ["抑制", "区域", "届出"],
+                "surface": ["抑制", "区域", "届出"],
+            }
+        )
+        hit_result = distance_matcher.build_condition_hit_result(
+            tokens_with_position_df=tokens_with_position_df,
+            cooccurrence_conditions=[
+                {
+                    "condition_id": "multi_group_highlight",
+                    "categories": ["複合条件"],
+                    "forms": ["抑制", "区域", "届出"],
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "search_scope": "sentence",
+                            "requested_max_token_distance": 1,
+                            "effective_max_token_distance": 1,
+                            "anchor_form": "抑制",
+                            "exclude_forms_any": [],
+                        },
+                        {
+                            "forms": ["届出", "協議"],
+                            "match_logic": "or",
+                            "combine_logic": "and",
+                            "search_scope": "sentence",
+                            "requested_max_token_distance": None,
+                            "effective_max_token_distance": None,
+                            "anchor_form": None,
+                            "exclude_forms_any": [],
+                        },
+                    ],
+                    "search_scope": "sentence",
+                    "form_match_logic": "all",
+                    "effective_max_token_distance": None,
+                }
+            ],
+        )
+        token_annotations_df = analysis_core.build_token_annotations_df(
+            hit_result.condition_hit_tokens_df
+        )
+        rendered_df = analysis_core.build_rendered_paragraphs_df(
+            tokens_with_position_df=tokens_with_position_df,
+            token_annotations_df=token_annotations_df,
+            paragraph_match_summary_df=None,
+        )
+
+        rendered_row = rendered_df.to_dicts()[0]
+        self.assertEqual(rendered_row["annotated_token_count"], 3)
+        self.assertIn("[[HIT ", rendered_row["paragraph_text_tagged"])
+        self.assertIn("抑制", rendered_row["paragraph_text_tagged"])
+        self.assertIn("届出", rendered_row["paragraph_text_tagged"])
+
     def test_select_target_ids_by_cooccurrence_conditions_keeps_tuple_contract(self) -> None:
         tokens_df = pl.DataFrame(
             {

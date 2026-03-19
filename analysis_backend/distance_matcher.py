@@ -500,6 +500,395 @@ def _build_token_hits_by_unit(
     )
 
 
+def _dedupe_hit_rows(hit_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    deduped_rows: list[dict[str, object]] = []
+    seen_keys: set[tuple[object, ...]] = set()
+    for hit_row in hit_rows:
+        row_key = (
+            int(hit_row["paragraph_id"]),
+            int(hit_row["sentence_id"]),
+            int(hit_row["token_no"]),
+            str(hit_row["condition_id"]),
+            str(hit_row["match_group_id"]),
+            str(hit_row["match_role"]),
+        )
+        if row_key in seen_keys:
+            continue
+        seen_keys.add(row_key)
+        deduped_rows.append(hit_row)
+    return deduped_rows
+
+
+def _candidate_sort_key(candidate: dict[str, object]) -> tuple[int, int, int, int]:
+    hit_rows = list(candidate.get("hit_rows", []))
+    if not hit_rows:
+        return (1, 10**9, 10**9, int(candidate["unit_id"]))
+    return (
+        0,
+        int(candidate["start_position"]),
+        int(candidate["end_position"]),
+        int(candidate["unit_id"]),
+    )
+
+
+def _choose_better_candidate(
+    left_candidate: dict[str, object] | None,
+    right_candidate: dict[str, object] | None,
+) -> dict[str, object] | None:
+    if left_candidate is None:
+        return right_candidate
+    if right_candidate is None:
+        return left_candidate
+    return min([left_candidate, right_candidate], key=_candidate_sort_key)
+
+
+def _build_candidate(
+    *,
+    paragraph_id: int,
+    unit_scope: str,
+    unit_id: int,
+    hit_rows: list[dict[str, object]],
+    position_column: str,
+) -> dict[str, object]:
+    deduped_rows = _dedupe_hit_rows(hit_rows)
+    if deduped_rows:
+        positions = [int(row[position_column]) for row in deduped_rows]
+        start_position = min(positions)
+        end_position = max(positions)
+    else:
+        start_position = 10**9
+        end_position = 10**9
+    return {
+        "paragraph_id": paragraph_id,
+        "unit_scope": unit_scope,
+        "unit_id": unit_id,
+        "hit_rows": deduped_rows,
+        "start_position": start_position,
+        "end_position": end_position,
+    }
+
+
+def _combine_candidate_hit_rows(
+    left_rows: list[dict[str, object]],
+    right_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return _dedupe_hit_rows([*left_rows, *right_rows])
+
+
+def _build_positive_group_candidates(
+    *,
+    unit_df: pl.DataFrame,
+    condition_id: str,
+    categories: list[str],
+    form_group: dict[str, object],
+    group_index: int,
+    unit_column: str,
+    position_column: str,
+) -> list[dict[str, object]]:
+    paragraph_id = int(unit_df.get_column("paragraph_id")[0])
+    unit_id = int(unit_df.get_column(unit_column)[0])
+    unit_scope = "sentence" if unit_column == "sentence_id" else "paragraph"
+    forms = [str(value) for value in form_group.get("forms", [])]
+    match_logic = str(form_group.get("match_logic", "and")).strip().lower()
+    exclude_forms_any = [str(value) for value in form_group.get("exclude_forms_any", [])]
+    effective_max_token_distance = form_group.get("effective_max_token_distance")
+    anchor_form = (
+        str(form_group.get("anchor_form", "")).strip()
+        if form_group.get("anchor_form") is not None
+        else ""
+    )
+    target_forms = list(dict.fromkeys(forms + exclude_forms_any))
+    relevant_rows = [
+        dict(row)
+        for row in unit_df
+        .filter(pl.col("normalized_form").is_in(target_forms))
+        .sort(position_column)
+        .iter_rows(named=True)
+    ]
+    if not relevant_rows:
+        return []
+
+    positions_by_form: dict[str, list[dict[str, object]]] = {}
+    for form in target_forms:
+        positions_by_form[form] = [
+            row for row in relevant_rows if str(row["normalized_form"]) == form
+        ]
+
+    match_group_id = f"{condition_id}:g{group_index + 1}:{unit_scope}:{unit_id}"
+
+    def build_group_hit_rows(selected_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        return [
+            _build_condition_hit_row(
+                row=row,
+                condition_id=condition_id,
+                categories=categories,
+                match_group_id=match_group_id,
+                match_role=str(row["normalized_form"]),
+            )
+            for row in selected_rows
+        ]
+
+    if match_logic == "not":
+        matched_form_count = sum(1 for form in forms if positions_by_form.get(form))
+        if matched_form_count == 0:
+            return [
+                _build_candidate(
+                    paragraph_id=paragraph_id,
+                    unit_scope=unit_scope,
+                    unit_id=unit_id,
+                    hit_rows=[],
+                    position_column=position_column,
+                )
+            ]
+        return []
+
+    if effective_max_token_distance is not None:
+        max_token_distance = int(effective_max_token_distance)
+        if match_logic == "and":
+            anchor_rows = positions_by_form.get(anchor_form, [])
+            for anchor_row in anchor_rows:
+                anchor_position = int(anchor_row[position_column])
+                window_end = anchor_position + max_token_distance
+                selected_rows = [anchor_row]
+                is_valid = True
+                for form in forms:
+                    if form == anchor_form:
+                        continue
+                    matching_rows = [
+                        row
+                        for row in positions_by_form.get(form, [])
+                        if anchor_position <= int(row[position_column]) <= window_end
+                    ]
+                    if not matching_rows:
+                        is_valid = False
+                        break
+                    selected_rows.append(matching_rows[0])
+                if not is_valid:
+                    continue
+                if exclude_forms_any:
+                    has_excluded = any(
+                        anchor_position <= int(excluded_row[position_column]) <= window_end
+                        for exclude_form in exclude_forms_any
+                        for excluded_row in positions_by_form.get(exclude_form, [])
+                    )
+                    if has_excluded:
+                        continue
+                window_rows = [
+                    row
+                    for row in relevant_rows
+                    if str(row["normalized_form"]) in forms
+                    and anchor_position <= int(row[position_column]) <= window_end
+                ]
+                return [
+                    _build_candidate(
+                        paragraph_id=paragraph_id,
+                        unit_scope=unit_scope,
+                        unit_id=unit_id,
+                        hit_rows=build_group_hit_rows(window_rows or selected_rows),
+                        position_column=position_column,
+                    )
+                ]
+            return []
+
+        for form in forms:
+            for anchor_row in positions_by_form.get(form, []):
+                anchor_position = int(anchor_row[position_column])
+                window_end = anchor_position + max_token_distance
+                if exclude_forms_any:
+                    has_excluded = any(
+                        anchor_position <= int(excluded_row[position_column]) <= window_end
+                        for exclude_form in exclude_forms_any
+                        for excluded_row in positions_by_form.get(exclude_form, [])
+                    )
+                    if has_excluded:
+                        continue
+                window_rows = [
+                    row
+                    for row in relevant_rows
+                    if str(row["normalized_form"]) in forms
+                    and anchor_position <= int(row[position_column]) <= window_end
+                ]
+                if not window_rows:
+                    continue
+                return [
+                    _build_candidate(
+                        paragraph_id=paragraph_id,
+                        unit_scope=unit_scope,
+                        unit_id=unit_id,
+                        hit_rows=build_group_hit_rows(window_rows),
+                        position_column=position_column,
+                    )
+                ]
+        return []
+
+    positive_rows = [row for row in relevant_rows if str(row["normalized_form"]) in forms]
+    matched_forms = _unique_in_order([str(row["normalized_form"]) for row in positive_rows])
+    if match_logic == "and" and len(matched_forms) < len(forms):
+        return []
+    if match_logic == "or" and not matched_forms:
+        return []
+    if exclude_forms_any:
+        excluded_rows = [
+            row
+            for exclude_form in exclude_forms_any
+            for row in positions_by_form.get(exclude_form, [])
+        ]
+        if excluded_rows:
+            return []
+    return [
+        _build_candidate(
+            paragraph_id=paragraph_id,
+            unit_scope=unit_scope,
+            unit_id=unit_id,
+            hit_rows=build_group_hit_rows(positive_rows),
+            position_column=position_column,
+        )
+    ]
+
+
+def _build_group_candidate_map(
+    *,
+    paragraph_df: pl.DataFrame,
+    condition_id: str,
+    categories: list[str],
+    form_group: dict[str, object],
+    group_index: int,
+) -> tuple[dict[tuple[int, int], dict[str, object]], str]:
+    search_scope = str(form_group.get("search_scope", "paragraph")).strip().lower()
+    unit_column = "sentence_id" if search_scope == "sentence" else "paragraph_id"
+    candidate_map: dict[tuple[int, int], dict[str, object]] = {}
+    for unit_df in paragraph_df.partition_by(unit_column, maintain_order=True):
+        candidates = _build_positive_group_candidates(
+            unit_df=unit_df,
+            condition_id=condition_id,
+            categories=categories,
+            form_group=form_group,
+            group_index=group_index,
+            unit_column=unit_column,
+            position_column=(
+                "sentence_token_position" if search_scope == "sentence" else "paragraph_token_position"
+            ),
+        )
+        for candidate in candidates:
+            candidate_map[(candidate["paragraph_id"], candidate["unit_id"])] = candidate
+    return candidate_map, search_scope
+
+
+def _promote_candidate_map_to_paragraph(
+    candidate_map: dict[tuple[int, int], dict[str, object]],
+) -> dict[tuple[int, int], dict[str, object]]:
+    promoted_map: dict[tuple[int, int], dict[str, object]] = {}
+    for candidate in candidate_map.values():
+        paragraph_key = (int(candidate["paragraph_id"]), int(candidate["paragraph_id"]))
+        paragraph_candidate = {
+            "paragraph_id": int(candidate["paragraph_id"]),
+            "unit_scope": "paragraph",
+            "unit_id": int(candidate["paragraph_id"]),
+            "hit_rows": list(candidate["hit_rows"]),
+            "start_position": int(candidate["start_position"]),
+            "end_position": int(candidate["end_position"]),
+        }
+        promoted_map[paragraph_key] = _choose_better_candidate(
+            promoted_map.get(paragraph_key),
+            paragraph_candidate,
+        )
+    return promoted_map
+
+
+def _combine_candidate_maps(
+    left_map: dict[tuple[int, int], dict[str, object]],
+    left_scope: str,
+    right_map: dict[tuple[int, int], dict[str, object]],
+    right_scope: str,
+    combine_logic: str,
+) -> tuple[dict[tuple[int, int], dict[str, object]], str]:
+    effective_left_map = left_map
+    effective_right_map = right_map
+    result_scope = left_scope
+    if left_scope != right_scope:
+        effective_left_map = _promote_candidate_map_to_paragraph(left_map)
+        effective_right_map = _promote_candidate_map_to_paragraph(right_map)
+        result_scope = "paragraph"
+
+    result_map: dict[tuple[int, int], dict[str, object]] = {}
+    all_keys = set(effective_left_map) | set(effective_right_map)
+    for key in all_keys:
+        left_candidate = effective_left_map.get(key)
+        right_candidate = effective_right_map.get(key)
+        if combine_logic == "and":
+            if left_candidate is None or right_candidate is None:
+                continue
+            result_map[key] = _build_candidate(
+                paragraph_id=int(left_candidate["paragraph_id"]),
+                unit_scope=result_scope,
+                unit_id=int(left_candidate["unit_id"]),
+                hit_rows=_combine_candidate_hit_rows(
+                    list(left_candidate["hit_rows"]),
+                    list(right_candidate["hit_rows"]),
+                ),
+                position_column="paragraph_token_position",
+            )
+        else:
+            chosen_candidate = _choose_better_candidate(left_candidate, right_candidate)
+            if chosen_candidate is not None:
+                result_map[key] = chosen_candidate
+    return result_map, result_scope
+
+
+def _build_advanced_condition_hit_result(
+    *,
+    paragraph_df: pl.DataFrame,
+    condition: dict[str, object],
+    requested_mode: DistanceMatchingMode,
+) -> ConditionHitResult:
+    condition_id = str(condition["condition_id"])
+    categories = list(condition["categories"])
+    form_groups = [
+        form_group
+        for form_group in condition.get("form_groups", [])
+        if isinstance(form_group, dict)
+    ]
+    if not form_groups:
+        return ConditionHitResult(
+            condition_hit_tokens_df=_empty_condition_hit_tokens_df(),
+            requested_mode=requested_mode,
+            used_mode=_default_used_mode(requested_mode),
+        )
+
+    current_candidate_map, current_scope = _build_group_candidate_map(
+        paragraph_df=paragraph_df,
+        condition_id=condition_id,
+        categories=categories,
+        form_group=form_groups[0],
+        group_index=0,
+    )
+    for group_index, form_group in enumerate(form_groups[1:], start=1):
+        next_candidate_map, next_scope = _build_group_candidate_map(
+            paragraph_df=paragraph_df,
+            condition_id=condition_id,
+            categories=categories,
+            form_group=form_group,
+            group_index=group_index,
+        )
+        current_candidate_map, current_scope = _combine_candidate_maps(
+            left_map=current_candidate_map,
+            left_scope=current_scope,
+            right_map=next_candidate_map,
+            right_scope=next_scope,
+            combine_logic=str(form_group.get("combine_logic", "and")).strip().lower() or "and",
+        )
+
+    hit_rows: list[dict[str, object]] = []
+    for candidate in current_candidate_map.values():
+        hit_rows.extend(list(candidate["hit_rows"]))
+
+    return ConditionHitResult(
+        condition_hit_tokens_df=_build_hit_df(_dedupe_hit_rows(hit_rows)),
+        requested_mode=requested_mode,
+        used_mode=_default_used_mode(requested_mode),
+    )
+
+
 def build_condition_hit_result(
     *,
     tokens_with_position_df: pl.DataFrame,
@@ -555,6 +944,20 @@ def build_condition_hit_result(
                 if isinstance(form_group, dict)
             )
         ):
+            advanced_hit_frames: list[pl.DataFrame] = []
+            for paragraph_df in tokens_with_position_df.partition_by("paragraph_id", maintain_order=True):
+                advanced_result = _build_advanced_condition_hit_result(
+                    paragraph_df=paragraph_df,
+                    condition=condition,
+                    requested_mode=normalized_distance_matching_mode,
+                )
+                if advanced_result.used_mode == "approx":
+                    used_mode = "approx"
+                warning_messages.extend(advanced_result.warning_messages)
+                if not advanced_result.condition_hit_tokens_df.is_empty():
+                    advanced_hit_frames.append(advanced_result.condition_hit_tokens_df)
+            if advanced_hit_frames:
+                condition_hit_frames.append(pl.concat(advanced_hit_frames, how="vertical"))
             continue
         condition_id = str(condition["condition_id"])
         categories = list(condition["categories"])
