@@ -193,9 +193,11 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "condition_id_generated",
                 "form_match_logic_defaulted",
                 "search_scope_defaulted",
+                "legacy_schema_migrated",
                 "max_token_distance_ignored",
                 "categories_defaulted",
                 "condition_id_deduplicated",
+                "legacy_schema_migrated",
                 "max_token_distance_disabled",
             ],
         )
@@ -263,6 +265,59 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(
             [issue.code for issue in normalization_result.issues],
             ["categories_defaulted"],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_accepts_single_form_group(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "group_condition",
+                    "categories": ["概念:抑制区域"],
+                    "overall_search_scope": "sentence",
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "search_scope": "sentence",
+                            "max_token_distance": 5,
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(len(normalization_result.normalized_conditions), 1)
+        normalized_condition = normalization_result.normalized_conditions[0]
+        self.assertEqual(normalized_condition.overall_search_scope, "sentence")
+        self.assertEqual(normalized_condition.forms, ["抑制", "区域"])
+        self.assertEqual(normalized_condition.form_match_logic, "all")
+        self.assertEqual(normalized_condition.search_scope, "sentence")
+        self.assertEqual(len(normalized_condition.form_groups), 1)
+        self.assertEqual(normalized_condition.form_groups[0].forms, ["抑制", "区域"])
+        self.assertEqual(normalized_condition.form_groups[0].match_logic, "and")
+        self.assertEqual(normalized_condition.form_groups[0].search_scope, "sentence")
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            [],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_rejects_multi_form_group_until_evaluator_is_ready(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "group_condition",
+                    "form_groups": [
+                        {"forms": ["抑制", "区域"], "match_logic": "and"},
+                        {"forms": ["届出"], "match_logic": "or", "combine_logic": "and"},
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(normalization_result.normalized_conditions, [])
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["form_groups_unsupported"],
         )
 
     def test_normalize_cooccurrence_conditions_result_reports_required_categories_not_list(self) -> None:

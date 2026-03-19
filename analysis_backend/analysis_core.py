@@ -132,7 +132,21 @@ def _normalized_conditions_to_dicts(
             "condition_id": condition.condition_id,
             "categories": condition.categories,
             "category_text": condition.category_text,
+            "overall_search_scope": condition.overall_search_scope,
             "forms": condition.forms,
+            "form_groups": [
+                {
+                    "forms": form_group.forms,
+                    "match_logic": form_group.match_logic,
+                    "combine_logic": form_group.combine_logic,
+                    "search_scope": form_group.search_scope,
+                    "requested_max_token_distance": form_group.requested_max_token_distance,
+                    "effective_max_token_distance": form_group.effective_max_token_distance,
+                    "anchor_form": form_group.anchor_form,
+                    "exclude_forms_any": form_group.exclude_forms_any,
+                }
+                for form_group in condition.form_groups
+            ],
             "annotation_filters": [
                 {
                     "namespace": annotation_filter.label_namespace,

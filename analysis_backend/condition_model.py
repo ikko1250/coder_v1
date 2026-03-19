@@ -53,6 +53,18 @@ class AnnotationFilter:
 
 
 @dataclass(frozen=True)
+class NormalizedFormGroup:
+    forms: list[str]
+    match_logic: str
+    combine_logic: str | None
+    search_scope: str
+    requested_max_token_distance: int | None
+    effective_max_token_distance: int | None
+    anchor_form: str | None = None
+    exclude_forms_any: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class NormalizedCondition:
     condition_id: str
     categories: list[str]
@@ -62,6 +74,8 @@ class NormalizedCondition:
     form_match_logic: str
     requested_max_token_distance: int | None
     effective_max_token_distance: int | None
+    overall_search_scope: str = "paragraph"
+    form_groups: list[NormalizedFormGroup] = field(default_factory=list)
     annotation_filters: list[AnnotationFilter] = field(default_factory=list)
     required_categories_all: list[str] = field(default_factory=list)
     required_categories_any: list[str] = field(default_factory=list)

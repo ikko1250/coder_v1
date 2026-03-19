@@ -33,6 +33,10 @@ pub(crate) struct ConditionEditorItem {
     #[serde(default)]
     pub(crate) categories: Vec<String>,
     #[serde(default)]
+    pub(crate) overall_search_scope: Option<String>,
+    #[serde(default)]
+    pub(crate) form_groups: Vec<FormGroupEditorItem>,
+    #[serde(default)]
     pub(crate) forms: Vec<String>,
     #[serde(default)]
     pub(crate) form_match_logic: Option<String>,
@@ -46,6 +50,26 @@ pub(crate) struct ConditionEditorItem {
     pub(crate) required_categories_all: Vec<String>,
     #[serde(default)]
     pub(crate) required_categories_any: Vec<String>,
+    #[serde(default, flatten)]
+    pub(crate) extra_fields: HashMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub(crate) struct FormGroupEditorItem {
+    #[serde(default)]
+    pub(crate) forms: Vec<String>,
+    #[serde(default)]
+    pub(crate) match_logic: Option<String>,
+    #[serde(default)]
+    pub(crate) anchor_form: Option<String>,
+    #[serde(default)]
+    pub(crate) combine_logic: Option<String>,
+    #[serde(default)]
+    pub(crate) search_scope: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64_from_any")]
+    pub(crate) max_token_distance: Option<i64>,
+    #[serde(default)]
+    pub(crate) exclude_forms_any: Vec<String>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
 }
@@ -123,12 +147,14 @@ pub(crate) fn sanitize_document_for_save(
             ));
         }
 
+        sanitize_optional_string(&mut condition.overall_search_scope);
         sanitize_optional_string(&mut condition.form_match_logic);
         sanitize_optional_string(&mut condition.search_scope);
         sanitize_string_list(&mut condition.categories);
         sanitize_string_list(&mut condition.forms);
         sanitize_string_list(&mut condition.required_categories_all);
         sanitize_string_list(&mut condition.required_categories_any);
+        sanitize_form_groups(&mut condition.form_groups);
 
         let mut sanitized_filters = Vec::new();
         for filter in &mut condition.annotation_filters {
@@ -150,6 +176,7 @@ pub(crate) fn sanitize_document_for_save(
 pub(crate) fn build_default_condition_item() -> ConditionEditorItem {
     ConditionEditorItem {
         condition_id: "new_condition".to_string(),
+        overall_search_scope: Some("paragraph".to_string()),
         form_match_logic: Some("all".to_string()),
         search_scope: Some("paragraph".to_string()),
         ..Default::default()
@@ -204,6 +231,30 @@ fn sanitize_string_list(values: &mut Vec<String>) {
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
         .collect();
+}
+
+fn sanitize_form_groups(groups: &mut Vec<FormGroupEditorItem>) {
+    let mut sanitized_groups = Vec::new();
+    for group in groups.iter_mut() {
+        sanitize_string_list(&mut group.forms);
+        sanitize_optional_string(&mut group.match_logic);
+        sanitize_optional_string(&mut group.anchor_form);
+        sanitize_optional_string(&mut group.combine_logic);
+        sanitize_optional_string(&mut group.search_scope);
+        sanitize_string_list(&mut group.exclude_forms_any);
+        if group.forms.is_empty()
+            && group.match_logic.is_none()
+            && group.anchor_form.is_none()
+            && group.combine_logic.is_none()
+            && group.search_scope.is_none()
+            && group.max_token_distance.is_none()
+            && group.exclude_forms_any.is_empty()
+        {
+            continue;
+        }
+        sanitized_groups.push(group.clone());
+    }
+    *groups = sanitized_groups;
 }
 
 fn deserialize_optional_u32_from_any<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>

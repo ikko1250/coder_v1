@@ -5,6 +5,7 @@ import polars as pl
 from .condition_model import AnnotationFilter
 from .condition_model import ConfigIssue
 from .condition_model import NormalizedCondition
+from .condition_model import NormalizedFormGroup
 from .condition_model import NormalizeConditionsResult
 from .condition_model import TargetSelectionResult
 from .distance_matcher import evaluate_distance_matches_by_unit
@@ -277,6 +278,216 @@ def _normalize_string_clause_list(
 
 def _required_categories_text(categories: list[str]) -> str:
     return ", ".join(categories)
+
+
+def _normalize_form_groups(
+    raw_form_groups: object,
+    *,
+    condition_index: int,
+    condition_id: str,
+    default_search_scope: str,
+) -> tuple[list[NormalizedFormGroup], list[ConfigIssue], bool]:
+    if raw_form_groups is None:
+        return [], [], False
+    if not isinstance(raw_form_groups, list):
+        return (
+            [],
+            [
+                _build_condition_issue(
+                    code="form_groups_not_list",
+                    severity="error",
+                    message="'form_groups' must be a list.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            ],
+            True,
+        )
+
+    issues: list[ConfigIssue] = []
+    normalized_groups: list[NormalizedFormGroup] = []
+    invalid_condition = False
+
+    for group_index, raw_group in enumerate(raw_form_groups, start=1):
+        if not isinstance(raw_group, dict):
+            issues.append(
+                _build_condition_issue(
+                    code="form_group_not_object",
+                    severity="error",
+                    message="Each form group must be an object.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_forms = raw_group.get("forms", [])
+        if not isinstance(raw_forms, list):
+            issues.append(
+                _build_condition_issue(
+                    code="form_group_forms_not_list",
+                    severity="error",
+                    message="'form_groups[].forms' must be a list.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+        forms = [str(raw_form).strip() for raw_form in raw_forms if str(raw_form).strip()]
+        unique_forms = list(dict.fromkeys(forms))
+        if not unique_forms:
+            issues.append(
+                _build_condition_issue(
+                    code="form_group_forms_empty",
+                    severity="error",
+                    message="Each form group must contain at least one form.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_match_logic = str(raw_group.get("match_logic", "and")).strip().lower()
+        if raw_match_logic not in {"and", "or"}:
+            issues.append(
+                _build_condition_issue(
+                    code="form_groups_unsupported",
+                    severity="error",
+                    message=(
+                        "Current implementation only supports single form_group with "
+                        "match_logic 'and' or 'or'."
+                    ),
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_combine_logic_value = raw_group.get("combine_logic")
+        raw_combine_logic = (
+            str(raw_combine_logic_value).strip().lower()
+            if raw_combine_logic_value is not None
+            else None
+        )
+        if group_index == 1:
+            if raw_combine_logic is not None:
+                issues.append(
+                    _build_condition_issue(
+                        code="form_groups_unsupported",
+                        severity="error",
+                        message="Current implementation does not support combine_logic in group 1.",
+                        condition_index=condition_index,
+                        condition_id=condition_id,
+                        field_name="form_groups",
+                    )
+                )
+                invalid_condition = True
+                continue
+        elif raw_combine_logic not in {"and", "or"}:
+            issues.append(
+                _build_condition_issue(
+                    code="form_groups_unsupported",
+                    severity="error",
+                    message=(
+                        "Current implementation only supports a single form_group; "
+                        "group 2+ evaluation is not implemented yet."
+                    ),
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_group_search_scope = str(raw_group.get("search_scope", default_search_scope)).strip().lower()
+        group_search_scope = (
+            raw_group_search_scope
+            if raw_group_search_scope in {"paragraph", "sentence"}
+            else default_search_scope
+        )
+        if raw_group_search_scope not in {"paragraph", "sentence"}:
+            issues.append(
+                _build_condition_issue(
+                    code="search_scope_defaulted",
+                    severity="warning",
+                    message="Unknown search_scope was replaced with the condition default.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+
+        requested_max_token_distance: int | None = None
+        raw_distance = raw_group.get("max_token_distance")
+        if raw_distance is not None:
+            try:
+                parsed_distance = int(raw_distance)
+                if parsed_distance >= 0:
+                    requested_max_token_distance = parsed_distance
+                else:
+                    issues.append(
+                        _build_condition_issue(
+                            code="max_token_distance_ignored",
+                            severity="warning",
+                            message="Negative max_token_distance was ignored.",
+                            condition_index=condition_index,
+                            condition_id=condition_id,
+                            field_name="form_groups",
+                        )
+                    )
+            except (TypeError, ValueError):
+                issues.append(
+                    _build_condition_issue(
+                        code="max_token_distance_ignored",
+                        severity="warning",
+                        message="Invalid max_token_distance was ignored.",
+                        condition_index=condition_index,
+                        condition_id=condition_id,
+                        field_name="form_groups",
+                    )
+                )
+
+        normalized_groups.append(
+            NormalizedFormGroup(
+                forms=unique_forms,
+                match_logic=raw_match_logic,
+                combine_logic=raw_combine_logic,
+                search_scope=group_search_scope,
+                requested_max_token_distance=requested_max_token_distance,
+                effective_max_token_distance=(
+                    requested_max_token_distance
+                    if raw_match_logic == "and" and unique_forms
+                    else None
+                ),
+                anchor_form=None,
+                exclude_forms_any=[],
+            )
+        )
+
+    if len(normalized_groups) > 1:
+        issues.append(
+            _build_condition_issue(
+                code="form_groups_unsupported",
+                severity="error",
+                message="Current implementation only supports a single form_group.",
+                condition_index=condition_index,
+                condition_id=condition_id,
+                field_name="form_groups",
+            )
+        )
+        return [], issues, True
+
+    return normalized_groups, issues, invalid_condition
 
 
 def _build_global_candidate_paragraphs_df(
@@ -709,6 +920,23 @@ def normalize_cooccurrence_conditions_result(
         )
         provisional_condition_id = raw_condition_id or f"condition_{idx}"
 
+        raw_overall_search_scope = str(raw_condition.get("overall_search_scope", "paragraph")).strip().lower()
+        overall_search_scope = (
+            raw_overall_search_scope if raw_overall_search_scope in {"paragraph", "sentence"} else "paragraph"
+        )
+        if raw_overall_search_scope not in {"paragraph", "sentence"}:
+            issues.append(
+                _build_condition_issue(
+                    code="search_scope_defaulted",
+                    severity="warning",
+                    message="Unknown overall_search_scope was replaced with 'paragraph'.",
+                    condition_index=idx,
+                    condition_id=provisional_condition_id,
+                    field_name="overall_search_scope",
+                )
+            )
+
+        has_form_groups = "form_groups" in raw_condition
         raw_forms = raw_condition.get("forms", [])
         if not isinstance(raw_forms, list):
             issues.append(
@@ -728,6 +956,29 @@ def normalize_cooccurrence_conditions_result(
             if form:
                 forms.append(form)
         unique_forms = list(dict.fromkeys(forms))
+
+        normalized_form_groups, form_group_issues, invalid_form_groups = _normalize_form_groups(
+            raw_condition.get("form_groups"),
+            condition_index=idx,
+            condition_id=provisional_condition_id,
+            default_search_scope=overall_search_scope,
+        )
+        issues.extend(form_group_issues)
+        if invalid_form_groups:
+            continue
+
+        if has_form_groups and unique_forms:
+            issues.append(
+                _build_condition_issue(
+                    code="legacy_and_form_groups_mixed",
+                    severity="error",
+                    message="Do not mix legacy forms fields with form_groups in the same condition.",
+                    condition_index=idx,
+                    condition_id=provisional_condition_id,
+                    field_name="form_groups",
+                )
+            )
+            continue
 
         normalized_annotation_filters, annotation_filter_issues, invalid_annotation_filters = (
             _normalize_annotation_filters(
@@ -765,6 +1016,19 @@ def normalize_cooccurrence_conditions_result(
         issues.extend(required_categories_any_issues)
         if invalid_required_categories_any:
             continue
+
+        if normalized_form_groups:
+            selected_form_group = normalized_form_groups[0]
+            unique_forms = selected_form_group.forms
+            raw_form_match_logic = "all" if selected_form_group.match_logic == "and" else "any"
+            raw_search_scope = selected_form_group.search_scope
+            requested_max_token_distance = selected_form_group.requested_max_token_distance
+            effective_max_token_distance = selected_form_group.effective_max_token_distance
+        else:
+            raw_form_match_logic = str(raw_condition.get("form_match_logic", "all")).strip().lower()
+            raw_search_scope = str(raw_condition.get("search_scope", overall_search_scope)).strip().lower()
+            requested_max_token_distance = None
+            effective_max_token_distance = None
 
         has_reference_clause = bool(required_categories_all or required_categories_any)
         if not unique_forms and not normalized_annotation_filters and not has_reference_clause:
@@ -813,7 +1077,6 @@ def normalize_cooccurrence_conditions_result(
             )
         used_condition_ids.add(condition_id)
 
-        raw_form_match_logic = str(raw_condition.get("form_match_logic", "all")).strip().lower()
         form_match_logic = raw_form_match_logic if raw_form_match_logic in {"all", "any"} else "all"
         if raw_form_match_logic not in {"all", "any"}:
             issues.append(
@@ -827,7 +1090,6 @@ def normalize_cooccurrence_conditions_result(
                 )
             )
 
-        raw_search_scope = str(raw_condition.get("search_scope", "paragraph")).strip().lower()
         search_scope = raw_search_scope if raw_search_scope in {"paragraph", "sentence"} else "paragraph"
         if raw_search_scope not in {"paragraph", "sentence"}:
             issues.append(
@@ -853,41 +1115,70 @@ def normalize_cooccurrence_conditions_result(
                 )
             )
 
-        requested_max_token_distance: int | None = None
-        raw_distance = raw_condition.get("max_token_distance")
-        if raw_distance is not None:
-            try:
-                parsed_distance = int(raw_distance)
-                if parsed_distance >= 0:
-                    requested_max_token_distance = parsed_distance
-                else:
+        legacy_token_clause_used = (
+            bool(unique_forms)
+            or raw_condition.get("form_match_logic") is not None
+            or raw_condition.get("max_token_distance") is not None
+        )
+        if not normalized_form_groups and legacy_token_clause_used:
+            issues.append(
+                _build_condition_issue(
+                    code="legacy_schema_migrated",
+                    severity="warning",
+                    message="Legacy forms/form_match_logic was normalized into a single form_group.",
+                    condition_index=idx,
+                    condition_id=condition_id,
+                    field_name="forms",
+                )
+            )
+            normalized_form_groups = [
+                NormalizedFormGroup(
+                    forms=unique_forms,
+                    match_logic="and" if raw_form_match_logic != "any" else "or",
+                    combine_logic=None,
+                    search_scope=search_scope,
+                    requested_max_token_distance=requested_max_token_distance,
+                    effective_max_token_distance=effective_max_token_distance,
+                    anchor_form=None,
+                    exclude_forms_any=[],
+                )
+            ]
+
+        if not has_form_groups:
+            raw_distance = raw_condition.get("max_token_distance")
+            if raw_distance is not None:
+                try:
+                    parsed_distance = int(raw_distance)
+                    if parsed_distance >= 0:
+                        requested_max_token_distance = parsed_distance
+                    else:
+                        issues.append(
+                            _build_condition_issue(
+                                code="max_token_distance_ignored",
+                                severity="warning",
+                                message="Negative max_token_distance was ignored.",
+                                condition_index=idx,
+                                condition_id=condition_id,
+                                field_name="max_token_distance",
+                            )
+                        )
+                except (TypeError, ValueError):
                     issues.append(
                         _build_condition_issue(
                             code="max_token_distance_ignored",
                             severity="warning",
-                            message="Negative max_token_distance was ignored.",
+                            message="Invalid max_token_distance was ignored.",
                             condition_index=idx,
                             condition_id=condition_id,
                             field_name="max_token_distance",
                         )
                     )
-            except (TypeError, ValueError):
-                issues.append(
-                    _build_condition_issue(
-                        code="max_token_distance_ignored",
-                        severity="warning",
-                        message="Invalid max_token_distance was ignored.",
-                        condition_index=idx,
-                        condition_id=condition_id,
-                        field_name="max_token_distance",
-                    )
-                )
 
-        effective_max_token_distance = (
-            requested_max_token_distance
-            if form_match_logic == "all" and unique_forms
-            else None
-        )
+            effective_max_token_distance = (
+                requested_max_token_distance
+                if form_match_logic == "all" and unique_forms
+                else None
+            )
         categories = _normalize_condition_categories(raw_condition.get("categories"))
         if categories == ["未分類"]:
             issues.append(
@@ -917,11 +1208,13 @@ def normalize_cooccurrence_conditions_result(
                 condition_id=condition_id,
                 categories=categories,
                 category_text=", ".join(categories),
+                overall_search_scope=overall_search_scope,
                 forms=unique_forms,
                 search_scope=search_scope,
                 form_match_logic=form_match_logic,
                 requested_max_token_distance=requested_max_token_distance,
                 effective_max_token_distance=effective_max_token_distance,
+                form_groups=normalized_form_groups,
                 annotation_filters=normalized_annotation_filters,
                 required_categories_all=required_categories_all,
                 required_categories_any=required_categories_any,
