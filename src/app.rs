@@ -3025,17 +3025,13 @@ fn draw_form_group_editor(
 
         changed |= draw_string_list_editor(
             ui,
-            &format!("condition_form_group_forms_editor_{group_index}"),
             "forms",
             &mut group.forms,
-            120.0,
         );
         changed |= draw_string_list_editor(
             ui,
-            &format!("condition_form_group_exclude_forms_editor_{group_index}"),
             "exclude_forms_any",
             &mut group.exclude_forms_any,
-            84.0,
         );
     });
 
