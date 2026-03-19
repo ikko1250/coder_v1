@@ -1817,6 +1817,38 @@ impl App {
         changed
     }
 
+    fn condition_editor_status_message(&self) -> Option<(&str, bool)> {
+        self.condition_editor_state
+            .status_message
+            .as_deref()
+            .map(|message| (message, self.condition_editor_state.status_is_error))
+    }
+
+    fn condition_editor_save_enabled(
+        &self,
+        can_modify: bool,
+        resolved_path_ok: bool,
+    ) -> bool {
+        can_modify
+            && self.condition_editor_state.document.is_some()
+            && self.condition_editor_state.pending_path_sync.is_none()
+            && resolved_path_ok
+    }
+
+    fn condition_editor_confirm_message(
+        confirm_action: &ConditionEditorConfirmAction,
+    ) -> String {
+        match confirm_action {
+            ConditionEditorConfirmAction::CloseWindow => {
+                "未保存の変更があります。condition editor を閉じますか。".to_string()
+            }
+            ConditionEditorConfirmAction::ReloadPath(path) => format!(
+                "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
+                path.display()
+            ),
+        }
+    }
+
     fn draw_condition_editor_embedded_window(
         &mut self,
         viewport_ctx: &egui::Context,
@@ -1840,10 +1872,7 @@ impl App {
                     loaded_path_label,
                     resolved_path_label,
                     self.condition_editor_state.pending_path_sync.as_deref(),
-                    self.condition_editor_state
-                        .status_message
-                        .as_deref()
-                        .map(|message| (message, self.condition_editor_state.status_is_error)),
+                    self.condition_editor_status_message(),
                     self.condition_editor_state.projected_legacy_condition_count,
                 );
                 ui.separator();
@@ -1854,13 +1883,9 @@ impl App {
                     command_draft,
                 );
                 ui.separator();
-                let save_enabled = can_modify
-                    && self.condition_editor_state.document.is_some()
-                    && self.condition_editor_state.pending_path_sync.is_none()
-                    && resolved_path_ok;
                 let footer_response = render_condition_editor_footer_panel(
                     ui,
-                    save_enabled,
+                    self.condition_editor_save_enabled(can_modify, resolved_path_ok),
                     can_modify && resolved_path_ok,
                     self.condition_editor_state.is_dirty,
                 );
@@ -1895,10 +1920,7 @@ impl App {
                     loaded_path_label,
                     resolved_path_label,
                     self.condition_editor_state.pending_path_sync.as_deref(),
-                    self.condition_editor_state
-                        .status_message
-                        .as_deref()
-                        .map(|message| (message, self.condition_editor_state.status_is_error)),
+                    self.condition_editor_status_message(),
                     self.condition_editor_state.projected_legacy_condition_count,
                 );
             });
@@ -1910,13 +1932,9 @@ impl App {
                     .inner_margin(egui::Margin::same(10)),
             )
             .show(viewport_ctx, |ui| {
-                let save_enabled = can_modify
-                    && self.condition_editor_state.document.is_some()
-                    && self.condition_editor_state.pending_path_sync.is_none()
-                    && resolved_path_ok;
                 let footer_response = render_condition_editor_footer_panel(
                     ui,
-                    save_enabled,
+                    self.condition_editor_save_enabled(can_modify, resolved_path_ok),
                     can_modify && resolved_path_ok,
                     self.condition_editor_state.is_dirty,
                 );
@@ -2162,15 +2180,7 @@ impl App {
             }
 
             if let Some(confirm_action) = current_confirm_action.as_ref() {
-                let message = match confirm_action {
-                    ConditionEditorConfirmAction::CloseWindow => {
-                        "未保存の変更があります。condition editor を閉じますか。".to_string()
-                    }
-                    ConditionEditorConfirmAction::ReloadPath(path) => format!(
-                        "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
-                        path.display()
-                    ),
-                };
+                let message = Self::condition_editor_confirm_message(confirm_action);
                 let response =
                     render_condition_editor_confirm_overlay(viewport_ctx, &message);
                 self.apply_condition_editor_confirm_overlay_response(
