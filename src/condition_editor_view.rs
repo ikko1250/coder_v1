@@ -25,6 +25,13 @@ pub(crate) struct ConditionEditorListResponse {
     pub(crate) selected_group_index: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ConditionEditorDetailResponse {
+    pub(crate) delete_clicked: bool,
+    pub(crate) requested_group_selection: Option<usize>,
+    pub(crate) changed: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConfirmOverlayResponse {
     Continue,
@@ -191,6 +198,81 @@ pub(crate) fn draw_condition_editor_list_panel(
                 }
             });
     });
+    response
+}
+
+pub(crate) fn draw_condition_editor_selected_condition(
+    ui: &mut Ui,
+    can_modify: bool,
+    current_group_selection: Option<usize>,
+    condition: &mut ConditionEditorItem,
+) -> ConditionEditorDetailResponse {
+    let mut response = ConditionEditorDetailResponse {
+        requested_group_selection: current_group_selection,
+        ..Default::default()
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("condition 詳細").strong());
+        if ui
+            .add_enabled(can_modify, egui::Button::new("condition削除"))
+            .clicked()
+        {
+            response.delete_clicked = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+            egui::Label::new("condition_id"),
+        );
+        let edit_response = ui.add_sized(
+            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+            ime_safe_singleline(&mut condition.condition_id),
+        );
+        response.changed |= edit_response.changed();
+    });
+
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+            egui::Label::new("overall_search_scope"),
+        );
+        response.changed |= edit_optional_choice(
+            ui,
+            &mut condition.overall_search_scope,
+            &["paragraph", "sentence"],
+            CONDITION_EDITOR_CHOICE_WIDTH,
+        );
+    });
+
+    ui.add_space(8.0);
+    response.changed |= draw_string_list_editor(ui, "categories", &mut condition.categories);
+    response.changed |= draw_condition_editor_form_groups_section(
+        ui,
+        &mut response.requested_group_selection,
+        condition,
+    );
+
+    if condition.projected_from_legacy {
+        ui.colored_label(
+            Color32::from_rgb(180, 120, 40),
+            "legacy 条件を group editor 表示へ投影中です。保存時に互換形式または新形式へ正規化されます。",
+        );
+    }
+
+    response.changed |= draw_annotation_filter_editor(ui, &mut condition.annotation_filters);
+    response.changed |= draw_string_list_editor(
+        ui,
+        "required_categories_all",
+        &mut condition.required_categories_all,
+    );
+    response.changed |= draw_string_list_editor(
+        ui,
+        "required_categories_any",
+        &mut condition.required_categories_any,
+    );
+
     response
 }
 
@@ -726,5 +808,91 @@ fn clamp_editor_index(selected_index: Option<usize>, len: usize) -> Option<usize
         (_, 0) => None,
         (Some(index), _) => Some(index.min(len - 1)),
         (None, _) => Some(0),
+    }
+}
+
+fn draw_condition_editor_form_groups_section(
+    ui: &mut Ui,
+    requested_group_selection: &mut Option<usize>,
+    condition: &mut ConditionEditorItem,
+) -> bool {
+    let mut changed = false;
+
+    ui.group(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("form_groups").strong());
+            if ui.button("group追加").clicked() {
+                condition
+                    .form_groups
+                    .push(build_default_form_group_item(condition.form_groups.len()));
+                *requested_group_selection = clamp_editor_index(
+                    Some(condition.form_groups.len() - 1),
+                    condition.form_groups.len(),
+                );
+                changed = true;
+            }
+        });
+
+        if condition.form_groups.is_empty() {
+            ui.label(RichText::new("group がありません").italics());
+        } else {
+            let mut remove_group_index = None;
+            for (group_index, group) in condition.form_groups.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let label = summarize_form_group_label(group, group_index);
+                    if ui
+                        .selectable_label(*requested_group_selection == Some(group_index), label)
+                        .clicked()
+                    {
+                        *requested_group_selection = Some(group_index);
+                    }
+                    if ui.button("削除").clicked() {
+                        remove_group_index = Some(group_index);
+                    }
+                });
+            }
+
+            if let Some(group_index) = remove_group_index {
+                condition.form_groups.remove(group_index);
+                *requested_group_selection = clamp_editor_index(
+                    requested_group_selection.map(|current| {
+                        if current > group_index {
+                            current - 1
+                        } else {
+                            current
+                        }
+                    }),
+                    condition.form_groups.len(),
+                );
+                changed = true;
+            }
+
+            *requested_group_selection =
+                clamp_editor_index(*requested_group_selection, condition.form_groups.len());
+            let overall_search_scope = condition.overall_search_scope.clone();
+            let search_scope_locked = !condition.annotation_filters.is_empty();
+            if let Some(group_index) = *requested_group_selection {
+                if let Some(group) = condition.form_groups.get_mut(group_index) {
+                    changed |= draw_form_group_editor(
+                        ui,
+                        group_index,
+                        overall_search_scope.as_deref(),
+                        search_scope_locked,
+                        group,
+                    );
+                }
+            }
+        }
+    });
+
+    changed
+}
+
+fn build_default_form_group_item(group_index: usize) -> FormGroupEditorItem {
+    FormGroupEditorItem {
+        match_logic: Some(if group_index == 0 { "and" } else { "or" }.to_string()),
+        combine_logic: (group_index > 0).then_some("and".to_string()),
+        forms: vec![String::new()],
+        ..Default::default()
     }
 }
