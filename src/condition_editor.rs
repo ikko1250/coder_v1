@@ -10,17 +10,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub(crate) struct FilterConfigDocument {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) condition_match_logic: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_u32_from_any")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_u32_from_any",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) max_reconstructed_paragraphs: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) distance_matching_mode: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_u32_from_any")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_u32_from_any",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) distance_match_combination_cap: Option<u32>,
-    #[serde(default, deserialize_with = "deserialize_optional_u32_from_any")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_u32_from_any",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) distance_match_strict_safety_limit: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) cooccurrence_conditions: Vec<ConditionEditorItem>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
@@ -30,45 +42,55 @@ pub(crate) struct FilterConfigDocument {
 pub(crate) struct ConditionEditorItem {
     #[serde(default)]
     pub(crate) condition_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) categories: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) overall_search_scope: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) form_groups: Vec<FormGroupEditorItem>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) forms: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) form_match_logic: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) search_scope: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_i64_from_any")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_i64_from_any",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) max_token_distance: Option<i64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) annotation_filters: Vec<AnnotationFilterItem>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) required_categories_all: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) required_categories_any: Vec<String>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
+    #[serde(skip)]
+    pub(crate) projected_from_legacy: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub(crate) struct FormGroupEditorItem {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) forms: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) match_logic: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) anchor_form: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) combine_logic: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) search_scope: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_i64_from_any")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_i64_from_any",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) max_token_distance: Option<i64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) exclude_forms_any: Vec<String>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
@@ -82,21 +104,30 @@ pub(crate) struct AnnotationFilterItem {
     pub(crate) key: String,
     #[serde(default)]
     pub(crate) value: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) operator: Option<String>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
 }
 
-pub(crate) fn load_condition_document(path: &Path) -> Result<FilterConfigDocument, String> {
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ConditionDocumentLoadInfo {
+    pub(crate) projected_legacy_condition_count: usize,
+}
+
+pub(crate) fn load_condition_document(
+    path: &Path,
+) -> Result<(FilterConfigDocument, ConditionDocumentLoadInfo), String> {
     let json_text = fs::read_to_string(path)
         .map_err(|error| format!("条件 JSON を読めませんでした: {} ({error})", path.display()))?;
-    serde_json::from_str::<FilterConfigDocument>(&json_text).map_err(|error| {
+    let mut document = serde_json::from_str::<FilterConfigDocument>(&json_text).map_err(|error| {
         format!(
             "条件 JSON の読込に失敗しました: {} ({error})",
             path.display()
         )
-    })
+    })?;
+    let load_info = project_legacy_conditions_for_editor(&mut document);
+    Ok((document, load_info))
 }
 
 pub(crate) fn save_condition_document_atomic(
@@ -155,6 +186,7 @@ pub(crate) fn sanitize_document_for_save(
         sanitize_string_list(&mut condition.required_categories_all);
         sanitize_string_list(&mut condition.required_categories_any);
         sanitize_form_groups(&mut condition.form_groups);
+        remove_condition_schema_keys_from_extra_fields(condition);
 
         let mut sanitized_filters = Vec::new();
         for filter in &mut condition.annotation_filters {
@@ -168,6 +200,29 @@ pub(crate) fn sanitize_document_for_save(
             sanitized_filters.push(filter.clone());
         }
         condition.annotation_filters = sanitized_filters;
+
+        if !condition.annotation_filters.is_empty() {
+            if !condition.form_groups.is_empty() {
+                for group in &mut condition.form_groups {
+                    group.search_scope = Some("paragraph".to_string());
+                }
+            } else if condition.search_scope.as_deref() != Some("paragraph") {
+                condition.search_scope = Some("paragraph".to_string());
+            }
+        }
+
+        normalize_condition_schema_for_save(condition, index + 1)?;
+
+        let has_token_clause = !condition.forms.is_empty() || !condition.form_groups.is_empty();
+        let has_annotation_clause = !condition.annotation_filters.is_empty();
+        let has_reference_clause = !condition.required_categories_all.is_empty()
+            || !condition.required_categories_any.is_empty();
+        if !has_token_clause && !has_annotation_clause && !has_reference_clause {
+            return Err(format!(
+                "condition の clause が空です: {}",
+                condition.condition_id
+            ));
+        }
     }
 
     Ok(())
@@ -177,8 +232,11 @@ pub(crate) fn build_default_condition_item() -> ConditionEditorItem {
     ConditionEditorItem {
         condition_id: "new_condition".to_string(),
         overall_search_scope: Some("paragraph".to_string()),
-        form_match_logic: Some("all".to_string()),
-        search_scope: Some("paragraph".to_string()),
+        form_groups: vec![FormGroupEditorItem {
+            match_logic: Some("and".to_string()),
+            forms: vec![String::new()],
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }
@@ -255,6 +313,164 @@ fn sanitize_form_groups(groups: &mut Vec<FormGroupEditorItem>) {
         sanitized_groups.push(group.clone());
     }
     *groups = sanitized_groups;
+}
+
+fn project_legacy_conditions_for_editor(
+    document: &mut FilterConfigDocument,
+) -> ConditionDocumentLoadInfo {
+    let mut projected_legacy_condition_count = 0usize;
+
+    for condition in &mut document.cooccurrence_conditions {
+        sanitize_optional_string(&mut condition.overall_search_scope);
+        sanitize_optional_string(&mut condition.form_match_logic);
+        sanitize_optional_string(&mut condition.search_scope);
+        sanitize_string_list(&mut condition.forms);
+        sanitize_form_groups(&mut condition.form_groups);
+
+        if condition.form_groups.is_empty() && legacy_token_clause_used(condition) {
+            condition.form_groups = vec![FormGroupEditorItem {
+                forms: condition.forms.clone(),
+                match_logic: Some(match condition.form_match_logic.as_deref() {
+                    Some("any") => "or".to_string(),
+                    _ => "and".to_string(),
+                }),
+                search_scope: condition
+                    .search_scope
+                    .clone()
+                    .or_else(|| condition.overall_search_scope.clone()),
+                max_token_distance: condition.max_token_distance,
+                ..Default::default()
+            }];
+            condition.projected_from_legacy = true;
+            projected_legacy_condition_count += 1;
+        }
+    }
+
+    ConditionDocumentLoadInfo {
+        projected_legacy_condition_count,
+    }
+}
+
+fn legacy_token_clause_used(condition: &ConditionEditorItem) -> bool {
+    !condition.forms.is_empty()
+        || condition.form_match_logic.is_some()
+        || condition.search_scope.is_some()
+        || condition.max_token_distance.is_some()
+}
+
+fn remove_condition_schema_keys_from_extra_fields(condition: &mut ConditionEditorItem) {
+    condition.extra_fields.remove("forms");
+    condition.extra_fields.remove("form_match_logic");
+    condition.extra_fields.remove("search_scope");
+    condition.extra_fields.remove("max_token_distance");
+    condition.extra_fields.remove("form_groups");
+}
+
+fn normalize_condition_schema_for_save(
+    condition: &mut ConditionEditorItem,
+    condition_index: usize,
+) -> Result<(), String> {
+    if let Some(distance) = condition.max_token_distance {
+        if distance < 0 {
+            return Err(format!(
+                "condition {} で max_token_distance に負値は使えません",
+                condition.condition_id
+            ));
+        }
+    }
+
+    for (group_index, group) in condition.form_groups.iter_mut().enumerate() {
+        if let Some(distance) = group.max_token_distance {
+            if distance < 0 {
+                return Err(format!(
+                    "condition {} の group {} で max_token_distance に負値は使えません",
+                    condition.condition_id,
+                    group_index + 1
+                ));
+            }
+        }
+
+        if let Some(anchor_form) = group.anchor_form.as_ref() {
+            if !group.forms.iter().any(|form| form == anchor_form) {
+                return Err(format!(
+                    "condition {} の group {} で anchor_form が forms に含まれていません",
+                    condition.condition_id,
+                    group_index + 1
+                ));
+            }
+        }
+    }
+
+    if !condition.form_groups.is_empty() {
+        if should_save_as_legacy(condition) {
+            let first_group = condition
+                .form_groups
+                .first()
+                .cloned()
+                .ok_or_else(|| format!("condition {} の group 変換に失敗しました", condition.condition_id))?;
+            condition.forms = first_group.forms;
+            condition.form_match_logic = Some(match first_group.match_logic.as_deref() {
+                Some("or") => "any".to_string(),
+                _ => "all".to_string(),
+            });
+            condition.search_scope = first_group.search_scope;
+            condition.max_token_distance = first_group.max_token_distance;
+            condition.form_groups.clear();
+        } else {
+            condition.forms.clear();
+            condition.form_match_logic = None;
+            condition.search_scope = None;
+            condition.max_token_distance = None;
+
+            for (group_index, group) in condition.form_groups.iter().enumerate() {
+                let match_logic = group.match_logic.as_deref().unwrap_or("and");
+                if group_index == 0 && match_logic == "not" {
+                    return Err(format!(
+                        "condition {} の group 1 では match_logic=not を保存できません",
+                        condition.condition_id
+                    ));
+                }
+                if match_logic == "and"
+                    && group.max_token_distance.is_some()
+                    && group.anchor_form.is_none()
+                {
+                    return Err(format!(
+                        "condition {} の group {} は anchor_form が必要です",
+                        condition.condition_id,
+                        group_index + 1
+                    ));
+                }
+            }
+        }
+    } else {
+        condition.form_groups.clear();
+    }
+
+    condition.projected_from_legacy = false;
+
+    if condition.condition_id.trim().is_empty() {
+        return Err(format!(
+            "condition_id が空の condition は保存できません (index: {})",
+            condition_index
+        ));
+    }
+
+    Ok(())
+}
+
+fn should_save_as_legacy(condition: &ConditionEditorItem) -> bool {
+    if !condition.projected_from_legacy || condition.form_groups.len() != 1 {
+        return false;
+    }
+
+    let Some(group) = condition.form_groups.first() else {
+        return false;
+    };
+
+    matches!(group.match_logic.as_deref(), None | Some("and") | Some("or"))
+        && group.combine_logic.is_none()
+        && group.anchor_form.is_none()
+        && group.exclude_forms_any.is_empty()
 }
 
 fn deserialize_optional_u32_from_any<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
