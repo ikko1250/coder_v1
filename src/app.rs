@@ -9,9 +9,13 @@ use crate::condition_editor::{
     FilterConfigDocument, FormGroupEditorItem,
 };
 use crate::condition_editor_view::{
-    condition_group_count, draw_annotation_filter_editor, draw_form_group_editor,
-    draw_string_list_editor, edit_optional_choice, summarize_condition_list,
-    summarize_form_group_label, total_forms_count, CONDITION_EDITOR_CHOICE_WIDTH,
+    condition_group_count, draw_annotation_filter_editor,
+    draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
+    draw_condition_editor_footer_panel as render_condition_editor_footer_panel,
+    draw_condition_editor_header_panel as render_condition_editor_header_panel,
+    draw_form_group_editor, draw_string_list_editor, edit_optional_choice,
+    summarize_condition_list, summarize_form_group_label, total_forms_count,
+    ConditionEditorFooterResponse, ConfirmOverlayResponse, CONDITION_EDITOR_CHOICE_WIDTH,
     CONDITION_EDITOR_FIELD_LABEL_WIDTH, CONDITION_EDITOR_TEXT_INPUT_WIDTH,
 };
 use crate::csv_loader::load_records;
@@ -1701,41 +1705,18 @@ impl App {
         loaded_path_label: &str,
         resolved_path_label: &str,
     ) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("読込中: {loaded_path_label}"));
-            ui.label(format!("現在の解決先: {resolved_path_label}"));
-        });
-
-        if let Some(pending_path) = self.condition_editor_state.pending_path_sync.as_ref() {
-            ui.colored_label(
-                Color32::from_rgb(200, 64, 64),
-                format!(
-                    "分析設定で条件 JSON の解決先が変更されています。保存前に再読込してください: {}",
-                    pending_path.display()
-                ),
-            );
-        }
-
-        if let Some(status_message) = &self.condition_editor_state.status_message {
-            ui.colored_label(
-                editor_status_color(self.condition_editor_state.status_is_error),
-                status_message,
-            );
-        }
-
-        if self.condition_editor_state.projected_legacy_condition_count > 0 {
-            ui.colored_label(
-                Color32::from_rgb(180, 120, 40),
-                format!(
-                    "legacy 投影: {} 件の condition を group editor 表示へ変換中",
-                    self.condition_editor_state.projected_legacy_condition_count
-                ),
-            );
-        }
-
-        if !can_modify {
-            ui.label("分析ジョブ実行中は条件 JSON を保存・再読込できません。");
-        }
+        render_condition_editor_header_panel(
+            ui,
+            can_modify,
+            loaded_path_label,
+            resolved_path_label,
+            self.condition_editor_state.pending_path_sync.as_deref(),
+            self.condition_editor_state
+                .status_message
+                .as_deref()
+                .map(|message| (message, self.condition_editor_state.status_is_error)),
+            self.condition_editor_state.projected_legacy_condition_count,
+        );
     }
 
     fn draw_condition_editor_body_panel(
@@ -2033,29 +2014,17 @@ impl App {
         resolved_path_ok: bool,
         command_draft: &mut ConditionEditorCommandDraft,
     ) {
-        ui.horizontal(|ui| {
-            let save_enabled = can_modify
-                && self.condition_editor_state.document.is_some()
-                && self.condition_editor_state.pending_path_sync.is_none()
-                && resolved_path_ok;
-            if ui
-                .add_enabled(save_enabled, egui::Button::new("保存"))
-                .clicked()
-            {
-                command_draft.should_save = true;
-            }
-            if ui
-                .add_enabled(can_modify && resolved_path_ok, egui::Button::new("再読込"))
-                .clicked()
-            {
-                command_draft.should_reload = true;
-            }
-            if self.condition_editor_state.is_dirty {
-                ui.label("未保存");
-            } else {
-                ui.label("保存済み");
-            }
-        });
+        let save_enabled = can_modify
+            && self.condition_editor_state.document.is_some()
+            && self.condition_editor_state.pending_path_sync.is_none()
+            && resolved_path_ok;
+        let footer_response = render_condition_editor_footer_panel(
+            ui,
+            save_enabled,
+            can_modify && resolved_path_ok,
+            self.condition_editor_state.is_dirty,
+        );
+        self.apply_condition_editor_footer_response(command_draft, footer_response);
     }
 
     fn draw_condition_editor_confirm_overlay(
@@ -2064,50 +2033,17 @@ impl App {
         confirm_action: &ConditionEditorConfirmAction,
         command_draft: &mut ConditionEditorCommandDraft,
     ) {
-        let screen_rect = viewport_ctx.screen_rect();
-
-        egui::Area::new(egui::Id::new("condition_editor_confirm_overlay"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen_rect.min)
-            .show(viewport_ctx, |ui| {
-                ui.set_min_size(screen_rect.size());
-                ui.painter().rect_filled(
-                    ui.max_rect(),
-                    0.0,
-                    Color32::from_black_alpha(160),
-                );
-                ui.with_layout(
-                    egui::Layout::top_down(egui::Align::Center),
-                    |ui| {
-                        ui.add_space((screen_rect.height() * 0.22).max(80.0));
-                        egui::Frame::window(ui.style()).show(ui, |ui| {
-                            ui.set_min_width(420.0);
-                            match confirm_action {
-                                ConditionEditorConfirmAction::CloseWindow => {
-                                    ui.label("未保存の変更があります。condition editor を閉じますか。");
-                                }
-                                ConditionEditorConfirmAction::ReloadPath(path) => {
-                                    ui.label(format!(
-                                        "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
-                                        path.display()
-                                    ));
-                                }
-                            }
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                if ui.button("続行").clicked() {
-                                    command_draft.modal_response =
-                                        Some(ConditionEditorModalResponse::Continue);
-                                }
-                                if ui.button("キャンセル").clicked() {
-                                    command_draft.modal_response =
-                                        Some(ConditionEditorModalResponse::Cancel);
-                                }
-                            });
-                        });
-                    },
-                );
-            });
+        let message = match confirm_action {
+            ConditionEditorConfirmAction::CloseWindow => {
+                "未保存の変更があります。condition editor を閉じますか。".to_string()
+            }
+            ConditionEditorConfirmAction::ReloadPath(path) => format!(
+                "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
+                path.display()
+            ),
+        };
+        let response = render_condition_editor_confirm_overlay(viewport_ctx, &message);
+        self.apply_condition_editor_confirm_overlay_response(command_draft, response);
     }
 
     fn draw_condition_editor_embedded_window(
@@ -2221,6 +2157,31 @@ impl App {
         } else {
             self.condition_editor_state.window_open = false;
         }
+    }
+
+    fn apply_condition_editor_footer_response(
+        &self,
+        command_draft: &mut ConditionEditorCommandDraft,
+        footer_response: ConditionEditorFooterResponse,
+    ) {
+        if footer_response.save_clicked {
+            command_draft.should_save = true;
+        }
+        if footer_response.reload_clicked {
+            command_draft.should_reload = true;
+        }
+    }
+
+    fn apply_condition_editor_confirm_overlay_response(
+        &self,
+        command_draft: &mut ConditionEditorCommandDraft,
+        response: Option<ConfirmOverlayResponse>,
+    ) {
+        command_draft.modal_response = match response {
+            Some(ConfirmOverlayResponse::Continue) => Some(ConditionEditorModalResponse::Continue),
+            Some(ConfirmOverlayResponse::Cancel) => Some(ConditionEditorModalResponse::Cancel),
+            None => command_draft.modal_response,
+        };
     }
 
     fn apply_condition_editor_add_request(&mut self, should_add_condition: bool) {

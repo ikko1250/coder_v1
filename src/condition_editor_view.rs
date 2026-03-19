@@ -1,6 +1,7 @@
 use crate::condition_editor::{AnnotationFilterItem, ConditionEditorItem, FormGroupEditorItem};
 use crate::ui_helpers::ime_safe_singleline;
 use egui::{Color32, RichText, Ui};
+use std::path::Path;
 
 pub(crate) const CONDITION_EDITOR_FIELD_LABEL_WIDTH: f32 = 156.0;
 pub(crate) const CONDITION_EDITOR_TEXT_INPUT_WIDTH: f32 = 280.0;
@@ -8,6 +9,125 @@ pub(crate) const CONDITION_EDITOR_CHOICE_WIDTH: f32 = 140.0;
 const CONDITION_EDITOR_NUMBER_WIDTH: f32 = 120.0;
 const CONDITION_EDITOR_LIST_INPUT_WIDTH: f32 = 280.0;
 const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ConditionEditorFooterResponse {
+    pub(crate) save_clicked: bool,
+    pub(crate) reload_clicked: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConfirmOverlayResponse {
+    Continue,
+    Cancel,
+}
+
+pub(crate) fn draw_condition_editor_header_panel(
+    ui: &mut Ui,
+    can_modify: bool,
+    loaded_path_label: &str,
+    resolved_path_label: &str,
+    pending_path: Option<&Path>,
+    status_message: Option<(&str, bool)>,
+    projected_legacy_condition_count: usize,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("読込中: {loaded_path_label}"));
+        ui.label(format!("現在の解決先: {resolved_path_label}"));
+    });
+
+    if let Some(pending_path) = pending_path {
+        ui.colored_label(
+            Color32::from_rgb(200, 64, 64),
+            format!(
+                "分析設定で条件 JSON の解決先が変更されています。保存前に再読込してください: {}",
+                pending_path.display()
+            ),
+        );
+    }
+
+    if let Some((status_message, status_is_error)) = status_message {
+        ui.colored_label(editor_status_color(status_is_error), status_message);
+    }
+
+    if projected_legacy_condition_count > 0 {
+        ui.colored_label(
+            Color32::from_rgb(180, 120, 40),
+            format!(
+                "legacy 投影: {} 件の condition を group editor 表示へ変換中",
+                projected_legacy_condition_count
+            ),
+        );
+    }
+
+    if !can_modify {
+        ui.label("分析ジョブ実行中は条件 JSON を保存・再読込できません。");
+    }
+}
+
+pub(crate) fn draw_condition_editor_footer_panel(
+    ui: &mut Ui,
+    save_enabled: bool,
+    reload_enabled: bool,
+    is_dirty: bool,
+) -> ConditionEditorFooterResponse {
+    let mut response = ConditionEditorFooterResponse::default();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(save_enabled, egui::Button::new("保存"))
+            .clicked()
+        {
+            response.save_clicked = true;
+        }
+        if ui
+            .add_enabled(reload_enabled, egui::Button::new("再読込"))
+            .clicked()
+        {
+            response.reload_clicked = true;
+        }
+        if is_dirty {
+            ui.label("未保存");
+        } else {
+            ui.label("保存済み");
+        }
+    });
+    response
+}
+
+pub(crate) fn draw_condition_editor_confirm_overlay(
+    viewport_ctx: &egui::Context,
+    message: &str,
+) -> Option<ConfirmOverlayResponse> {
+    let mut response = None;
+    let screen_rect = viewport_ctx.screen_rect();
+
+    egui::Area::new(egui::Id::new("condition_editor_confirm_overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen_rect.min)
+        .show(viewport_ctx, |ui| {
+            ui.set_min_size(screen_rect.size());
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, Color32::from_black_alpha(160));
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.add_space((screen_rect.height() * 0.22).max(80.0));
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(message);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("続行").clicked() {
+                            response = Some(ConfirmOverlayResponse::Continue);
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            response = Some(ConfirmOverlayResponse::Cancel);
+                        }
+                    });
+                });
+            });
+        });
+
+    response
+}
 
 pub(crate) fn summarize_condition_list(values: &[String], preview_count: usize) -> String {
     if values.is_empty() {
@@ -526,4 +646,12 @@ fn edit_optional_i64(
     }
 
     changed
+}
+
+fn editor_status_color(is_error: bool) -> Color32 {
+    if is_error {
+        Color32::from_rgb(200, 64, 64)
+    } else {
+        Color32::from_rgb(70, 130, 70)
+    }
 }
