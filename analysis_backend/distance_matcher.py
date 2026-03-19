@@ -536,6 +536,16 @@ def build_condition_hit_result(
     used_mode = _default_used_mode(normalized_distance_matching_mode)
 
     for condition in cooccurrence_conditions:
+        form_groups = condition.get("form_groups")
+        if isinstance(form_groups, list) and (
+            len(form_groups) >= 2
+            or any(
+                str(form_group.get("match_logic", "")).strip().lower() == "not"
+                for form_group in form_groups
+                if isinstance(form_group, dict)
+            )
+        ):
+            continue
         condition_id = str(condition["condition_id"])
         categories = list(condition["categories"])
         forms = list(condition["forms"])
