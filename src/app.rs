@@ -1742,6 +1742,7 @@ impl App {
         requested_selection: &mut Option<usize>,
         requested_group_selection: &mut Option<usize>,
         should_add_condition: &mut bool,
+        should_delete_condition: &mut Option<usize>,
     ) {
         let panel_fill = ui.style().visuals.panel_fill;
         StripBuilder::new(ui)
@@ -1828,7 +1829,18 @@ impl App {
                                             if let Some(condition) =
                                                 document.cooccurrence_conditions.get_mut(selected_index)
                                             {
-                                                ui.label(RichText::new("condition 詳細").strong());
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new("condition 詳細").strong());
+                                                    if ui
+                                                        .add_enabled(
+                                                            can_modify,
+                                                            egui::Button::new("condition削除"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        *should_delete_condition = Some(selected_index);
+                                                    }
+                                                });
                                                 ui.horizontal(|ui| {
                                                     ui.add_sized(
                                                         [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
@@ -2127,6 +2139,7 @@ impl App {
         let mut should_save = false;
         let mut should_reload = false;
         let mut should_add_condition = false;
+        let mut should_delete_condition = None;
         let mut requested_selection = self.condition_editor_state.selected_index;
         let mut requested_group_selection = self.condition_editor_state.selected_group_index;
         let mut save_error = None;
@@ -2164,6 +2177,7 @@ impl App {
                                 &mut requested_selection,
                                 &mut requested_group_selection,
                                 &mut should_add_condition,
+                                &mut should_delete_condition,
                             );
                             ui.separator();
                             self.draw_condition_editor_footer_panel(
@@ -2223,6 +2237,7 @@ impl App {
                                 &mut requested_selection,
                                 &mut requested_group_selection,
                                 &mut should_add_condition,
+                                &mut should_delete_condition,
                             );
                         });
 
@@ -2264,6 +2279,26 @@ impl App {
                 self.condition_editor_state.selected_index = Some(index);
                 self.condition_editor_state.selected_group_index = Some(0);
                 self.mark_condition_editor_dirty();
+            }
+        }
+
+        if let Some(delete_index) = should_delete_condition {
+            if let Some(document) = self.condition_editor_state.document.as_mut() {
+                if delete_index < document.cooccurrence_conditions.len() {
+                    document.cooccurrence_conditions.remove(delete_index);
+                    self.condition_editor_state.selected_index =
+                        clamp_condition_index(Some(delete_index), document.cooccurrence_conditions.len());
+                    self.condition_editor_state.selected_group_index =
+                        clamp_condition_group_selection_for_document(
+                            document,
+                            self.condition_editor_state.selected_index,
+                            Some(0),
+                        );
+                    self.mark_condition_editor_dirty();
+                    self.condition_editor_state.status_message =
+                        Some("condition を削除しました。".to_string());
+                    self.condition_editor_state.status_is_error = false;
+                }
             }
         }
 
