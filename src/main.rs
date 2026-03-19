@@ -4,6 +4,7 @@ mod analysis_runner;
 mod app;
 mod csv_loader;
 mod db;
+mod db_viewer_view;
 mod filter;
 mod font;
 mod condition_editor;
