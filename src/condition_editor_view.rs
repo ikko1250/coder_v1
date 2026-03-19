@@ -2,7 +2,7 @@ use crate::condition_editor::{
     AnnotationFilterItem, ConditionEditorItem, FilterConfigDocument, FormGroupEditorItem,
 };
 use crate::ui_helpers::ime_safe_singleline;
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, RichText, ScrollArea, Ui};
 use std::path::Path;
 
 pub(crate) const CONDITION_EDITOR_FIELD_LABEL_WIDTH: f32 = 156.0;
