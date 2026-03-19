@@ -1385,7 +1385,7 @@ impl App {
                 ui.label("表示元:");
                 let path_str = self.records_source_label.clone();
                 ui.add(
-                    egui::TextEdit::singleline(&mut path_str.as_str())
+                    ime_safe_singleline(&mut path_str.as_str())
                         .desired_width(600.0)
                         .interactive(false),
                 );
@@ -1572,7 +1572,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let mut label = python_override_label.clone();
                     ui.add(
-                        egui::TextEdit::singleline(&mut label)
+                        ime_safe_singleline(&mut label)
                             .desired_width(460.0)
                             .interactive(false),
                     );
@@ -1599,7 +1599,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let mut label = filter_override_label.clone();
                     ui.add(
-                        egui::TextEdit::singleline(&mut label)
+                        ime_safe_singleline(&mut label)
                             .desired_width(460.0)
                             .interactive(false),
                     );
@@ -1626,7 +1626,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let mut label = annotation_override_label.clone();
                     ui.add(
-                        egui::TextEdit::singleline(&mut label)
+                        ime_safe_singleline(&mut label)
                             .desired_width(460.0)
                             .interactive(false),
                     );
@@ -1848,7 +1848,7 @@ impl App {
                                                     );
                                                     let response = ui.add_sized(
                                                         [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                                        egui::TextEdit::singleline(
+                                                        ime_safe_singleline(
                                                             &mut condition.condition_id,
                                                         ),
                                                     );
@@ -2651,30 +2651,33 @@ impl App {
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             ui.label("namespace");
-                            ui.text_edit_singleline(
+                            ui.add(ime_safe_singleline(
                                 &mut self.annotation_editor_state.namespace_input,
-                            );
+                            ));
                             ui.label("key");
-                            ui.text_edit_singleline(&mut self.annotation_editor_state.key_input);
+                            ui.add(ime_safe_singleline(
+                                &mut self.annotation_editor_state.key_input,
+                            ));
                         });
                         ui.horizontal(|ui| {
                             ui.label("tagged_by");
-                            ui.text_edit_singleline(
+                            ui.add(ime_safe_singleline(
                                 &mut self.annotation_editor_state.tagged_by_input,
-                            );
+                            ));
                             ui.label("confidence");
-                            ui.text_edit_singleline(
+                            ui.add(ime_safe_singleline(
                                 &mut self.annotation_editor_state.confidence_input,
-                            );
+                            ));
                         });
+                        ui.label(RichText::new("改行は Shift+Enter").italics());
                         ui.label("value");
                         ui.add(
-                            egui::TextEdit::multiline(&mut self.annotation_editor_state.value_input)
+                            ime_safe_multiline(&mut self.annotation_editor_state.value_input)
                                 .desired_rows(2),
                         );
                         ui.label("note");
                         ui.add(
-                            egui::TextEdit::multiline(&mut self.annotation_editor_state.note_input)
+                            ime_safe_multiline(&mut self.annotation_editor_state.note_input)
                                 .desired_rows(2),
                         );
 
@@ -2969,7 +2972,7 @@ fn draw_form_group_editor(
                 let mut locked_search_scope = "paragraph".to_string();
                 ui.add_enabled(
                     false,
-                    egui::TextEdit::singleline(&mut locked_search_scope)
+                    ime_safe_singleline(&mut locked_search_scope)
                         .desired_width(CONDITION_EDITOR_CHOICE_WIDTH),
                 );
             } else {
@@ -3206,6 +3209,17 @@ fn edit_optional_i64(
     changed
 }
 
+fn ime_safe_singleline<'t>(text: &'t mut dyn egui::TextBuffer) -> egui::TextEdit<'t> {
+    egui::TextEdit::singleline(text).return_key(None)
+}
+
+fn ime_safe_multiline<'t>(text: &'t mut dyn egui::TextBuffer) -> egui::TextEdit<'t> {
+    egui::TextEdit::multiline(text).return_key(egui::KeyboardShortcut::new(
+        egui::Modifiers::SHIFT,
+        egui::Key::Enter,
+    ))
+}
+
 fn draw_string_list_editor(
     ui: &mut Ui,
     id_salt: &str,
@@ -3238,7 +3252,7 @@ fn draw_string_list_editor(
                         ui.label(format!("{:02}", index + 1));
                         let response = ui.add_sized(
                             [CONDITION_EDITOR_LIST_INPUT_WIDTH, 0.0],
-                            egui::TextEdit::singleline(value),
+                            ime_safe_singleline(value),
                         );
                         if response.changed() {
                             changed = true;
@@ -3300,7 +3314,7 @@ fn draw_annotation_filter_editor(
                             if ui
                                 .add_sized(
                                     [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                    egui::TextEdit::singleline(&mut filter.namespace),
+                                    ime_safe_singleline(&mut filter.namespace),
                                 )
                                 .changed()
                             {
@@ -3315,7 +3329,7 @@ fn draw_annotation_filter_editor(
                             if ui
                                 .add_sized(
                                     [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                    egui::TextEdit::singleline(&mut filter.key),
+                                    ime_safe_singleline(&mut filter.key),
                                 )
                                 .changed()
                             {
@@ -3330,7 +3344,7 @@ fn draw_annotation_filter_editor(
                             if ui
                                 .add_sized(
                                     [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                    egui::TextEdit::singleline(&mut filter.value),
+                                    ime_safe_singleline(&mut filter.value),
                                 )
                                 .changed()
                             {
@@ -3347,7 +3361,7 @@ fn draw_annotation_filter_editor(
                             if ui
                                 .add_sized(
                                     [CONDITION_EDITOR_FILTER_OPERATOR_WIDTH, 0.0],
-                                    egui::TextEdit::singleline(operator_text),
+                                    ime_safe_singleline(operator_text),
                                 )
                                 .changed()
                             {
