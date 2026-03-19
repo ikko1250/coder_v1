@@ -278,6 +278,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                         {
                             "forms": ["抑制", "区域"],
                             "match_logic": "and",
+                            "anchor_form": "抑制",
                             "search_scope": "sentence",
                             "max_token_distance": 5,
                         }
@@ -295,6 +296,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(len(normalized_condition.form_groups), 1)
         self.assertEqual(normalized_condition.form_groups[0].forms, ["抑制", "区域"])
         self.assertEqual(normalized_condition.form_groups[0].match_logic, "and")
+        self.assertEqual(normalized_condition.form_groups[0].anchor_form, "抑制")
         self.assertEqual(normalized_condition.form_groups[0].search_scope, "sentence")
         self.assertEqual(
             [issue.code for issue in normalization_result.issues],
@@ -348,6 +350,79 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(
             [issue.code for issue in normalization_result.issues],
             ["group1_not_disallowed"],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_requires_anchor_form_for_and_distance_group(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "group_condition",
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "max_token_distance": 5,
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(normalization_result.normalized_conditions, [])
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["anchor_form_missing"],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_accepts_anchor_and_exclusion_group(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "group_condition",
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "anchor_form": "抑制",
+                            "max_token_distance": 5,
+                            "exclude_forms_any": ["禁止", "禁止"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(len(normalization_result.normalized_conditions), 1)
+        normalized_group = normalization_result.normalized_conditions[0].form_groups[0]
+        self.assertEqual(normalized_group.anchor_form, "抑制")
+        self.assertEqual(normalized_group.exclude_forms_any, ["禁止"])
+        self.assertEqual(normalized_group.effective_max_token_distance, 5)
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["categories_defaulted"],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_rejects_invalid_anchor_form(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "group_condition",
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "anchor_form": "届出",
+                            "max_token_distance": 5,
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(normalization_result.normalized_conditions, [])
+        self.assertEqual(
+            [issue.code for issue in normalization_result.issues],
+            ["anchor_form_invalid"],
         )
 
     def test_normalize_cooccurrence_conditions_result_reports_required_categories_not_list(self) -> None:
@@ -1263,6 +1338,214 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertTrue(eval_rows[0]["is_match"])
         self.assertFalse(eval_rows[1]["token_is_match"])
         self.assertFalse(eval_rows[1]["is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_anchor_window_forward_only(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 2, 2],
+                "sentence_id": [11, 11, 21, 21],
+                "token_no": [0, 1, 0, 1],
+                "normalized_form": ["抑制", "区域", "区域", "抑制"],
+                "surface": ["抑制", "区域", "区域", "抑制"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="anchor_group",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=1,
+                    effective_max_token_distance=1,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["抑制", "区域"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="sentence",
+                            requested_max_token_distance=1,
+                            effective_max_token_distance=1,
+                            anchor_form="抑制",
+                            exclude_forms_any=[],
+                        )
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
+        self.assertTrue(eval_rows[0]["token_is_match"])
+        self.assertFalse(eval_rows[1]["token_is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_exclude_forms_within_window(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 2, 2, 2],
+                "sentence_id": [11, 11, 11, 21, 21, 21],
+                "token_no": [0, 1, 5, 0, 1, 2],
+                "normalized_form": ["抑制", "区域", "禁止", "抑制", "禁止", "区域"],
+                "surface": ["抑制", "区域", "禁止", "抑制", "禁止", "区域"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="exclude_window_group",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=2,
+                    effective_max_token_distance=2,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["抑制", "区域"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="sentence",
+                            requested_max_token_distance=2,
+                            effective_max_token_distance=2,
+                            anchor_form="抑制",
+                            exclude_forms_any=["禁止"],
+                        )
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
+        self.assertTrue(eval_rows[0]["token_is_match"])
+        self.assertFalse(eval_rows[1]["token_is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_exclude_forms_without_distance(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 2, 2, 2],
+                "sentence_id": [11, 11, 21, 21, 21],
+                "token_no": [0, 1, 0, 1, 2],
+                "normalized_form": ["抑制", "区域", "抑制", "区域", "禁止"],
+                "surface": ["抑制", "区域", "抑制", "区域", "禁止"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="exclude_scope_group",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["抑制", "区域"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="sentence",
+                            requested_max_token_distance=None,
+                            effective_max_token_distance=None,
+                            anchor_form=None,
+                            exclude_forms_any=["禁止"],
+                        )
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
+        self.assertTrue(eval_rows[0]["token_is_match"])
+        self.assertFalse(eval_rows[1]["token_is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_or_group_with_distance(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 2],
+                "sentence_id": [11, 21],
+                "token_no": [0, 0],
+                "normalized_form": ["協議", "その他"],
+                "surface": ["協議", "その他"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="or_distance_group",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["届出", "協議"],
+                    search_scope="sentence",
+                    form_match_logic="any",
+                    requested_max_token_distance=2,
+                    effective_max_token_distance=None,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["届出", "協議"],
+                            match_logic="or",
+                            combine_logic=None,
+                            search_scope="sentence",
+                            requested_max_token_distance=2,
+                            effective_max_token_distance=2,
+                            anchor_form=None,
+                            exclude_forms_any=[],
+                        )
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = result.condition_eval_df.to_dicts()
+        self.assertEqual(len(eval_rows), 1)
+        self.assertTrue(eval_rows[0]["token_is_match"])
 
     def test_select_target_ids_by_conditions_result_handles_all_forms_empty_for_annotation_only_condition(self) -> None:
         tokens_df = pl.DataFrame(

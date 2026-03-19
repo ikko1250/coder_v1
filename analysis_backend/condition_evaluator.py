@@ -91,6 +91,14 @@ def _empty_group_matched_units_df() -> pl.DataFrame:
     return empty_df(GROUP_MATCHED_UNIT_SCHEMA)
 
 
+def _group_has_anchor_window(form_group: NormalizedFormGroup) -> bool:
+    return form_group.effective_max_token_distance is not None
+
+
+def _group_has_scoped_exclusion(form_group: NormalizedFormGroup) -> bool:
+    return bool(form_group.exclude_forms_any)
+
+
 def _paragraph_matched_form_count_expr() -> pl.Expr:
     # This is a diagnostic summary of the strongest unit-level coverage in the paragraph.
     return pl.col("matched_form_count").max().cast(pl.UInt32).alias("matched_form_count")
@@ -447,12 +455,12 @@ def _normalize_form_groups(
 
         raw_anchor_form = str(raw_group.get("anchor_form", "")).strip()
         anchor_form = raw_anchor_form or None
-        if anchor_form is not None:
+        if anchor_form is not None and anchor_form not in unique_forms:
             issues.append(
                 _build_condition_issue(
-                    code="form_groups_unsupported",
+                    code="anchor_form_invalid",
                     severity="error",
-                    message="anchor_form is not implemented yet in the evaluator.",
+                    message="anchor_form must be included in forms.",
                     condition_index=condition_index,
                     condition_id=condition_id,
                     field_name="form_groups",
@@ -483,12 +491,13 @@ def _normalize_form_groups(
             )
             invalid_condition = True
             continue
-        if exclude_forms_any:
+        exclude_forms_any = list(dict.fromkeys(exclude_forms_any))
+        if exclude_forms_any and raw_match_logic == "not":
             issues.append(
                 _build_condition_issue(
-                    code="form_groups_unsupported",
+                    code="exclude_forms_any_invalid",
                     severity="error",
-                    message="exclude_forms_any is not implemented yet in the evaluator.",
+                    message="exclude_forms_any is only supported for positive groups.",
                     condition_index=condition_index,
                     condition_id=condition_id,
                     field_name="form_groups",
@@ -539,19 +548,40 @@ def _normalize_form_groups(
                     field_name="form_groups",
                 )
             )
-        elif requested_max_token_distance is not None and raw_match_logic == "or":
+        else:
+            effective_max_token_distance = requested_max_token_distance
+
+        if (
+            raw_match_logic == "and"
+            and effective_max_token_distance is not None
+            and anchor_form is None
+        ):
             issues.append(
                 _build_condition_issue(
-                    code="max_token_distance_disabled",
-                    severity="warning",
-                    message="max_token_distance is not implemented yet for match_logic='or'.",
+                    code="anchor_form_missing",
+                    severity="error",
+                    message="anchor_form is required for and-group distance windows.",
                     condition_index=condition_index,
                     condition_id=condition_id,
                     field_name="form_groups",
                 )
             )
-        else:
-            effective_max_token_distance = requested_max_token_distance
+            invalid_condition = True
+            continue
+
+        if anchor_form is not None and raw_match_logic != "and":
+            issues.append(
+                _build_condition_issue(
+                    code="anchor_form_invalid",
+                    severity="error",
+                    message="anchor_form is only supported for and groups.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="form_groups",
+                )
+            )
+            invalid_condition = True
+            continue
 
         normalized_groups.append(
             NormalizedFormGroup(
@@ -699,7 +729,12 @@ def _uses_group_evaluator(condition: NormalizedCondition) -> bool:
         return False
     if len(condition.form_groups) >= 2:
         return True
-    return any(form_group.match_logic == "not" for form_group in condition.form_groups)
+    return any(
+        form_group.match_logic == "not"
+        or _group_has_anchor_window(form_group)
+        or _group_has_scoped_exclusion(form_group)
+        for form_group in condition.form_groups
+    )
 
 
 def _build_group_unit_universe_df(
@@ -726,6 +761,195 @@ def _build_group_unit_universe_df(
         .unique()
         .with_columns(pl.col("paragraph_id").alias("unit_id"))
         .sort(["paragraph_id", "unit_id"])
+    )
+
+
+def _build_positive_group_unit_match_with_window_df(
+    *,
+    candidate_tokens_df: pl.DataFrame,
+    form_group: NormalizedFormGroup,
+) -> pl.DataFrame:
+    search_scope = form_group.search_scope
+    position_column = "sentence_token_position" if search_scope == "sentence" else "paragraph_token_position"
+    unit_column = "sentence_id" if search_scope == "sentence" else "paragraph_id"
+    target_forms = list(dict.fromkeys(form_group.forms + form_group.exclude_forms_any))
+    relevant_tokens_df = candidate_tokens_df.filter(pl.col("normalized_form").is_in(target_forms))
+    if relevant_tokens_df.is_empty():
+        return _empty_group_matched_units_df()
+
+    rows: list[dict[str, object]] = []
+    for unit_df in relevant_tokens_df.partition_by(unit_column, maintain_order=True):
+        paragraph_id = int(unit_df.get_column("paragraph_id")[0])
+        unit_id = int(unit_df.get_column(unit_column)[0])
+        positions_by_form: dict[str, list[int]] = {}
+        for form in target_forms:
+            positions_by_form[form] = (
+                unit_df
+                .filter(pl.col("normalized_form") == form)
+                .sort(position_column)
+                .get_column(position_column)
+                .to_list()
+            )
+
+        exclude_positions = [
+            position
+            for form in form_group.exclude_forms_any
+            for position in positions_by_form.get(form, [])
+        ]
+        matched_row: dict[str, object] | None = None
+        if form_group.match_logic == "and":
+            anchor_form = form_group.anchor_form or ""
+            anchor_positions = positions_by_form.get(anchor_form, [])
+            for anchor_position in anchor_positions:
+                window_end = anchor_position + int(form_group.effective_max_token_distance or 0)
+                other_forms_match = all(
+                    any(
+                        anchor_position <= position <= window_end
+                        for position in positions_by_form.get(form, [])
+                    )
+                    for form in form_group.forms
+                    if form != anchor_form
+                )
+                if not other_forms_match:
+                    continue
+                if any(anchor_position <= position <= window_end for position in exclude_positions):
+                    continue
+                matched_row = {
+                    "paragraph_id": paragraph_id,
+                    "unit_scope": search_scope,
+                    "unit_id": unit_id,
+                    "matched_form_count": len(form_group.forms),
+                    "distance_is_match": True,
+                }
+                break
+        else:
+            for form in form_group.forms:
+                for anchor_position in positions_by_form.get(form, []):
+                    window_end = anchor_position + int(form_group.effective_max_token_distance or 0)
+                    if any(anchor_position <= position <= window_end for position in exclude_positions):
+                        continue
+                    matched_form_count = sum(
+                        1
+                        for candidate_form in form_group.forms
+                        if any(
+                            anchor_position <= position <= window_end
+                            for position in positions_by_form.get(candidate_form, [])
+                        )
+                    )
+                    matched_row = {
+                        "paragraph_id": paragraph_id,
+                        "unit_scope": search_scope,
+                        "unit_id": unit_id,
+                        "matched_form_count": matched_form_count,
+                        "distance_is_match": True,
+                    }
+                    break
+                if matched_row is not None:
+                    break
+
+        if matched_row is not None:
+            rows.append(matched_row)
+
+    if not rows:
+        return _empty_group_matched_units_df()
+    return pl.DataFrame(rows, schema=GROUP_MATCHED_UNIT_SCHEMA)
+
+
+def _build_positive_group_unit_match_df(
+    *,
+    candidate_tokens_df: pl.DataFrame,
+    form_group: NormalizedFormGroup,
+) -> pl.DataFrame:
+    search_scope = form_group.search_scope
+    target_forms = list(dict.fromkeys(form_group.forms + form_group.exclude_forms_any))
+    relevant_tokens_df = candidate_tokens_df.filter(pl.col("normalized_form").is_in(target_forms))
+    if relevant_tokens_df.is_empty():
+        return _empty_group_matched_units_df()
+
+    if search_scope == "sentence":
+        unit_column = "sentence_id"
+        position_column = "sentence_token_position"
+        unit_df = (
+            relevant_tokens_df
+            .select([pl.col("sentence_id").alias("unit_id"), "paragraph_id"])
+            .unique()
+        )
+        unit_form_df = (
+            relevant_tokens_df
+            .select([pl.col("sentence_id").alias("unit_id"), "normalized_form"])
+            .unique()
+        )
+    else:
+        unit_column = "paragraph_id"
+        position_column = "paragraph_token_position"
+        unit_df = (
+            relevant_tokens_df
+            .select(pl.col("paragraph_id").alias("unit_id"))
+            .unique()
+            .with_columns(pl.col("unit_id").alias("paragraph_id"))
+        )
+        unit_form_df = (
+            relevant_tokens_df
+            .select([pl.col("paragraph_id").alias("unit_id"), "normalized_form"])
+            .unique()
+        )
+
+    required_form_count = len(form_group.forms)
+    matched_counts_df = (
+        unit_form_df
+        .filter(pl.col("normalized_form").is_in(form_group.forms))
+        .group_by("unit_id")
+        .agg(pl.col("normalized_form").n_unique().cast(pl.UInt32).alias("matched_form_count"))
+    )
+    base_match_expr = (
+        pl.col("matched_form_count") >= 1
+        if form_group.match_logic == "or"
+        else pl.col("matched_form_count") >= required_form_count
+    )
+    unit_eval_df = (
+        unit_df
+        .join(matched_counts_df, on="unit_id", how="left")
+        .with_columns(pl.col("matched_form_count").fill_null(0).cast(pl.UInt32))
+    )
+    if form_group.effective_max_token_distance is not None:
+        distance_match_df = evaluate_distance_matches_by_unit(
+            tokens_with_position_df=relevant_tokens_df.filter(pl.col("normalized_form").is_in(form_group.forms)),
+            forms=form_group.forms,
+            unit_column=unit_column,
+            position_column=position_column,
+            max_token_distance=int(form_group.effective_max_token_distance),
+        )
+        unit_eval_df = (
+            unit_eval_df
+            .join(distance_match_df, on="unit_id", how="left")
+            .with_columns(pl.col("distance_is_match").fill_null(False))
+        )
+        unit_match_expr = base_match_expr & pl.col("distance_is_match")
+    else:
+        unit_eval_df = unit_eval_df.with_columns(pl.lit(True).alias("distance_is_match"))
+        unit_match_expr = base_match_expr
+
+    if form_group.exclude_forms_any:
+        excluded_units_df = (
+            relevant_tokens_df
+            .filter(pl.col("normalized_form").is_in(form_group.exclude_forms_any))
+            .select(pl.col(unit_column).alias("unit_id"))
+            .unique()
+            .with_columns(pl.lit(True).alias("has_excluded_form"))
+        )
+        unit_eval_df = (
+            unit_eval_df
+            .join(excluded_units_df, on="unit_id", how="left")
+            .with_columns(pl.col("has_excluded_form").fill_null(False))
+        )
+        unit_match_expr = unit_match_expr & (~pl.col("has_excluded_form"))
+
+    return (
+        unit_eval_df
+        .with_columns(unit_match_expr.alias("unit_is_match"))
+        .filter(pl.col("unit_is_match"))
+        .with_columns(pl.lit(search_scope).alias("unit_scope"))
+        .select(list(GROUP_MATCHED_UNIT_SCHEMA.keys()))
     )
 
 
@@ -778,75 +1002,14 @@ def _build_form_group_matched_units_df(
 
     if relevant_tokens_df.is_empty():
         return _empty_group_matched_units_df()
-
-    if search_scope == "sentence":
-        unit_column = "sentence_id"
-        position_column = "sentence_token_position"
-        unit_df = (
-            relevant_tokens_df
-            .select([pl.col("sentence_id").alias("unit_id"), "paragraph_id"])
-            .unique()
+    if _group_has_anchor_window(form_group):
+        return _build_positive_group_unit_match_with_window_df(
+            candidate_tokens_df=candidate_tokens_df,
+            form_group=form_group,
         )
-        unit_form_df = (
-            relevant_tokens_df
-            .select([pl.col("sentence_id").alias("unit_id"), "normalized_form"])
-            .unique()
-        )
-    else:
-        unit_column = "paragraph_id"
-        position_column = "paragraph_token_position"
-        unit_df = (
-            relevant_tokens_df
-            .select(pl.col("paragraph_id").alias("unit_id"))
-            .unique()
-            .with_columns(pl.col("unit_id").alias("paragraph_id"))
-        )
-        unit_form_df = (
-            relevant_tokens_df
-            .select([pl.col("paragraph_id").alias("unit_id"), "normalized_form"])
-            .unique()
-        )
-
-    required_form_count = len(form_group.forms)
-    matched_counts_df = (
-        unit_form_df
-        .group_by("unit_id")
-        .agg(pl.col("normalized_form").n_unique().cast(pl.UInt32).alias("matched_form_count"))
-    )
-    base_match_expr = (
-        pl.col("matched_form_count") >= 1
-        if form_group.match_logic == "or"
-        else pl.col("matched_form_count") >= required_form_count
-    )
-    unit_eval_df = (
-        unit_df
-        .join(matched_counts_df, on="unit_id", how="left")
-        .with_columns(pl.col("matched_form_count").fill_null(0).cast(pl.UInt32))
-    )
-    if form_group.effective_max_token_distance is not None:
-        distance_match_df = evaluate_distance_matches_by_unit(
-            tokens_with_position_df=relevant_tokens_df,
-            forms=form_group.forms,
-            unit_column=unit_column,
-            position_column=position_column,
-            max_token_distance=int(form_group.effective_max_token_distance),
-        )
-        unit_eval_df = (
-            unit_eval_df
-            .join(distance_match_df, on="unit_id", how="left")
-            .with_columns(pl.col("distance_is_match").fill_null(False))
-        )
-        unit_match_expr = base_match_expr & pl.col("distance_is_match")
-    else:
-        unit_eval_df = unit_eval_df.with_columns(pl.lit(True).alias("distance_is_match"))
-        unit_match_expr = base_match_expr
-
-    return (
-        unit_eval_df
-        .with_columns(unit_match_expr.alias("unit_is_match"))
-        .filter(pl.col("unit_is_match"))
-        .with_columns(pl.lit(search_scope).alias("unit_scope"))
-        .select(list(GROUP_MATCHED_UNIT_SCHEMA.keys()))
+    return _build_positive_group_unit_match_df(
+        candidate_tokens_df=candidate_tokens_df,
+        form_group=form_group,
     )
 
 
@@ -1661,7 +1824,14 @@ def select_target_ids_by_conditions_result(
     all_forms = sorted({
         form
         for condition in normalized_conditions
-        for form in condition.forms
+        for form in (
+            condition.forms
+            + [
+                exclude_form
+                for form_group in condition.form_groups
+                for exclude_form in form_group.exclude_forms_any
+            ]
+        )
     })
     candidate_tokens_df = (
         build_candidate_tokens_with_position_df(

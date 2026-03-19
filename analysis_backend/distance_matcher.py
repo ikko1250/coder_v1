@@ -541,6 +541,16 @@ def build_condition_hit_result(
             len(form_groups) >= 2
             or any(
                 str(form_group.get("match_logic", "")).strip().lower() == "not"
+                or bool(
+                    str(form_group.get("anchor_form", "")).strip()
+                    if form_group.get("anchor_form") is not None
+                    else ""
+                )
+                or bool(form_group.get("exclude_forms_any"))
+                or (
+                    str(form_group.get("match_logic", "")).strip().lower() == "or"
+                    and form_group.get("effective_max_token_distance") is not None
+                )
                 for form_group in form_groups
                 if isinstance(form_group, dict)
             )
