@@ -1,4 +1,6 @@
-use crate::condition_editor::{AnnotationFilterItem, ConditionEditorItem, FormGroupEditorItem};
+use crate::condition_editor::{
+    AnnotationFilterItem, ConditionEditorItem, FilterConfigDocument, FormGroupEditorItem,
+};
 use crate::ui_helpers::ime_safe_singleline;
 use egui::{Color32, RichText, Ui};
 use std::path::Path;
@@ -14,6 +16,13 @@ const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
 pub(crate) struct ConditionEditorFooterResponse {
     pub(crate) save_clicked: bool,
     pub(crate) reload_clicked: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ConditionEditorListResponse {
+    pub(crate) add_clicked: bool,
+    pub(crate) selected_index: Option<usize>,
+    pub(crate) selected_group_index: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +135,62 @@ pub(crate) fn draw_condition_editor_confirm_overlay(
             });
         });
 
+    response
+}
+
+pub(crate) fn draw_condition_editor_list_panel(
+    ui: &mut Ui,
+    can_modify: bool,
+    document: Option<&FilterConfigDocument>,
+    current_selection: Option<usize>,
+) -> ConditionEditorListResponse {
+    let mut response = ConditionEditorListResponse::default();
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("condition 一覧").strong());
+            if ui
+                .add_enabled(can_modify, egui::Button::new("追加"))
+                .clicked()
+            {
+                response.add_clicked = true;
+            }
+        });
+
+        ScrollArea::vertical()
+            .id_salt("condition_editor_list_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let Some(document) = document else {
+                    ui.label(RichText::new("条件 JSON 未読込").italics());
+                    return;
+                };
+                if document.cooccurrence_conditions.is_empty() {
+                    ui.label(RichText::new("condition がありません").italics());
+                } else {
+                    for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
+                        let selected = current_selection == Some(index);
+                        let categories_preview =
+                            summarize_condition_list(&condition.categories, 2);
+                        let label = format!(
+                            "{}. {} [{}] groups:{} forms:{} filters:{} refs:{}",
+                            index + 1,
+                            condition.condition_id,
+                            categories_preview,
+                            condition_group_count(condition),
+                            total_forms_count(condition),
+                            condition.annotation_filters.len(),
+                            condition.required_categories_all.len()
+                                + condition.required_categories_any.len()
+                        );
+                        if ui.selectable_label(selected, label).clicked() {
+                            response.selected_index = Some(index);
+                            response.selected_group_index =
+                                clamp_editor_index(Some(0), condition.form_groups.len());
+                        }
+                    }
+                }
+            });
+    });
     response
 }
 
@@ -653,5 +718,13 @@ fn editor_status_color(is_error: bool) -> Color32 {
         Color32::from_rgb(200, 64, 64)
     } else {
         Color32::from_rgb(70, 130, 70)
+    }
+}
+
+fn clamp_editor_index(selected_index: Option<usize>, len: usize) -> Option<usize> {
+    match (selected_index, len) {
+        (_, 0) => None,
+        (Some(index), _) => Some(index.min(len - 1)),
+        (None, _) => Some(0),
     }
 }

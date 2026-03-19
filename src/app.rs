@@ -9,13 +9,14 @@ use crate::condition_editor::{
     FilterConfigDocument, FormGroupEditorItem,
 };
 use crate::condition_editor_view::{
-    condition_group_count, draw_annotation_filter_editor,
+    draw_annotation_filter_editor,
     draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
     draw_condition_editor_footer_panel as render_condition_editor_footer_panel,
     draw_condition_editor_header_panel as render_condition_editor_header_panel,
+    draw_condition_editor_list_panel as render_condition_editor_list_panel,
     draw_form_group_editor, draw_string_list_editor, edit_optional_choice,
-    summarize_condition_list, summarize_form_group_label, total_forms_count,
-    ConditionEditorFooterResponse, ConfirmOverlayResponse, CONDITION_EDITOR_CHOICE_WIDTH,
+    summarize_form_group_label, ConditionEditorFooterResponse,
+    ConditionEditorListResponse, ConfirmOverlayResponse, CONDITION_EDITOR_CHOICE_WIDTH,
     CONDITION_EDITOR_FIELD_LABEL_WIDTH, CONDITION_EDITOR_TEXT_INPUT_WIDTH,
 };
 use crate::csv_loader::load_records;
@@ -1732,279 +1733,106 @@ impl App {
             .size(Size::remainder())
             .horizontal(|mut strip| {
                 strip.cell(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("condition 一覧").strong());
-                            if ui
-                                .add_enabled(can_modify, egui::Button::new("追加"))
-                                .clicked()
-                            {
-                                command_draft.should_add_condition = true;
-                            }
-                        });
-
-                        ScrollArea::vertical()
-                            .id_salt("condition_editor_list_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                let Some(document) = self.condition_editor_state.document.as_ref() else {
-                                    ui.label(RichText::new("条件 JSON 未読込").italics());
-                                    return;
-                                };
-                                if document.cooccurrence_conditions.is_empty() {
-                                    ui.label(RichText::new("condition がありません").italics());
-                                } else {
-                                    for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
-                                        let selected =
-                                            selection_draft.requested_selection == Some(index);
-                                        let categories_preview =
-                                            summarize_condition_list(&condition.categories, 2);
-                                        let label = format!(
-                                            "{}. {} [{}] groups:{} forms:{} filters:{} refs:{}",
-                                            index + 1,
-                                            condition.condition_id,
-                                            categories_preview,
-                                            condition_group_count(condition),
-                                            total_forms_count(condition),
-                                            condition.annotation_filters.len(),
-                                            condition.required_categories_all.len()
-                                                + condition.required_categories_any.len()
-                                        );
-                                        if ui.selectable_label(selected, label).clicked() {
-                                            selection_draft.requested_selection = Some(index);
-                                            selection_draft.requested_group_selection =
-                                                clamp_condition_index(Some(0), condition.form_groups.len());
-                                        }
-                                    }
-                                }
-                            });
-                    });
+                    let list_response = render_condition_editor_list_panel(
+                        ui,
+                        can_modify,
+                        self.condition_editor_state.document.as_ref(),
+                        selection_draft.requested_selection,
+                    );
+                    self.apply_condition_editor_list_response(
+                        selection_draft,
+                        command_draft,
+                        list_response,
+                    );
                 });
 
                 strip.cell(|ui| {
-                    egui::Frame::default()
-                        .fill(panel_fill)
-                        .inner_margin(egui::Margin {
-                            left: 24,
-                            right: 24,
-                            top: 10,
-                            bottom: 10,
-                        })
-                        .show(ui, |ui| {
-                            ScrollArea::vertical()
-                                .id_salt("condition_editor_detail_scroll")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    let should_mark_dirty = if let Some(document) =
-                                        self.condition_editor_state.document.as_mut()
-                                    {
-                                        let mut changed = false;
-                                        selection_draft.requested_selection = clamp_condition_index(
-                                            selection_draft.requested_selection,
-                                            document.cooccurrence_conditions.len(),
-                                        );
-                                        selection_draft.requested_group_selection =
-                                            clamp_condition_group_selection_for_document(
-                                                document,
-                                                selection_draft.requested_selection,
-                                                selection_draft.requested_group_selection,
-                                            );
-                                        if let Some(selected_index) =
-                                            selection_draft.requested_selection
-                                        {
-                                            if let Some(condition) =
-                                                document.cooccurrence_conditions.get_mut(selected_index)
-                                            {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(RichText::new("condition 詳細").strong());
-                                                    if ui
-                                                        .add_enabled(
-                                                            can_modify,
-                                                            egui::Button::new("condition削除"),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        command_draft.should_delete_condition =
-                                                            Some(selected_index);
-                                                    }
-                                                });
-                                                ui.horizontal(|ui| {
-                                                    ui.add_sized(
-                                                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                                                        egui::Label::new("condition_id"),
-                                                    );
-                                                    let response = ui.add_sized(
-                                                        [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                                                        ime_safe_singleline(
-                                                            &mut condition.condition_id,
-                                                        ),
-                                                    );
-                                                    changed |= response.changed();
-                                                });
-
-                                                ui.horizontal(|ui| {
-                                                    ui.add_sized(
-                                                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                                                        egui::Label::new("overall_search_scope"),
-                                                    );
-                                                    changed |= edit_optional_choice(
-                                                        ui,
-                                                        &mut condition.overall_search_scope,
-                                                        &["paragraph", "sentence"],
-                                                        CONDITION_EDITOR_CHOICE_WIDTH,
-                                                    );
-                                                });
-
-                                                ui.add_space(8.0);
-                                                changed |= draw_string_list_editor(
-                                                    ui,
-                                                    "categories",
-                                                    &mut condition.categories,
-                                                );
-
-                                                ui.group(|ui| {
-                                                    ui.horizontal(|ui| {
-                                                        ui.label(RichText::new("form_groups").strong());
-                                                        if ui.button("group追加").clicked() {
-                                                            condition.form_groups.push(
-                                                                build_default_form_group_item(
-                                                                    condition.form_groups.len(),
-                                                                ),
-                                                            );
-                                                            selection_draft.requested_group_selection =
-                                                                clamp_condition_index(
-                                                                    Some(condition.form_groups.len() - 1),
-                                                                    condition.form_groups.len(),
-                                                                );
-                                                            changed = true;
-                                                        }
-                                                    });
-
-                                                    if condition.form_groups.is_empty() {
-                                                        ui.label(RichText::new("group がありません").italics());
-                                                    } else {
-                                                        let mut remove_group_index = None;
-                                                        for (group_index, group) in
-                                                            condition.form_groups.iter().enumerate()
-                                                        {
-                                                            ui.horizontal(|ui| {
-                                                                let label =
-                                                                    summarize_form_group_label(
-                                                                        group,
-                                                                        group_index,
-                                                                    );
-                                                                if ui
-                                                                    .selectable_label(
-                                                                        selection_draft
-                                                                            .requested_group_selection
-                                                                            == Some(group_index),
-                                                                        label,
-                                                                    )
-                                                                    .clicked()
-                                                                {
-                                                                    selection_draft
-                                                                        .requested_group_selection =
-                                                                        Some(group_index);
-                                                                }
-                                                                if ui.button("削除").clicked() {
-                                                                    remove_group_index =
-                                                                        Some(group_index);
-                                                                }
-                                                            });
-                                                        }
-
-                                                        if let Some(group_index) = remove_group_index {
-                                                            condition.form_groups.remove(group_index);
-                                                            selection_draft.requested_group_selection =
-                                                                clamp_condition_index(
-                                                                    selection_draft
-                                                                        .requested_group_selection
-                                                                        .map(|current| {
-                                                                            if current > group_index {
-                                                                                current - 1
-                                                                            } else {
-                                                                                current
-                                                                            }
-                                                                        }),
-                                                                    condition.form_groups.len(),
-                                                                );
-                                                            changed = true;
-                                                        }
-
-                                                        selection_draft.requested_group_selection =
-                                                            clamp_condition_index(
-                                                                selection_draft.requested_group_selection,
-                                                                condition.form_groups.len(),
-                                                            );
-                                                        let overall_search_scope =
-                                                            condition.overall_search_scope.clone();
-                                                        let search_scope_locked =
-                                                            !condition.annotation_filters.is_empty();
-                                                        if let Some(group_index) =
-                                                            selection_draft
-                                                                .requested_group_selection
-                                                        {
-                                                            if let Some(group) =
-                                                                condition.form_groups.get_mut(group_index)
-                                                            {
-                                                                changed |= draw_form_group_editor(
-                                                                    ui,
-                                                                    group_index,
-                                                                    overall_search_scope.as_deref(),
-                                                                    search_scope_locked,
-                                                                    group,
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                });
-
-                                                if condition.projected_from_legacy {
-                                                    ui.colored_label(
-                                                        Color32::from_rgb(180, 120, 40),
-                                                        "legacy 条件を group editor 表示へ投影中です。保存時に互換形式または新形式へ正規化されます。",
-                                                    );
-                                                }
-
-                                                changed |= draw_annotation_filter_editor(
-                                                    ui,
-                                                    &mut condition.annotation_filters,
-                                                );
-                                                changed |= draw_string_list_editor(
-                                                    ui,
-                                                    "required_categories_all",
-                                                    &mut condition.required_categories_all,
-                                                );
-                                                changed |= draw_string_list_editor(
-                                                    ui,
-                                                    "required_categories_any",
-                                                    &mut condition.required_categories_any,
-                                                );
-                                            } else {
-                                                ui.label(
-                                                    RichText::new("condition を選択してください")
-                                                        .italics(),
-                                                );
-                                            }
-                                        } else {
-                                            ui.label(
-                                                RichText::new("condition を選択してください")
-                                                    .italics(),
-                                            );
-                                        }
-                                        changed
-                                    } else {
-                                        ui.label(RichText::new("条件 JSON 未読込").italics());
-                                        false
-                                    };
-
-                                    if should_mark_dirty {
-                                        self.mark_condition_editor_dirty();
-                                    }
-                                });
-                        });
+                    self.draw_condition_editor_detail_panel(
+                        ui,
+                        panel_fill,
+                        can_modify,
+                        selection_draft,
+                        command_draft,
+                    );
                 });
             });
+    }
+
+    fn draw_condition_editor_detail_panel(
+        &mut self,
+        ui: &mut Ui,
+        panel_fill: Color32,
+        can_modify: bool,
+        selection_draft: &mut ConditionEditorSelectionDraft,
+        command_draft: &mut ConditionEditorCommandDraft,
+    ) {
+        egui::Frame::default()
+            .fill(panel_fill)
+            .inner_margin(egui::Margin {
+                left: 24,
+                right: 24,
+                top: 10,
+                bottom: 10,
+            })
+            .show(ui, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("condition_editor_detail_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if self.draw_condition_editor_detail_contents(
+                            ui,
+                            can_modify,
+                            selection_draft,
+                            command_draft,
+                        ) {
+                            self.mark_condition_editor_dirty();
+                        }
+                    });
+            });
+    }
+
+    fn draw_condition_editor_detail_contents(
+        &mut self,
+        ui: &mut Ui,
+        can_modify: bool,
+        selection_draft: &mut ConditionEditorSelectionDraft,
+        command_draft: &mut ConditionEditorCommandDraft,
+    ) -> bool {
+        let Some(document) = self.condition_editor_state.document.as_mut() else {
+            ui.label(RichText::new("条件 JSON 未読込").italics());
+            return false;
+        };
+
+        let mut changed = false;
+        selection_draft.requested_selection = clamp_condition_index(
+            selection_draft.requested_selection,
+            document.cooccurrence_conditions.len(),
+        );
+        selection_draft.requested_group_selection = clamp_condition_group_selection_for_document(
+            document,
+            selection_draft.requested_selection,
+            selection_draft.requested_group_selection,
+        );
+
+        let Some(selected_index) = selection_draft.requested_selection else {
+            ui.label(RichText::new("condition を選択してください").italics());
+            return false;
+        };
+        let Some(condition) = document.cooccurrence_conditions.get_mut(selected_index) else {
+            ui.label(RichText::new("condition を選択してください").italics());
+            return false;
+        };
+
+        changed |= draw_condition_editor_selected_condition(
+            ui,
+            can_modify,
+            selected_index,
+            selection_draft,
+            command_draft,
+            condition,
+        );
+
+        changed
     }
 
     fn draw_condition_editor_footer_panel(
@@ -2182,6 +2010,21 @@ impl App {
             Some(ConfirmOverlayResponse::Cancel) => Some(ConditionEditorModalResponse::Cancel),
             None => command_draft.modal_response,
         };
+    }
+
+    fn apply_condition_editor_list_response(
+        &self,
+        selection_draft: &mut ConditionEditorSelectionDraft,
+        command_draft: &mut ConditionEditorCommandDraft,
+        list_response: ConditionEditorListResponse,
+    ) {
+        if list_response.add_clicked {
+            command_draft.should_add_condition = true;
+        }
+        if let Some(selected_index) = list_response.selected_index {
+            selection_draft.requested_selection = Some(selected_index);
+            selection_draft.requested_group_selection = list_response.selected_group_index;
+        }
     }
 
     fn apply_condition_editor_add_request(&mut self, should_add_condition: bool) {
@@ -2915,6 +2758,158 @@ fn build_default_form_group_item(group_index: usize) -> FormGroupEditorItem {
         forms: vec![String::new()],
         ..Default::default()
     }
+}
+
+fn draw_condition_editor_selected_condition(
+    ui: &mut Ui,
+    can_modify: bool,
+    selected_index: usize,
+    selection_draft: &mut ConditionEditorSelectionDraft,
+    command_draft: &mut ConditionEditorCommandDraft,
+    condition: &mut crate::condition_editor::ConditionEditorItem,
+) -> bool {
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("condition 詳細").strong());
+        if ui
+            .add_enabled(can_modify, egui::Button::new("condition削除"))
+            .clicked()
+        {
+            command_draft.should_delete_condition = Some(selected_index);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+            egui::Label::new("condition_id"),
+        );
+        let response = ui.add_sized(
+            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
+            ime_safe_singleline(&mut condition.condition_id),
+        );
+        changed |= response.changed();
+    });
+
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+            egui::Label::new("overall_search_scope"),
+        );
+        changed |= edit_optional_choice(
+            ui,
+            &mut condition.overall_search_scope,
+            &["paragraph", "sentence"],
+            CONDITION_EDITOR_CHOICE_WIDTH,
+        );
+    });
+
+    ui.add_space(8.0);
+    changed |= draw_string_list_editor(ui, "categories", &mut condition.categories);
+    changed |= draw_condition_editor_form_groups_section(ui, selection_draft, condition);
+
+    if condition.projected_from_legacy {
+        ui.colored_label(
+            Color32::from_rgb(180, 120, 40),
+            "legacy 条件を group editor 表示へ投影中です。保存時に互換形式または新形式へ正規化されます。",
+        );
+    }
+
+    changed |= draw_annotation_filter_editor(ui, &mut condition.annotation_filters);
+    changed |= draw_string_list_editor(
+        ui,
+        "required_categories_all",
+        &mut condition.required_categories_all,
+    );
+    changed |= draw_string_list_editor(
+        ui,
+        "required_categories_any",
+        &mut condition.required_categories_any,
+    );
+
+    changed
+}
+
+fn draw_condition_editor_form_groups_section(
+    ui: &mut Ui,
+    selection_draft: &mut ConditionEditorSelectionDraft,
+    condition: &mut crate::condition_editor::ConditionEditorItem,
+) -> bool {
+    let mut changed = false;
+
+    ui.group(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("form_groups").strong());
+            if ui.button("group追加").clicked() {
+                condition.form_groups.push(build_default_form_group_item(
+                    condition.form_groups.len(),
+                ));
+                selection_draft.requested_group_selection = clamp_condition_index(
+                    Some(condition.form_groups.len() - 1),
+                    condition.form_groups.len(),
+                );
+                changed = true;
+            }
+        });
+
+        if condition.form_groups.is_empty() {
+            ui.label(RichText::new("group がありません").italics());
+        } else {
+            let mut remove_group_index = None;
+            for (group_index, group) in condition.form_groups.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let label = summarize_form_group_label(group, group_index);
+                    if ui
+                        .selectable_label(
+                            selection_draft.requested_group_selection == Some(group_index),
+                            label,
+                        )
+                        .clicked()
+                    {
+                        selection_draft.requested_group_selection = Some(group_index);
+                    }
+                    if ui.button("削除").clicked() {
+                        remove_group_index = Some(group_index);
+                    }
+                });
+            }
+
+            if let Some(group_index) = remove_group_index {
+                condition.form_groups.remove(group_index);
+                selection_draft.requested_group_selection = clamp_condition_index(
+                    selection_draft.requested_group_selection.map(|current| {
+                        if current > group_index {
+                            current - 1
+                        } else {
+                            current
+                        }
+                    }),
+                    condition.form_groups.len(),
+                );
+                changed = true;
+            }
+
+            selection_draft.requested_group_selection = clamp_condition_index(
+                selection_draft.requested_group_selection,
+                condition.form_groups.len(),
+            );
+            let overall_search_scope = condition.overall_search_scope.clone();
+            let search_scope_locked = !condition.annotation_filters.is_empty();
+            if let Some(group_index) = selection_draft.requested_group_selection {
+                if let Some(group) = condition.form_groups.get_mut(group_index) {
+                    changed |= draw_form_group_editor(
+                        ui,
+                        group_index,
+                        overall_search_scope.as_deref(),
+                        search_scope_locked,
+                        group,
+                    );
+                }
+            }
+        }
+    });
+
+    changed
 }
 
 fn tree_row_no_value(record: &AnalysisRecord) -> String {
