@@ -1697,27 +1697,6 @@ impl App {
         }
     }
 
-    fn draw_condition_editor_header_panel(
-        &self,
-        ui: &mut Ui,
-        can_modify: bool,
-        loaded_path_label: &str,
-        resolved_path_label: &str,
-    ) {
-        render_condition_editor_header_panel(
-            ui,
-            can_modify,
-            loaded_path_label,
-            resolved_path_label,
-            self.condition_editor_state.pending_path_sync.as_deref(),
-            self.condition_editor_state
-                .status_message
-                .as_deref()
-                .map(|message| (message, self.condition_editor_state.status_is_error)),
-            self.condition_editor_state.projected_legacy_condition_count,
-        );
-    }
-
     fn draw_condition_editor_body_panel(
         &mut self,
         ui: &mut Ui,
@@ -1838,45 +1817,6 @@ impl App {
         changed
     }
 
-    fn draw_condition_editor_footer_panel(
-        &self,
-        ui: &mut Ui,
-        can_modify: bool,
-        resolved_path_ok: bool,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) {
-        let save_enabled = can_modify
-            && self.condition_editor_state.document.is_some()
-            && self.condition_editor_state.pending_path_sync.is_none()
-            && resolved_path_ok;
-        let footer_response = render_condition_editor_footer_panel(
-            ui,
-            save_enabled,
-            can_modify && resolved_path_ok,
-            self.condition_editor_state.is_dirty,
-        );
-        self.apply_condition_editor_footer_response(command_draft, footer_response);
-    }
-
-    fn draw_condition_editor_confirm_overlay(
-        &self,
-        viewport_ctx: &egui::Context,
-        confirm_action: &ConditionEditorConfirmAction,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) {
-        let message = match confirm_action {
-            ConditionEditorConfirmAction::CloseWindow => {
-                "未保存の変更があります。condition editor を閉じますか。".to_string()
-            }
-            ConditionEditorConfirmAction::ReloadPath(path) => format!(
-                "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
-                path.display()
-            ),
-        };
-        let response = render_condition_editor_confirm_overlay(viewport_ctx, &message);
-        self.apply_condition_editor_confirm_overlay_response(command_draft, response);
-    }
-
     fn draw_condition_editor_embedded_window(
         &mut self,
         viewport_ctx: &egui::Context,
@@ -1894,11 +1834,17 @@ impl App {
             .default_height(760.0)
             .resizable(true)
             .show(viewport_ctx, |ui| {
-                self.draw_condition_editor_header_panel(
+                render_condition_editor_header_panel(
                     ui,
                     can_modify,
                     loaded_path_label,
                     resolved_path_label,
+                    self.condition_editor_state.pending_path_sync.as_deref(),
+                    self.condition_editor_state
+                        .status_message
+                        .as_deref()
+                        .map(|message| (message, self.condition_editor_state.status_is_error)),
+                    self.condition_editor_state.projected_legacy_condition_count,
                 );
                 ui.separator();
                 self.draw_condition_editor_body_panel(
@@ -1908,12 +1854,17 @@ impl App {
                     command_draft,
                 );
                 ui.separator();
-                self.draw_condition_editor_footer_panel(
+                let save_enabled = can_modify
+                    && self.condition_editor_state.document.is_some()
+                    && self.condition_editor_state.pending_path_sync.is_none()
+                    && resolved_path_ok;
+                let footer_response = render_condition_editor_footer_panel(
                     ui,
-                    can_modify,
-                    resolved_path_ok,
-                    command_draft,
+                    save_enabled,
+                    can_modify && resolved_path_ok,
+                    self.condition_editor_state.is_dirty,
                 );
+                self.apply_condition_editor_footer_response(command_draft, footer_response);
             });
         if !fallback_open {
             command_draft.close_requested = true;
@@ -1938,11 +1889,17 @@ impl App {
                     .inner_margin(egui::Margin::same(10)),
             )
             .show(viewport_ctx, |ui| {
-                self.draw_condition_editor_header_panel(
+                render_condition_editor_header_panel(
                     ui,
                     can_modify,
                     loaded_path_label,
                     resolved_path_label,
+                    self.condition_editor_state.pending_path_sync.as_deref(),
+                    self.condition_editor_state
+                        .status_message
+                        .as_deref()
+                        .map(|message| (message, self.condition_editor_state.status_is_error)),
+                    self.condition_editor_state.projected_legacy_condition_count,
                 );
             });
 
@@ -1953,12 +1910,17 @@ impl App {
                     .inner_margin(egui::Margin::same(10)),
             )
             .show(viewport_ctx, |ui| {
-                self.draw_condition_editor_footer_panel(
+                let save_enabled = can_modify
+                    && self.condition_editor_state.document.is_some()
+                    && self.condition_editor_state.pending_path_sync.is_none()
+                    && resolved_path_ok;
+                let footer_response = render_condition_editor_footer_panel(
                     ui,
-                    can_modify,
-                    resolved_path_ok,
-                    command_draft,
+                    save_enabled,
+                    can_modify && resolved_path_ok,
+                    self.condition_editor_state.is_dirty,
                 );
+                self.apply_condition_editor_footer_response(command_draft, footer_response);
             });
 
         egui::CentralPanel::default()
@@ -2200,10 +2162,20 @@ impl App {
             }
 
             if let Some(confirm_action) = current_confirm_action.as_ref() {
-                self.draw_condition_editor_confirm_overlay(
-                    viewport_ctx,
-                    confirm_action,
+                let message = match confirm_action {
+                    ConditionEditorConfirmAction::CloseWindow => {
+                        "未保存の変更があります。condition editor を閉じますか。".to_string()
+                    }
+                    ConditionEditorConfirmAction::ReloadPath(path) => format!(
+                        "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
+                        path.display()
+                    ),
+                };
+                let response =
+                    render_condition_editor_confirm_overlay(viewport_ctx, &message);
+                self.apply_condition_editor_confirm_overlay_response(
                     &mut command_draft,
+                    response,
                 );
             }
         });
