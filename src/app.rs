@@ -6,7 +6,13 @@ use crate::analysis_runner::{
 };
 use crate::condition_editor::{
     build_default_condition_item, load_condition_document, save_condition_document_atomic,
-    AnnotationFilterItem, FilterConfigDocument, FormGroupEditorItem,
+    FilterConfigDocument, FormGroupEditorItem,
+};
+use crate::condition_editor_view::{
+    condition_group_count, draw_annotation_filter_editor, draw_form_group_editor,
+    draw_string_list_editor, edit_optional_choice, summarize_condition_list,
+    summarize_form_group_label, total_forms_count, CONDITION_EDITOR_CHOICE_WIDTH,
+    CONDITION_EDITOR_FIELD_LABEL_WIDTH, CONDITION_EDITOR_TEXT_INPUT_WIDTH,
 };
 use crate::csv_loader::load_records;
 use crate::db::{
@@ -20,6 +26,7 @@ use crate::manual_annotation_store::{
 };
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
+use crate::ui_helpers::{ime_safe_multiline, ime_safe_singleline};
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, RichText, ScrollArea, TextStyle, TextWrapMode, Ui};
@@ -97,12 +104,6 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
 
 const DB_VIEWER_VIEWPORT_ID: &str = "db_viewer_viewport";
 const CONDITION_EDITOR_VIEWPORT_ID: &str = "condition_editor_viewport";
-const CONDITION_EDITOR_FIELD_LABEL_WIDTH: f32 = 156.0;
-const CONDITION_EDITOR_TEXT_INPUT_WIDTH: f32 = 280.0;
-const CONDITION_EDITOR_CHOICE_WIDTH: f32 = 140.0;
-const CONDITION_EDITOR_NUMBER_WIDTH: f32 = 120.0;
-const CONDITION_EDITOR_LIST_INPUT_WIDTH: f32 = 280.0;
-const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
 
 struct RunningAnalysisJob {
     receiver: Receiver<AnalysisJobEvent>,
@@ -1498,14 +1499,8 @@ impl App {
                 }
 
                 let status_text = self.analysis_runtime_state.status_text();
-                let status_color = match &self.analysis_runtime_state.status {
-                    AnalysisJobStatus::Idle => ui.visuals().text_color(),
-                    AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. } => {
-                        Color32::from_rgb(70, 130, 180)
-                    }
-                    AnalysisJobStatus::Succeeded { .. } => Color32::from_rgb(70, 130, 70),
-                    AnalysisJobStatus::Failed { .. } => Color32::from_rgb(200, 64, 64),
-                };
+                let status_color =
+                    analysis_status_color(ui, &self.analysis_runtime_state.status);
                 ui.label(RichText::new(status_text).color(status_color));
             });
         });
@@ -1568,84 +1563,57 @@ impl App {
                 ui.label("この設定は現在のセッション内だけで有効です。");
                 ui.separator();
 
-                ui.label("Python 実行ファイル");
-                ui.horizontal(|ui| {
-                    let mut label = python_override_label.clone();
-                    ui.add(
-                        ime_safe_singleline(&mut label)
-                            .desired_width(460.0)
-                            .interactive(false),
-                    );
-                    if ui
-                        .add_enabled(settings_enabled, egui::Button::new("選択"))
-                        .clicked()
-                    {
-                        selected_python_path = rfd::FileDialog::new()
+                draw_analysis_path_override_row(
+                    ui,
+                    "Python 実行ファイル",
+                    &python_override_label,
+                    "自動解決",
+                    settings_enabled,
+                    || {
+                        rfd::FileDialog::new()
                             .add_filter("Python", &["exe"])
                             .add_filter("All files", &["*"])
-                            .pick_file();
-                    }
-                    if ui
-                        .add_enabled(settings_enabled, egui::Button::new("自動解決"))
-                        .clicked()
-                    {
-                        clear_python_override = true;
-                    }
-                });
+                            .pick_file()
+                    },
+                    &mut selected_python_path,
+                    &mut clear_python_override,
+                );
                 ui.label(format!("現在の解決結果: {resolved_python_label}"));
                 ui.separator();
 
-                ui.label("条件 JSON");
-                ui.horizontal(|ui| {
-                    let mut label = filter_override_label.clone();
-                    ui.add(
-                        ime_safe_singleline(&mut label)
-                            .desired_width(460.0)
-                            .interactive(false),
-                    );
-                    if ui
-                        .add_enabled(settings_enabled, egui::Button::new("選択"))
-                        .clicked()
-                    {
-                        selected_filter_config_path = rfd::FileDialog::new()
+                draw_analysis_path_override_row(
+                    ui,
+                    "条件 JSON",
+                    &filter_override_label,
+                    "既定値",
+                    settings_enabled,
+                    || {
+                        rfd::FileDialog::new()
                             .add_filter("JSON files", &["json"])
                             .add_filter("All files", &["*"])
-                            .pick_file();
-                    }
-                    if ui
-                        .add_enabled(settings_enabled, egui::Button::new("既定値"))
-                        .clicked()
-                    {
-                        clear_filter_config_override = true;
-                    }
-                });
+                            .pick_file()
+                    },
+                    &mut selected_filter_config_path,
+                    &mut clear_filter_config_override,
+                );
                 ui.label(format!("現在の解決結果: {resolved_filter_label}"));
                 ui.separator();
 
-                ui.label("annotation CSV");
-                ui.horizontal(|ui| {
-                    let mut label = annotation_override_label.clone();
-                    ui.add(
-                        ime_safe_singleline(&mut label)
-                            .desired_width(460.0)
-                            .interactive(false),
-                    );
-                    if ui
-                        .add_enabled(settings_enabled, egui::Button::new("選択"))
-                        .clicked()
-                    {
-                        selected_annotation_csv_path = rfd::FileDialog::new()
+                draw_analysis_path_override_row(
+                    ui,
+                    "annotation CSV",
+                    &annotation_override_label,
+                    "既定値",
+                    settings_enabled,
+                    || {
+                        rfd::FileDialog::new()
                             .add_filter("CSV files", &["csv"])
                             .set_file_name("manual-annotations.csv")
-                            .save_file();
-                    }
-                    if ui
-                        .add_enabled(settings_enabled, egui::Button::new("既定値"))
-                        .clicked()
-                    {
-                        clear_annotation_csv_override = true;
-                    }
-                });
+                            .save_file()
+                    },
+                    &mut selected_annotation_csv_path,
+                    &mut clear_annotation_csv_override,
+                );
                 ui.label(format!("現在の解決結果: {resolved_annotation_label}"));
                 ui.separator();
 
@@ -1712,12 +1680,10 @@ impl App {
         }
 
         if let Some(status_message) = &self.condition_editor_state.status_message {
-            let status_color = if self.condition_editor_state.status_is_error {
-                Color32::from_rgb(200, 64, 64)
-            } else {
-                Color32::from_rgb(70, 130, 70)
-            };
-            ui.colored_label(status_color, status_message);
+            ui.colored_label(
+                editor_status_color(self.condition_editor_state.status_is_error),
+                status_message,
+            );
         }
 
         if self.condition_editor_state.projected_legacy_condition_count > 0 {
@@ -2538,213 +2504,21 @@ impl App {
         if let Some(record) = self.selected_record().cloned() {
             self.draw_db_viewer_button(ui, true);
             ui.add_space(6.0);
-
-            ui.label(
-                RichText::new(format!(
-                    "{} / {} / paragraph_id={}",
-                    record.municipality_name, record.ordinance_or_rule, record.paragraph_id
-                ))
-                .size(14.0)
-                .strong(),
-            );
-
-            ui.add_space(6.0);
-            ui.label(format!("document_id: {}", record.document_id));
-            ui.label(format!("doc_type: {}", record.doc_type));
-            ui.label(format!("sentence_count: {}", record.sentence_count));
-
-            ui.add_space(6.0);
-            ui.label(format!("categories: {}", record.matched_categories_text));
-            ui.label(format!("conditions: {}", record.matched_condition_ids_text));
-            ui.label(format!("match_groups: {}", record.match_group_ids_text));
-            ui.label(format!("annotated_tokens: {}", record.annotated_token_count));
-            ui.label(format!(
-                "manual_annotations: {}",
-                record.manual_annotation_count
-            ));
-            if !record.mixed_scope_warning_text.trim().is_empty() {
-                ui.colored_label(
-                    Color32::from_rgb(196, 110, 0),
-                    format!("promotion warning: {}", record.mixed_scope_warning_text),
-                );
-            }
-
+            self.draw_record_summary(ui, &record);
             ui.separator();
 
-            let segments = self.get_segments();
-            let mut job = LayoutJob::default();
-            let normal_format = TextFormat {
-                font_id: TextStyle::Body.resolve(ui.style()),
-                color: ui.visuals().text_color(),
-                ..Default::default()
-            };
-            let hit_format = TextFormat {
-                background: Color32::from_rgb(255, 224, 138),
-                ..normal_format.clone()
-            };
-
-            for seg in &segments {
-                if seg.text.is_empty() {
-                    continue;
-                }
-                let format = if seg.is_hit {
-                    hit_format.clone()
-                } else {
-                    normal_format.clone()
-                };
-                job.append(&seg.text, 0.0, format);
-            }
-            let annotation_summary = if record.manual_annotation_pairs_text.trim().is_empty() {
-                "annotation なし".to_string()
-            } else {
-                record.manual_annotation_pairs_text.clone()
-            };
-            let annotation_path_label = self
-                .resolved_annotation_csv_path()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|error| format!("解決失敗: {error}"));
-            let annotation_save_enabled = self.annotation_save_enabled();
-            let has_form_group_explanations = !record.form_group_explanations_text.trim().is_empty();
+            let detail_job = build_record_text_layout_job(ui, &self.get_segments());
 
             egui::TopBottomPanel::bottom("annotation_editor_panel")
                 .resizable(false)
                 .default_height(230.0)
                 .min_height(200.0)
                 .show_inside(ui, |ui| {
-                    ui.group(|ui| {
-                        ui.label(RichText::new("annotation 追記").strong());
-                        ui.label(format!("保存先: {annotation_path_label}"));
-                        ui.label(format!(
-                            "現在件数: {} / namespaces: {}",
-                            record.manual_annotation_count,
-                            if record.manual_annotation_namespaces_text.trim().is_empty() {
-                                "(なし)"
-                            } else {
-                                &record.manual_annotation_namespaces_text
-                            }
-                        ));
-
-                        ScrollArea::vertical()
-                            .id_salt("annotation_summary_scroll")
-                            .max_height(56.0)
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.add(egui::Label::new(annotation_summary.as_str()).wrap());
-                            });
-
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.label("namespace");
-                            ui.add(ime_safe_singleline(
-                                &mut self.annotation_editor_state.namespace_input,
-                            ));
-                            ui.label("key");
-                            ui.add(ime_safe_singleline(
-                                &mut self.annotation_editor_state.key_input,
-                            ));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("tagged_by");
-                            ui.add(ime_safe_singleline(
-                                &mut self.annotation_editor_state.tagged_by_input,
-                            ));
-                            ui.label("confidence");
-                            ui.add(ime_safe_singleline(
-                                &mut self.annotation_editor_state.confidence_input,
-                            ));
-                        });
-                        ui.label(RichText::new("改行は Shift+Enter").italics());
-                        ui.label("value");
-                        ui.add(
-                            ime_safe_multiline(&mut self.annotation_editor_state.value_input)
-                                .desired_rows(2),
-                        );
-                        ui.label("note");
-                        ui.add(
-                            ime_safe_multiline(&mut self.annotation_editor_state.note_input)
-                                .desired_rows(2),
-                        );
-
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(
-                                    annotation_save_enabled,
-                                    egui::Button::new("追記"),
-                                )
-                                .clicked()
-                            {
-                                self.save_annotation_for_selected_record();
-                            }
-                            if ui.button("入力クリア").clicked() {
-                                self.clear_annotation_editor_inputs();
-                                self.clear_annotation_editor_status();
-                            }
-                            if !annotation_save_enabled {
-                                ui.label("分析ジョブ実行中は保存できません。");
-                            }
-                        });
-
-                        if let Some(status_message) = &self.annotation_editor_state.status_message {
-                            let status_color = if self.annotation_editor_state.status_is_error {
-                                Color32::from_rgb(200, 64, 64)
-                            } else {
-                                Color32::from_rgb(70, 130, 70)
-                            };
-                            ui.colored_label(status_color, status_message);
-                        }
-                    });
+                    self.draw_annotation_editor_panel(ui, &record);
                 });
 
             egui::CentralPanel::default().show_inside(ui, |ui| {
-                ScrollArea::vertical()
-                    .id_salt("detail_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add(egui::Label::new(job).wrap());
-                        if has_form_group_explanations {
-                            ui.add_space(10.0);
-                            egui::CollapsingHeader::new("高度条件の説明")
-                                .default_open(false)
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(
-                                            "高度条件の説明を表示中。本文強調は一部未対応です。",
-                                        )
-                                        .italics(),
-                                    );
-                                    if !record.matched_form_group_ids_text.trim().is_empty() {
-                                        ui.label(format!(
-                                            "group_ids: {}",
-                                            record.matched_form_group_ids_text
-                                        ));
-                                    }
-                                    if !record.matched_form_group_logics_text.trim().is_empty() {
-                                        ui.label(format!(
-                                            "group_logics: {}",
-                                            record.matched_form_group_logics_text
-                                        ));
-                                    }
-                                    if !record.mixed_scope_warning_text.trim().is_empty() {
-                                        ui.colored_label(
-                                            Color32::from_rgb(196, 110, 0),
-                                            record.mixed_scope_warning_text.as_str(),
-                                        );
-                                    }
-                                    ScrollArea::vertical()
-                                        .id_salt("form_group_explanations_scroll")
-                                        .max_height(160.0)
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            ui.add(
-                                                egui::Label::new(
-                                                    record.form_group_explanations_text.as_str(),
-                                                )
-                                                .wrap_mode(TextWrapMode::Wrap),
-                                            );
-                                        });
-                                });
-                        }
-                    });
+                self.draw_record_text_panel(ui, &record, detail_job);
             });
         } else {
             self.draw_db_viewer_button(ui, false);
@@ -2752,6 +2526,264 @@ impl App {
             ui.label(RichText::new("レコード未選択").italics());
         }
     }
+
+    fn draw_record_summary(&self, ui: &mut Ui, record: &AnalysisRecord) {
+        ui.label(
+            RichText::new(format!(
+                "{} / {} / paragraph_id={}",
+                record.municipality_name, record.ordinance_or_rule, record.paragraph_id
+            ))
+            .size(14.0)
+            .strong(),
+        );
+
+        ui.add_space(6.0);
+        ui.label(format!("document_id: {}", record.document_id));
+        ui.label(format!("doc_type: {}", record.doc_type));
+        ui.label(format!("sentence_count: {}", record.sentence_count));
+
+        ui.add_space(6.0);
+        ui.label(format!("categories: {}", record.matched_categories_text));
+        ui.label(format!("conditions: {}", record.matched_condition_ids_text));
+        ui.label(format!("match_groups: {}", record.match_group_ids_text));
+        ui.label(format!("annotated_tokens: {}", record.annotated_token_count));
+        ui.label(format!(
+            "manual_annotations: {}",
+            record.manual_annotation_count
+        ));
+        if !record.mixed_scope_warning_text.trim().is_empty() {
+            ui.colored_label(
+                Color32::from_rgb(196, 110, 0),
+                format!("promotion warning: {}", record.mixed_scope_warning_text),
+            );
+        }
+    }
+
+    fn draw_record_text_panel(
+        &self,
+        ui: &mut Ui,
+        record: &AnalysisRecord,
+        detail_job: LayoutJob,
+    ) {
+        ScrollArea::vertical()
+            .id_salt("detail_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(detail_job).wrap());
+                self.draw_form_group_explanations_panel(ui, record);
+            });
+    }
+
+    fn draw_form_group_explanations_panel(&self, ui: &mut Ui, record: &AnalysisRecord) {
+        if record.form_group_explanations_text.trim().is_empty() {
+            return;
+        }
+
+        ui.add_space(10.0);
+        egui::CollapsingHeader::new("高度条件の説明")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("高度条件の説明を表示中。本文強調は一部未対応です。")
+                        .italics(),
+                );
+                if !record.matched_form_group_ids_text.trim().is_empty() {
+                    ui.label(format!("group_ids: {}", record.matched_form_group_ids_text));
+                }
+                if !record.matched_form_group_logics_text.trim().is_empty() {
+                    ui.label(format!(
+                        "group_logics: {}",
+                        record.matched_form_group_logics_text
+                    ));
+                }
+                if !record.mixed_scope_warning_text.trim().is_empty() {
+                    ui.colored_label(
+                        Color32::from_rgb(196, 110, 0),
+                        record.mixed_scope_warning_text.as_str(),
+                    );
+                }
+                ScrollArea::vertical()
+                    .id_salt("form_group_explanations_scroll")
+                    .max_height(160.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(record.form_group_explanations_text.as_str())
+                                .wrap_mode(TextWrapMode::Wrap),
+                        );
+                    });
+            });
+    }
+
+    fn draw_annotation_editor_panel(&mut self, ui: &mut Ui, record: &AnalysisRecord) {
+        let annotation_summary = if record.manual_annotation_pairs_text.trim().is_empty() {
+            "annotation なし".to_string()
+        } else {
+            record.manual_annotation_pairs_text.clone()
+        };
+        let annotation_path_label = self
+            .resolved_annotation_csv_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("解決失敗: {error}"));
+        let annotation_save_enabled = self.annotation_save_enabled();
+
+        ui.group(|ui| {
+            ui.label(RichText::new("annotation 追記").strong());
+            ui.label(format!("保存先: {annotation_path_label}"));
+            ui.label(format!(
+                "現在件数: {} / namespaces: {}",
+                record.manual_annotation_count,
+                if record.manual_annotation_namespaces_text.trim().is_empty() {
+                    "(なし)"
+                } else {
+                    &record.manual_annotation_namespaces_text
+                }
+            ));
+
+            ScrollArea::vertical()
+                .id_salt("annotation_summary_scroll")
+                .max_height(56.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(annotation_summary.as_str()).wrap());
+                });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("namespace");
+                ui.add(ime_safe_singleline(
+                    &mut self.annotation_editor_state.namespace_input,
+                ));
+                ui.label("key");
+                ui.add(ime_safe_singleline(&mut self.annotation_editor_state.key_input));
+            });
+            ui.horizontal(|ui| {
+                ui.label("tagged_by");
+                ui.add(ime_safe_singleline(
+                    &mut self.annotation_editor_state.tagged_by_input,
+                ));
+                ui.label("confidence");
+                ui.add(ime_safe_singleline(
+                    &mut self.annotation_editor_state.confidence_input,
+                ));
+            });
+            ui.label(RichText::new("改行は Shift+Enter").italics());
+            ui.label("value");
+            ui.add(
+                ime_safe_multiline(&mut self.annotation_editor_state.value_input)
+                    .desired_rows(2),
+            );
+            ui.label("note");
+            ui.add(
+                ime_safe_multiline(&mut self.annotation_editor_state.note_input)
+                    .desired_rows(2),
+            );
+
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(annotation_save_enabled, egui::Button::new("追記"))
+                    .clicked()
+                {
+                    self.save_annotation_for_selected_record();
+                }
+                if ui.button("入力クリア").clicked() {
+                    self.clear_annotation_editor_inputs();
+                    self.clear_annotation_editor_status();
+                }
+                if !annotation_save_enabled {
+                    ui.label("分析ジョブ実行中は保存できません。");
+                }
+            });
+
+            if let Some(status_message) = &self.annotation_editor_state.status_message {
+                ui.colored_label(
+                    editor_status_color(self.annotation_editor_state.status_is_error),
+                    status_message,
+                );
+            }
+        });
+    }
+}
+
+fn build_record_text_layout_job(ui: &Ui, segments: &[TextSegment]) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    let normal_format = TextFormat {
+        font_id: TextStyle::Body.resolve(ui.style()),
+        color: ui.visuals().text_color(),
+        ..Default::default()
+    };
+    let hit_format = TextFormat {
+        background: Color32::from_rgb(255, 224, 138),
+        ..normal_format.clone()
+    };
+
+    for seg in segments {
+        if seg.text.is_empty() {
+            continue;
+        }
+        let format = if seg.is_hit {
+            hit_format.clone()
+        } else {
+            normal_format.clone()
+        };
+        job.append(&seg.text, 0.0, format);
+    }
+
+    job
+}
+
+fn analysis_status_color(ui: &Ui, status: &AnalysisJobStatus) -> Color32 {
+    match status {
+        AnalysisJobStatus::Idle => ui.visuals().text_color(),
+        AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. } => {
+            Color32::from_rgb(70, 130, 180)
+        }
+        AnalysisJobStatus::Succeeded { .. } => Color32::from_rgb(70, 130, 70),
+        AnalysisJobStatus::Failed { .. } => Color32::from_rgb(200, 64, 64),
+    }
+}
+
+fn editor_status_color(is_error: bool) -> Color32 {
+    if is_error {
+        Color32::from_rgb(200, 64, 64)
+    } else {
+        Color32::from_rgb(70, 130, 70)
+    }
+}
+
+fn draw_analysis_path_override_row<F>(
+    ui: &mut Ui,
+    label: &str,
+    current_label: &str,
+    reset_label: &str,
+    settings_enabled: bool,
+    mut choose_path: F,
+    selected_path: &mut Option<PathBuf>,
+    clear_override: &mut bool,
+) where
+    F: FnMut() -> Option<PathBuf>,
+{
+    ui.label(label);
+    ui.horizontal(|ui| {
+        let mut displayed_label = current_label.to_string();
+        ui.add(
+            ime_safe_singleline(&mut displayed_label)
+                .desired_width(460.0)
+                .interactive(false),
+        );
+        if ui
+            .add_enabled(settings_enabled, egui::Button::new("選択"))
+            .clicked()
+        {
+            *selected_path = choose_path();
+        }
+        if ui
+            .add_enabled(settings_enabled, egui::Button::new(reset_label))
+            .clicked()
+        {
+            *clear_override = true;
+        }
+    });
 }
 
 fn build_tree_row_no_column() -> Column {
@@ -2804,46 +2836,6 @@ fn clamp_condition_group_selection_for_document(
     clamp_condition_index(selected_group_index, condition.form_groups.len())
 }
 
-fn summarize_condition_list(values: &[String], preview_count: usize) -> String {
-    if values.is_empty() {
-        return "-".to_string();
-    }
-    let mut preview = values
-        .iter()
-        .take(preview_count)
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .collect::<Vec<_>>();
-    if preview.is_empty() {
-        return "-".to_string();
-    }
-    if values.len() > preview_count {
-        preview.push(format!("+{}", values.len() - preview_count));
-    }
-    preview.join(", ")
-}
-
-fn total_forms_count(condition: &crate::condition_editor::ConditionEditorItem) -> usize {
-    if !condition.form_groups.is_empty() {
-        condition
-            .form_groups
-            .iter()
-            .map(|group| group.forms.len())
-            .sum()
-    } else {
-        condition.forms.len()
-    }
-}
-
-fn condition_group_count(condition: &crate::condition_editor::ConditionEditorItem) -> usize {
-    if condition.form_groups.is_empty() {
-        usize::from(!condition.forms.is_empty())
-    } else {
-        condition.form_groups.len()
-    }
-}
-
 fn build_default_form_group_item(group_index: usize) -> FormGroupEditorItem {
     FormGroupEditorItem {
         match_logic: Some(if group_index == 0 { "and" } else { "or" }.to_string()),
@@ -2851,499 +2843,6 @@ fn build_default_form_group_item(group_index: usize) -> FormGroupEditorItem {
         forms: vec![String::new()],
         ..Default::default()
     }
-}
-
-fn summarize_form_group_label(group: &FormGroupEditorItem, group_index: usize) -> String {
-    let logic_label = display_form_group_logic(group, group_index);
-    let forms_preview = summarize_condition_list(&group.forms, 2);
-    format!(
-        "g{} [{}] forms:{} {}",
-        group_index + 1,
-        logic_label,
-        group.forms.len(),
-        forms_preview
-    )
-}
-
-fn display_form_group_logic(group: &FormGroupEditorItem, group_index: usize) -> &'static str {
-    let match_logic = group.match_logic.as_deref().unwrap_or("and");
-    if group_index == 0 {
-        return match match_logic {
-            "or" => "or",
-            "not" => "not",
-            _ => "and",
-        };
-    }
-
-    match (group.combine_logic.as_deref().unwrap_or("and"), match_logic) {
-        ("and", "or") => "and or",
-        ("and", "not") => "and not",
-        ("or", "and") => "or and",
-        ("or", "not") => "or not",
-        ("or", _) => "or",
-        _ => "and",
-    }
-}
-
-fn set_form_group_logic(group: &mut FormGroupEditorItem, group_index: usize, selected: &str) {
-    if group_index == 0 {
-        group.combine_logic = None;
-        group.match_logic = Some(match selected {
-            "or" => "or".to_string(),
-            "not" => "not".to_string(),
-            _ => "and".to_string(),
-        });
-        return;
-    }
-
-    let (combine_logic, match_logic) = match selected {
-        "and or" => ("and", "or"),
-        "and not" => ("and", "not"),
-        "or and" => ("or", "and"),
-        "or" => ("or", "or"),
-        "or not" => ("or", "not"),
-        _ => ("and", "and"),
-    };
-    group.combine_logic = Some(combine_logic.to_string());
-    group.match_logic = Some(match_logic.to_string());
-}
-
-fn draw_form_group_editor(
-    ui: &mut Ui,
-    group_index: usize,
-    overall_search_scope: Option<&str>,
-    search_scope_locked: bool,
-    group: &mut FormGroupEditorItem,
-) -> bool {
-    let mut changed = false;
-    let logic_options_group1 = ["and", "or"];
-    let logic_options_group_n = ["and", "and or", "and not", "or and", "or", "or not"];
-
-    ui.add_space(8.0);
-    ui.group(|ui| {
-        ui.label(RichText::new(format!("group {}", group_index + 1)).strong());
-
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                egui::Label::new("logic"),
-            );
-            let selected_logic = display_form_group_logic(group, group_index);
-            egui::ComboBox::from_id_salt(("form_group_logic", group_index))
-                .width(CONDITION_EDITOR_CHOICE_WIDTH)
-                .selected_text(selected_logic)
-                .show_ui(ui, |ui| {
-                    let options: &[&str] = if group_index == 0 {
-                        &logic_options_group1
-                    } else {
-                        &logic_options_group_n
-                    };
-                    for option in options {
-                        if ui.selectable_label(selected_logic == *option, *option).clicked() {
-                            set_form_group_logic(group, group_index, option);
-                            changed = true;
-                        }
-                    }
-                });
-        });
-
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                egui::Label::new("search_scope"),
-            );
-            if search_scope_locked {
-                let mut locked_search_scope = "paragraph".to_string();
-                ui.add_enabled(
-                    false,
-                    ime_safe_singleline(&mut locked_search_scope)
-                        .desired_width(CONDITION_EDITOR_CHOICE_WIDTH),
-                );
-            } else {
-                changed |= edit_group_scope_choice(
-                    ui,
-                    &mut group.search_scope,
-                    overall_search_scope,
-                    CONDITION_EDITOR_CHOICE_WIDTH,
-                );
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                egui::Label::new("max_token_distance"),
-            );
-            let distance_disabled = group.match_logic.as_deref() == Some("not");
-            if distance_disabled {
-                if group.max_token_distance.is_some() {
-                    group.max_token_distance = None;
-                    changed = true;
-                }
-                ui.add_enabled(false, egui::Label::new("not group では無効"));
-            } else {
-                changed |= edit_optional_i64(
-                    ui,
-                    &mut group.max_token_distance,
-                    5,
-                    CONDITION_EDITOR_NUMBER_WIDTH,
-                );
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                egui::Label::new("anchor_form"),
-            );
-            changed |= edit_anchor_form_choice(
-                ui,
-                &mut group.anchor_form,
-                &group.forms,
-                CONDITION_EDITOR_CHOICE_WIDTH,
-            );
-        });
-        if let Some(anchor_form) = group.anchor_form.as_ref() {
-            if !group.forms.iter().any(|form| form == anchor_form) {
-                ui.colored_label(
-                    Color32::from_rgb(200, 64, 64),
-                    "anchor_form が forms に含まれていません。保存前に修正が必要です。",
-                );
-            } else if group.match_logic.as_deref() != Some("and") {
-                ui.colored_label(
-                    Color32::from_rgb(200, 64, 64),
-                    "anchor_form は and group でのみ保存できます。",
-                );
-            }
-        }
-        if group_index == 0 && group.match_logic.as_deref() == Some("not") {
-            ui.colored_label(
-                Color32::from_rgb(200, 64, 64),
-                "group 1 では match_logic=not を保存できません。",
-            );
-        }
-
-        changed |= draw_string_list_editor(
-            ui,
-            "forms",
-            &mut group.forms,
-        );
-        changed |= draw_string_list_editor(
-            ui,
-            "exclude_forms_any",
-            &mut group.exclude_forms_any,
-        );
-    });
-
-    changed
-}
-
-fn edit_group_scope_choice(
-    ui: &mut Ui,
-    value: &mut Option<String>,
-    overall_search_scope: Option<&str>,
-    width: f32,
-) -> bool {
-    let inherited_label = overall_search_scope.unwrap_or("paragraph");
-    let current_value = value.clone();
-    let selected_text = current_value
-        .clone()
-        .unwrap_or_else(|| format!("(全体設定に従う: {inherited_label})"));
-    let mut changed = false;
-
-    egui::ComboBox::from_id_salt(ui.next_auto_id())
-        .width(width)
-        .selected_text(selected_text)
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(value.is_none(), format!("(全体設定に従う: {inherited_label})"))
-                .clicked()
-            {
-                *value = None;
-                changed = true;
-            }
-            for option in ["paragraph", "sentence"] {
-                if ui
-                    .selectable_label(current_value.as_deref() == Some(option), option)
-                    .clicked()
-                {
-                    *value = Some(option.to_string());
-                    changed = true;
-                }
-            }
-        });
-
-    changed
-}
-
-fn edit_anchor_form_choice(
-    ui: &mut Ui,
-    value: &mut Option<String>,
-    forms: &[String],
-    width: f32,
-) -> bool {
-    let forms = forms
-        .iter()
-        .filter(|form| !form.trim().is_empty())
-        .map(|form| form.trim().to_string())
-        .collect::<Vec<_>>();
-    let current_value = value.clone();
-    let selected_text = current_value
-        .clone()
-        .unwrap_or_else(|| "(未設定)".to_string());
-    let mut changed = false;
-
-    egui::ComboBox::from_id_salt(ui.next_auto_id())
-        .width(width)
-        .selected_text(selected_text)
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(current_value.is_none(), "(未設定)")
-                .clicked()
-            {
-                *value = None;
-                changed = true;
-            }
-            for form in &forms {
-                if ui
-                    .selectable_label(current_value.as_deref() == Some(form.as_str()), form)
-                    .clicked()
-                {
-                    *value = Some(form.clone());
-                    changed = true;
-                }
-            }
-        });
-
-    changed
-}
-
-fn edit_optional_choice(
-    ui: &mut Ui,
-    value: &mut Option<String>,
-    options: &[&str],
-    width: f32,
-) -> bool {
-    let current_value = value.clone().unwrap_or_default();
-    let selected_text = if current_value.trim().is_empty() {
-        "(未設定)".to_string()
-    } else {
-        current_value.clone()
-    };
-    let mut changed = false;
-
-    egui::ComboBox::from_id_salt(ui.next_auto_id())
-        .width(width)
-        .selected_text(selected_text)
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(current_value.trim().is_empty(), "(未設定)")
-                .clicked()
-            {
-                *value = None;
-                changed = true;
-            }
-            for option in options {
-                if ui.selectable_label(current_value == *option, *option).clicked() {
-                    *value = Some((*option).to_string());
-                    changed = true;
-                }
-            }
-        });
-
-    changed
-}
-
-fn edit_optional_i64(
-    ui: &mut Ui,
-    value: &mut Option<i64>,
-    default_value: i64,
-    width: f32,
-) -> bool {
-    let mut changed = false;
-    let mut enabled = value.is_some();
-    if ui.checkbox(&mut enabled, "有効").changed() {
-        if enabled {
-            *value = Some(value.unwrap_or(default_value));
-        } else {
-            *value = None;
-        }
-        changed = true;
-    }
-
-    let mut number = value.unwrap_or(default_value);
-    if ui
-        .add_enabled_ui(enabled, |ui| {
-            ui.add_sized(
-                [width, 0.0],
-                egui::DragValue::new(&mut number).range(0..=999_999),
-            )
-        })
-        .inner
-        .changed()
-    {
-        *value = Some(number);
-        changed = true;
-    }
-
-    changed
-}
-
-fn ime_safe_singleline<'t>(text: &'t mut dyn egui::TextBuffer) -> egui::TextEdit<'t> {
-    egui::TextEdit::singleline(text).return_key(None)
-}
-
-fn ime_safe_multiline<'t>(text: &'t mut dyn egui::TextBuffer) -> egui::TextEdit<'t> {
-    egui::TextEdit::multiline(text).return_key(egui::KeyboardShortcut::new(
-        egui::Modifiers::SHIFT,
-        egui::Key::Enter,
-    ))
-}
-
-fn draw_string_list_editor(
-    ui: &mut Ui,
-    label: &str,
-    values: &mut Vec<String>,
-) -> bool {
-    let mut changed = false;
-    let mut remove_index = None;
-
-    ui.group(|ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(label).strong());
-            if ui.button("行追加").clicked() {
-                values.push(String::new());
-                changed = true;
-            }
-        });
-
-        if values.is_empty() {
-            ui.label(RichText::new("未設定").italics());
-        }
-        for (index, value) in values.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(format!("{:02}", index + 1));
-                let response = ui.add_sized(
-                    [CONDITION_EDITOR_LIST_INPUT_WIDTH, 0.0],
-                    ime_safe_singleline(value),
-                );
-                if response.changed() {
-                    changed = true;
-                }
-                if ui.button("削除").clicked() {
-                    remove_index = Some(index);
-                }
-            });
-        }
-    });
-
-    if let Some(index) = remove_index {
-        values.remove(index);
-        changed = true;
-    }
-
-    changed
-}
-
-fn draw_annotation_filter_editor(
-    ui: &mut Ui,
-    filters: &mut Vec<AnnotationFilterItem>,
-) -> bool {
-    let mut changed = false;
-    let mut remove_index = None;
-
-    ui.group(|ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("annotation_filters").strong());
-            if ui.button("行追加").clicked() {
-                filters.push(AnnotationFilterItem::default());
-                changed = true;
-            }
-        });
-
-        if filters.is_empty() {
-            ui.label(RichText::new("未設定").italics());
-        }
-        for (index, filter) in filters.iter_mut().enumerate() {
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{:02}", index + 1));
-                    if ui.button("削除").clicked() {
-                        remove_index = Some(index);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                        egui::Label::new("namespace"),
-                    );
-                    if ui
-                        .add_sized(
-                            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                            ime_safe_singleline(&mut filter.namespace),
-                        )
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                        egui::Label::new("key"),
-                    );
-                    if ui
-                        .add_sized(
-                            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                            ime_safe_singleline(&mut filter.key),
-                        )
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                        egui::Label::new("value"),
-                    );
-                    if ui
-                        .add_sized(
-                            [CONDITION_EDITOR_TEXT_INPUT_WIDTH, 0.0],
-                            ime_safe_singleline(&mut filter.value),
-                        )
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
-                        egui::Label::new("operator"),
-                    );
-                    let operator_text =
-                        filter.operator.get_or_insert_with(|| "eq".to_string());
-                    if ui
-                        .add_sized(
-                            [CONDITION_EDITOR_FILTER_OPERATOR_WIDTH, 0.0],
-                            ime_safe_singleline(operator_text),
-                        )
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                });
-            });
-        }
-    });
-
-    if let Some(index) = remove_index {
-        filters.remove(index);
-        changed = true;
-    }
-
-    changed
 }
 
 fn tree_row_no_value(record: &AnalysisRecord) -> String {

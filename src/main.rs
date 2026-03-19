@@ -7,9 +7,11 @@ mod db;
 mod filter;
 mod font;
 mod condition_editor;
+mod condition_editor_view;
 mod manual_annotation_store;
 mod model;
 mod tagged_text;
+mod ui_helpers;
 
 use crate::app::App;
 use crate::font::configure_japanese_font;
