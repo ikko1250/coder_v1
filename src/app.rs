@@ -2151,6 +2151,32 @@ impl App {
         }
     }
 
+    fn apply_condition_editor_command_draft(
+        &mut self,
+        ctx: &egui::Context,
+        viewport_id: egui::ViewportId,
+        selection_draft: ConditionEditorSelectionDraft,
+        command_draft: ConditionEditorCommandDraft,
+        resolved_path_result: &Result<PathBuf, String>,
+    ) -> Option<String> {
+        self.apply_condition_editor_selection_draft(selection_draft);
+        self.apply_condition_editor_close_request(command_draft.close_requested);
+        self.apply_condition_editor_add_request(command_draft.should_add_condition);
+        self.apply_condition_editor_delete_request(command_draft.should_delete_condition);
+
+        let mut save_error = None;
+        if command_draft.should_save {
+            if let Err(error) = self.save_condition_editor_document() {
+                save_error = Some(error);
+            }
+        }
+        let reload_error =
+            self.apply_condition_editor_reload_request(command_draft.should_reload, resolved_path_result);
+        self.apply_condition_editor_modal_response(ctx, viewport_id, command_draft.modal_response);
+
+        save_error.or(reload_error)
+    }
+
     fn draw_condition_editor_window(&mut self, ctx: &egui::Context) {
         if !self.condition_editor_state.window_open {
             return;
@@ -2164,7 +2190,6 @@ impl App {
         let window_inputs = self.condition_editor_window_inputs(ctx);
         let mut selection_draft = self.condition_editor_selection_draft();
         let mut command_draft = ConditionEditorCommandDraft::default();
-        let mut save_error = None;
 
         ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
             command_draft.close_requested =
@@ -2210,27 +2235,13 @@ impl App {
             }
         });
 
-        self.apply_condition_editor_selection_draft(selection_draft);
-        self.apply_condition_editor_close_request(command_draft.close_requested);
-        self.apply_condition_editor_add_request(command_draft.should_add_condition);
-        self.apply_condition_editor_delete_request(command_draft.should_delete_condition);
-
-        if command_draft.should_save {
-            if let Err(error) = self.save_condition_editor_document() {
-                save_error = Some(error);
-            }
-        }
-        let reload_error = self.apply_condition_editor_reload_request(
-            command_draft.should_reload,
-            &window_inputs.resolved_path_result,
-        );
-        self.apply_condition_editor_modal_response(
+        if let Some(error) = self.apply_condition_editor_command_draft(
             ctx,
             viewport_id,
-            command_draft.modal_response,
-        );
-
-        if let Some(error) = save_error.or(reload_error) {
+            selection_draft,
+            command_draft,
+            &window_inputs.resolved_path_result,
+        ) {
             self.condition_editor_state.status_message = Some(error);
             self.condition_editor_state.status_is_error = true;
         }
