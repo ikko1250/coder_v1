@@ -240,6 +240,16 @@ struct ConditionEditorCommandDraft {
     modal_response: Option<ConditionEditorModalResponse>,
 }
 
+#[derive(Clone, Debug)]
+struct ConditionEditorWindowInputs {
+    can_modify: bool,
+    resolved_path_result: Result<PathBuf, String>,
+    resolved_path_label: String,
+    loaded_path_label: String,
+    current_confirm_action: Option<ConditionEditorConfirmAction>,
+    panel_fill: Color32,
+}
+
 #[derive(Clone, Debug, Default)]
 struct ConditionEditorState {
     window_open: bool,
@@ -832,6 +842,29 @@ impl App {
         ConditionEditorSelectionDraft {
             requested_selection: self.condition_editor_state.selected_index,
             requested_group_selection: self.condition_editor_state.selected_group_index,
+        }
+    }
+
+    fn condition_editor_window_inputs(&self, ctx: &egui::Context) -> ConditionEditorWindowInputs {
+        let resolved_path_result = self.resolved_filter_config_path();
+        let resolved_path_label = resolved_path_result
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("解決失敗: {error}"));
+        let loaded_path_label = self
+            .condition_editor_state
+            .loaded_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+
+        ConditionEditorWindowInputs {
+            can_modify: self.analysis_runtime_state.current_job.is_none(),
+            resolved_path_result,
+            resolved_path_label,
+            loaded_path_label,
+            current_confirm_action: self.condition_editor_state.confirm_action.clone(),
+            panel_fill: ctx.style().visuals.panel_fill,
         }
     }
 
@@ -2128,23 +2161,10 @@ impl App {
             .with_title("条件編集")
             .with_inner_size([1120.0, 760.0])
             .with_resizable(true);
-        let can_modify = self.analysis_runtime_state.current_job.is_none();
-        let resolved_path_result = self.resolved_filter_config_path();
-        let resolved_path_label = resolved_path_result
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|error| format!("解決失敗: {error}"));
-        let loaded_path_label = self
-            .condition_editor_state
-            .loaded_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "-".to_string());
+        let window_inputs = self.condition_editor_window_inputs(ctx);
         let mut selection_draft = self.condition_editor_selection_draft();
         let mut command_draft = ConditionEditorCommandDraft::default();
         let mut save_error = None;
-        let current_confirm_action = self.condition_editor_state.confirm_action.clone();
-        let panel_fill = ctx.style().visuals.panel_fill;
 
         ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
             command_draft.close_requested =
@@ -2157,10 +2177,10 @@ impl App {
                 egui::ViewportClass::Embedded => {
                     self.draw_condition_editor_embedded_window(
                         viewport_ctx,
-                        can_modify,
-                        &loaded_path_label,
-                        &resolved_path_label,
-                        resolved_path_result.is_ok(),
+                        window_inputs.can_modify,
+                        &window_inputs.loaded_path_label,
+                        &window_inputs.resolved_path_label,
+                        window_inputs.resolved_path_result.is_ok(),
                         &mut selection_draft,
                         &mut command_draft,
                     );
@@ -2168,18 +2188,18 @@ impl App {
                 _ => {
                     self.draw_condition_editor_viewport_panels(
                         viewport_ctx,
-                        can_modify,
-                        &loaded_path_label,
-                        &resolved_path_label,
-                        resolved_path_result.is_ok(),
-                        panel_fill,
+                        window_inputs.can_modify,
+                        &window_inputs.loaded_path_label,
+                        &window_inputs.resolved_path_label,
+                        window_inputs.resolved_path_result.is_ok(),
+                        window_inputs.panel_fill,
                         &mut selection_draft,
                         &mut command_draft,
                     );
                 }
             }
 
-            if let Some(confirm_action) = current_confirm_action.as_ref() {
+            if let Some(confirm_action) = window_inputs.current_confirm_action.as_ref() {
                 let message = Self::condition_editor_confirm_message(confirm_action);
                 let response =
                     render_condition_editor_confirm_overlay(viewport_ctx, &message);
@@ -2202,7 +2222,7 @@ impl App {
         }
         let reload_error = self.apply_condition_editor_reload_request(
             command_draft.should_reload,
-            &resolved_path_result,
+            &window_inputs.resolved_path_result,
         );
         self.apply_condition_editor_modal_response(
             ctx,
