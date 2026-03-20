@@ -2253,10 +2253,13 @@ impl App {
         tree_scroll_request: Option<TreeScrollRequest>,
     ) -> Option<usize> {
         let mut clicked_row = None;
+        let max_list_panel_width = (ui.available_width() * 0.6).clamp(360.0, 720.0);
+        let default_list_panel_width = 620.0_f32.min(max_list_panel_width);
         egui::SidePanel::left("record_list_panel")
             .resizable(true)
-            .default_width(620.0)
+            .default_width(default_list_panel_width)
             .min_width(360.0)
+            .max_width(max_list_panel_width)
             .show_inside(ui, |ui| {
                 self.draw_filters(ui);
                 ui.separator();
@@ -2281,7 +2284,7 @@ impl App {
             .id_salt("filters_panel")
             .default_open(true)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("フィルター対象:");
                     egui::ComboBox::from_id_salt("filter_column_selector")
                         .selected_text(self.active_filter_column.label())
@@ -2685,12 +2688,7 @@ fn render_filter_option_item(
                         changed = true;
                     }
 
-                    let label_width = (max_item_width
-                        - checkbox_response.rect.width()
-                        - ui.spacing().item_spacing.x)
-                        .max(0.0);
-                    let label_response = ui.add_sized(
-                        [label_width, 0.0],
+                    let label_response = ui.add(
                         egui::Label::new(full_label.as_str())
                             .truncate()
                             .sense(egui::Sense::click()),
