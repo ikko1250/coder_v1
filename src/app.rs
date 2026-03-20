@@ -2303,38 +2303,23 @@ impl App {
                     }
                 });
 
-                let options = self
-                    .filter_options
-                    .get(&self.active_filter_column)
-                    .cloned()
-                    .unwrap_or_default();
-
+                let active_column = self.active_filter_column;
                 ScrollArea::vertical()
                     .id_salt("filter_options_scroll")
                     .max_height(180.0)
                     .show(ui, |ui| {
-                        if options.is_empty() {
-                            ui.label(RichText::new("候補なし").italics());
+                        let pending_toggle = if let Some(options) =
+                            self.filter_options.get(&active_column)
+                        {
+                            let selected_values = self.selected_filter_values.get(&active_column);
+                            render_wrapped_filter_options(ui, options, selected_values)
                         } else {
-                            for option in options {
-                                let is_selected = self
-                                    .selected_filter_values
-                                    .get(&self.active_filter_column)
-                                    .is_some_and(|values| values.contains(&option.value));
-                                let mut checked = is_selected;
-                                let label = format!(
-                                    "{} ({})",
-                                    display_filter_value(&option.value),
-                                    option.count
-                                );
-                                if ui.checkbox(&mut checked, label).changed() {
-                                    self.toggle_filter_value(
-                                        self.active_filter_column,
-                                        &option.value,
-                                        checked,
-                                    );
-                                }
-                            }
+                            ui.label(RichText::new("候補なし").italics());
+                            None
+                        };
+
+                        if let Some((value, next_checked)) = pending_toggle {
+                            self.toggle_filter_value(active_column, &value, next_checked);
                         }
                     });
 
@@ -2674,6 +2659,84 @@ fn build_record_text_layout_job(ui: &Ui, segments: &[TextSegment]) -> LayoutJob 
     }
 
     job
+}
+
+fn render_filter_option_item(
+    ui: &mut Ui,
+    option: &FilterOption,
+    is_selected: bool,
+    max_item_width: f32,
+) -> Option<bool> {
+    let mut checked = is_selected;
+    let mut changed = false;
+    let full_label = format!(
+        "{} ({})",
+        display_filter_value(&option.value),
+        option.count
+    );
+
+    let response = ui
+        .push_id(("filter_option", option.value.as_str()), |ui| {
+            ui.scope(|ui| {
+                ui.set_max_width(max_item_width);
+                ui.horizontal(|ui| {
+                    let checkbox_response = ui.checkbox(&mut checked, "");
+                    if checkbox_response.changed() {
+                        changed = true;
+                    }
+
+                    let label_width = (max_item_width
+                        - checkbox_response.rect.width()
+                        - ui.spacing().item_spacing.x)
+                        .max(0.0);
+                    let label_response = ui.add_sized(
+                        [label_width, 0.0],
+                        egui::Label::new(full_label.as_str())
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                    );
+                    if label_response.clicked() {
+                        checked = !checked;
+                        changed = true;
+                    }
+
+                    checkbox_response.union(label_response)
+                })
+                .inner
+            })
+            .inner
+        })
+        .inner;
+    response.on_hover_text(full_label);
+
+    changed.then_some(checked)
+}
+
+fn render_wrapped_filter_options(
+    ui: &mut Ui,
+    options: &[FilterOption],
+    selected_values: Option<&BTreeSet<String>>,
+) -> Option<(String, bool)> {
+    if options.is_empty() {
+        ui.label(RichText::new("候補なし").italics());
+        return None;
+    }
+
+    let max_item_width = ui.available_width() * 0.5;
+    let mut pending_toggle = None;
+
+    ui.horizontal_wrapped(|ui| {
+        for option in options {
+            let is_selected = selected_values.is_some_and(|values| values.contains(&option.value));
+            if let Some(next_checked) =
+                render_filter_option_item(ui, option, is_selected, max_item_width)
+            {
+                pending_toggle = Some((option.value.clone(), next_checked));
+            }
+        }
+    });
+
+    pending_toggle
 }
 
 fn analysis_status_color(ui: &Ui, status: &AnalysisJobStatus) -> Color32 {
