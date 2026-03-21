@@ -2254,7 +2254,7 @@ impl App {
         tree_scroll_request: Option<TreeScrollRequest>,
     ) -> Option<usize> {
         let mut clicked_row = None;
-        let max_list_panel_width = (ui.available_width() * 0.6).clamp(360.0, 720.0);
+        let max_list_panel_width = (ui.available_width() * 0.85).clamp(360.0, 1600.0);
         let default_list_panel_width = 620.0_f32.min(max_list_panel_width);
         egui::SidePanel::left("record_list_panel")
             .resizable(true)
