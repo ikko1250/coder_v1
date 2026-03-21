@@ -3,6 +3,9 @@ use crate::model::{FilterColumn, FilterOption};
 use egui::{RichText, ScrollArea, Ui};
 use std::collections::BTreeSet;
 
+const FILTER_OPTION_COUNT_WIDTH: f32 = 56.0;
+const FILTER_OPTION_CHECKBOX_WIDTH: f32 = 24.0;
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FilterPanelResponse {
     pub(crate) selected_column: Option<FilterColumn>,
@@ -139,11 +142,12 @@ fn draw_filter_option_item(
 ) -> Option<bool> {
     let mut checked = is_selected;
     let mut changed = false;
-    let full_label = format!(
-        "{} ({})",
-        display_filter_value(&option.value),
-        option.count
-    );
+    let label_text = display_filter_value(&option.value);
+    let full_label = format!("{} ({})", label_text, option.count);
+    let spacing_x = ui.spacing().item_spacing.x;
+    let label_width =
+        (item_width - FILTER_OPTION_CHECKBOX_WIDTH - FILTER_OPTION_COUNT_WIDTH - spacing_x * 2.0)
+            .max(24.0);
 
     let response = ui
         .push_id(("filter_option", option.value.as_str()), |ui| {
@@ -153,13 +157,17 @@ fn draw_filter_option_item(
                 |ui| {
                     ui.set_width(item_width);
 
-                    let checkbox_response = ui.checkbox(&mut checked, "");
+                    let checkbox_response = ui.add_sized(
+                        [FILTER_OPTION_CHECKBOX_WIDTH, 0.0],
+                        egui::Checkbox::without_text(&mut checked),
+                    );
                     if checkbox_response.changed() {
                         changed = true;
                     }
 
-                    let label_response = ui.add(
-                        egui::Label::new(full_label.as_str())
+                    let label_response = ui.add_sized(
+                        [label_width, 0.0],
+                        egui::Label::new(label_text.as_str())
                             .truncate()
                             .sense(egui::Sense::click()),
                     );
@@ -167,6 +175,14 @@ fn draw_filter_option_item(
                         checked = !checked;
                         changed = true;
                     }
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(FILTER_OPTION_COUNT_WIDTH, 0.0),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(format!("({})", option.count));
+                        },
+                    );
 
                     checkbox_response.union(label_response)
                 },
