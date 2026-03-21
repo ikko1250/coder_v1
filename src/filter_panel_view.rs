@@ -35,7 +35,7 @@ pub(crate) fn draw_filter_panel(
                 &mut response,
             );
 
-            draw_wrapped_filter_options(ui, options, selected_values, &mut response);
+            draw_fixed_column_filter_options(ui, options, selected_values, &mut response);
             draw_active_filter_values(ui, active_values, &mut response);
         });
 
@@ -75,7 +75,7 @@ fn draw_filter_header(
     });
 }
 
-fn draw_wrapped_filter_options(
+fn draw_fixed_column_filter_options(
     ui: &mut Ui,
     options: &[FilterOption],
     selected_values: Option<&BTreeSet<String>>,
@@ -90,28 +90,52 @@ fn draw_wrapped_filter_options(
                 return;
             }
 
-            let max_item_width = ui.available_width() * 0.5;
-            ui.horizontal_wrapped(|ui| {
-                for option in options {
-                    let is_selected =
-                        selected_values.is_some_and(|values| values.contains(&option.value));
-                    if let Some(next_checked) =
-                        draw_filter_option_item(ui, option, is_selected, max_item_width)
-                    {
-                        response
-                            .toggled_options
-                            .push((option.value.clone(), next_checked));
+            let available_width = ui.available_width();
+            let column_count = filter_option_column_count(available_width);
+            let spacing_x = ui.spacing().item_spacing.x;
+            let item_width = if column_count <= 1 {
+                available_width
+            } else {
+                (available_width - (column_count - 1) as f32 * spacing_x) / column_count as f32
+            };
+
+            for row_options in options.chunks(column_count) {
+                ui.horizontal(|ui| {
+                    for option in row_options {
+                        let is_selected =
+                            selected_values.is_some_and(|values| values.contains(&option.value));
+                        if let Some(next_checked) =
+                            draw_filter_option_item(ui, option, is_selected, item_width)
+                        {
+                            response
+                                .toggled_options
+                                .push((option.value.clone(), next_checked));
+                        }
                     }
-                }
-            });
+
+                    for _ in row_options.len()..column_count {
+                        ui.allocate_space(egui::vec2(item_width, 0.0));
+                    }
+                });
+            }
         });
+}
+
+fn filter_option_column_count(available_width: f32) -> usize {
+    if available_width < 440.0 {
+        1
+    } else if available_width < 760.0 {
+        2
+    } else {
+        3
+    }
 }
 
 fn draw_filter_option_item(
     ui: &mut Ui,
     option: &FilterOption,
     is_selected: bool,
-    max_item_width: f32,
+    item_width: f32,
 ) -> Option<bool> {
     let mut checked = is_selected;
     let mut changed = false;
@@ -123,9 +147,12 @@ fn draw_filter_option_item(
 
     let response = ui
         .push_id(("filter_option", option.value.as_str()), |ui| {
-            ui.scope(|ui| {
-                ui.set_max_width(max_item_width);
-                ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(item_width, 0.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(item_width);
+
                     let checkbox_response = ui.checkbox(&mut checked, "");
                     if checkbox_response.changed() {
                         changed = true;
@@ -142,9 +169,8 @@ fn draw_filter_option_item(
                     }
 
                     checkbox_response.union(label_response)
-                })
-                .inner
-            })
+                },
+            )
             .inner
         })
         .inner;
