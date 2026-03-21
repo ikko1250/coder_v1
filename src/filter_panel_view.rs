@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 const FILTER_OPTION_COUNT_WIDTH: f32 = 56.0;
 const FILTER_OPTION_CHECKBOX_WIDTH: f32 = 24.0;
+const FILTER_OPTION_SCROLLBAR_MARGIN: f32 = 16.0;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FilterPanelResponse {
@@ -93,13 +94,13 @@ fn draw_fixed_column_filter_options(
                 return;
             }
 
-            let available_width = ui.available_width();
-            let column_count = filter_option_column_count(available_width);
+            let safe_width = (ui.available_width() - FILTER_OPTION_SCROLLBAR_MARGIN).max(0.0);
+            let column_count = filter_option_column_count(safe_width);
             let spacing_x = ui.spacing().item_spacing.x;
             let item_width = if column_count <= 1 {
-                available_width
+                safe_width
             } else {
-                (available_width - (column_count - 1) as f32 * spacing_x) / column_count as f32
+                (safe_width - (column_count - 1) as f32 * spacing_x) / column_count as f32
             };
 
             for row_options in options.chunks(column_count) {
@@ -125,9 +126,9 @@ fn draw_fixed_column_filter_options(
 }
 
 fn filter_option_column_count(available_width: f32) -> usize {
-    if available_width < 440.0 {
+    if available_width < 380.0 {
         1
-    } else if available_width < 760.0 {
+    } else if available_width < 580.0 {
         2
     } else {
         3
