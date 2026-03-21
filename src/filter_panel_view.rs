@@ -103,6 +103,9 @@ fn draw_fixed_column_filter_options(
                 (safe_width - (column_count - 1) as f32 * spacing_x) / column_count as f32
             };
 
+            // Tighter vertical spacing for filter options
+            ui.spacing_mut().item_spacing.y = 4.0;
+
             for row_options in options.chunks(column_count) {
                 ui.horizontal(|ui| {
                     for option in row_options {
@@ -152,35 +155,47 @@ fn draw_filter_option_item(
         (item_width - FILTER_OPTION_CHECKBOX_WIDTH - FILTER_OPTION_COUNT_WIDTH - spacing_x * 2.0)
             .max(24.0);
 
+    // To prevent line spacing from being too wide, override spacing for this specific widget
     let response = ui
         .push_id(("filter_option", option.value.as_str()), |ui| {
+            let layout_height = ui.spacing().interact_size.y;
+
             ui.allocate_ui_with_layout(
-                egui::vec2(item_width, 0.0),
+                egui::vec2(item_width, layout_height),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_width(item_width);
 
-                    let checkbox_response = ui.add_sized(
-                        [FILTER_OPTION_CHECKBOX_WIDTH, 0.0],
-                        egui::Checkbox::without_text(&mut checked),
-                    );
+                    // We need to vertically center everything manually since ui.add_sized can be weird
+                    let checkbox_response = ui.allocate_ui_with_layout(
+                        egui::vec2(FILTER_OPTION_CHECKBOX_WIDTH, layout_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| ui.add(egui::Checkbox::without_text(&mut checked)),
+                    ).inner;
                     if checkbox_response.changed() {
                         changed = true;
                     }
 
-                    let label_response = ui.add_sized(
-                        [label_width, 0.0],
-                        egui::Label::new(label_text.as_str())
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                    );
+                    let label_response = ui.allocate_ui_with_layout(
+                        egui::vec2(label_width, layout_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            let r = ui.add_sized(
+                                [label_width, layout_height],
+                                egui::Label::new(label_text.as_str())
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            );
+                            r
+                        },
+                    ).inner;
                     if label_response.clicked() {
                         checked = !checked;
                         changed = true;
                     }
 
                     ui.allocate_ui_with_layout(
-                        egui::vec2(FILTER_OPTION_COUNT_WIDTH, 0.0),
+                        egui::vec2(FILTER_OPTION_COUNT_WIDTH, layout_height),
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
                             ui.label(format!("({})", option.count));
