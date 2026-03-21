@@ -27,23 +27,13 @@ pub(crate) fn draw_filter_panel(
         .id_salt("filters_panel")
         .default_open(true)
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("フィルター対象:");
-                egui::ComboBox::from_id_salt("filter_column_selector")
-                    .selected_text(active_column.label())
-                    .show_ui(ui, |ui| {
-                        for &column in FilterColumn::all() {
-                            ui.selectable_value(&mut selected_column, column, column.label());
-                        }
-                    });
-                ui.label(format!("適用中: {} 件", active_count));
-                if ui.button("現在の列をクリア").clicked() {
-                    response.clear_column_clicked = true;
-                }
-                if ui.button("全解除").clicked() {
-                    response.clear_all_clicked = true;
-                }
-            });
+            draw_filter_header(
+                ui,
+                active_column,
+                active_count,
+                &mut selected_column,
+                &mut response,
+            );
 
             draw_wrapped_filter_options(ui, options, selected_values, &mut response);
             draw_active_filter_values(ui, active_values, &mut response);
@@ -54,6 +44,35 @@ pub(crate) fn draw_filter_panel(
     }
 
     response
+}
+
+fn draw_filter_header(
+    ui: &mut Ui,
+    active_column: FilterColumn,
+    active_count: usize,
+    selected_column: &mut FilterColumn,
+    response: &mut FilterPanelResponse,
+) {
+    ui.horizontal(|ui| {
+        ui.label("フィルター対象:");
+        egui::ComboBox::from_id_salt("filter_column_selector")
+            .selected_text(active_column.label())
+            .show_ui(ui, |ui| {
+                for &column in FilterColumn::all() {
+                    ui.selectable_value(selected_column, column, column.label());
+                }
+            });
+        ui.label(format!("適用中: {} 件", active_count));
+    });
+
+    ui.horizontal(|ui| {
+        if ui.button("現在の列をクリア").clicked() {
+            response.clear_column_clicked = true;
+        }
+        if ui.button("全解除").clicked() {
+            response.clear_all_clicked = true;
+        }
+    });
 }
 
 fn draw_wrapped_filter_options(
