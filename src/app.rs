@@ -22,7 +22,8 @@ use crate::db::{
     fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
 };
 use crate::db_viewer_view::render_db_viewer_contents;
-use crate::filter::{build_filter_options, display_filter_value};
+use crate::filter::build_filter_options;
+use crate::filter_panel_view::draw_filter_panel as render_filter_panel;
 use crate::manual_annotation_store::{
     append_manual_annotation_namespaces_text, append_manual_annotation_pairs_text,
     append_manual_annotation_row, build_manual_annotation_pair, first_manual_annotation_line,
@@ -2279,78 +2280,47 @@ impl App {
             .values()
             .map(BTreeSet::len)
             .sum();
+        let options = self
+            .filter_options
+            .get(&self.active_filter_column)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let selected_values = self.selected_filter_values.get(&self.active_filter_column);
+        let active_values: Vec<(FilterColumn, String)> = self
+            .selected_filter_values
+            .iter()
+            .flat_map(|(column, values)| {
+                values
+                    .iter()
+                    .cloned()
+                    .map(|value| (*column, value))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let response = render_filter_panel(
+            ui,
+            self.active_filter_column,
+            active_count,
+            options,
+            selected_values,
+            &active_values,
+        );
 
-        egui::CollapsingHeader::new(format!("Filters ({})", active_count))
-            .id_salt("filters_panel")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("フィルター対象:");
-                    egui::ComboBox::from_id_salt("filter_column_selector")
-                        .selected_text(self.active_filter_column.label())
-                        .show_ui(ui, |ui| {
-                            for &column in FilterColumn::all() {
-                                ui.selectable_value(
-                                    &mut self.active_filter_column,
-                                    column,
-                                    column.label(),
-                                );
-                            }
-                        });
-                    ui.label(format!("適用中: {} 件", active_count));
-                    if ui.button("現在の列をクリア").clicked() {
-                        self.clear_filters_for_column(self.active_filter_column);
-                    }
-                    if ui.button("全解除").clicked() {
-                        self.clear_all_filters();
-                    }
-                });
-
-                let active_column = self.active_filter_column;
-                ScrollArea::vertical()
-                    .id_salt("filter_options_scroll")
-                    .max_height(180.0)
-                    .show(ui, |ui| {
-                        let pending_toggle = if let Some(options) =
-                            self.filter_options.get(&active_column)
-                        {
-                            let selected_values = self.selected_filter_values.get(&active_column);
-                            render_wrapped_filter_options(ui, options, selected_values)
-                        } else {
-                            ui.label(RichText::new("候補なし").italics());
-                            None
-                        };
-
-                        if let Some((value, next_checked)) = pending_toggle {
-                            self.toggle_filter_value(active_column, &value, next_checked);
-                        }
-                    });
-
-                if !self.selected_filter_values.is_empty() {
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("適用中:");
-                        let active_values: Vec<(FilterColumn, String)> = self
-                            .selected_filter_values
-                            .iter()
-                            .flat_map(|(column, values)| {
-                                values
-                                    .iter()
-                                    .cloned()
-                                    .map(|value| (*column, value))
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect();
-                        for (column, value) in active_values {
-                            let button_label =
-                                format!("{}: {} ×", column.label(), display_filter_value(&value));
-                            if ui.small_button(button_label).clicked() {
-                                self.toggle_filter_value(column, &value, false);
-                            }
-                        }
-                    });
-                }
-            });
+        if let Some(selected_column) = response.selected_column {
+            self.active_filter_column = selected_column;
+        }
+        if response.clear_column_clicked {
+            self.clear_filters_for_column(self.active_filter_column);
+        }
+        if response.clear_all_clicked {
+            self.clear_all_filters();
+        }
+        for (value, selected) in response.toggled_options {
+            self.toggle_filter_value(self.active_filter_column, &value, selected);
+        }
+        for (column, value) in response.removed_active_values {
+            self.toggle_filter_value(column, &value, false);
+        }
     }
 
     fn draw_tree(
@@ -2664,78 +2634,6 @@ fn build_record_text_layout_job(ui: &Ui, segments: &[TextSegment]) -> LayoutJob 
     job
 }
 
-fn render_filter_option_item(
-    ui: &mut Ui,
-    option: &FilterOption,
-    is_selected: bool,
-    max_item_width: f32,
-) -> Option<bool> {
-    let mut checked = is_selected;
-    let mut changed = false;
-    let full_label = format!(
-        "{} ({})",
-        display_filter_value(&option.value),
-        option.count
-    );
-
-    let response = ui
-        .push_id(("filter_option", option.value.as_str()), |ui| {
-            ui.scope(|ui| {
-                ui.set_max_width(max_item_width);
-                ui.horizontal(|ui| {
-                    let checkbox_response = ui.checkbox(&mut checked, "");
-                    if checkbox_response.changed() {
-                        changed = true;
-                    }
-
-                    let label_response = ui.add(
-                        egui::Label::new(full_label.as_str())
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                    );
-                    if label_response.clicked() {
-                        checked = !checked;
-                        changed = true;
-                    }
-
-                    checkbox_response.union(label_response)
-                })
-                .inner
-            })
-            .inner
-        })
-        .inner;
-    response.on_hover_text(full_label);
-
-    changed.then_some(checked)
-}
-
-fn render_wrapped_filter_options(
-    ui: &mut Ui,
-    options: &[FilterOption],
-    selected_values: Option<&BTreeSet<String>>,
-) -> Option<(String, bool)> {
-    if options.is_empty() {
-        ui.label(RichText::new("候補なし").italics());
-        return None;
-    }
-
-    let max_item_width = ui.available_width() * 0.5;
-    let mut pending_toggle = None;
-
-    ui.horizontal_wrapped(|ui| {
-        for option in options {
-            let is_selected = selected_values.is_some_and(|values| values.contains(&option.value));
-            if let Some(next_checked) =
-                render_filter_option_item(ui, option, is_selected, max_item_width)
-            {
-                pending_toggle = Some((option.value.clone(), next_checked));
-            }
-        }
-    });
-
-    pending_toggle
-}
 
 fn analysis_status_color(ui: &Ui, status: &AnalysisJobStatus) -> Color32 {
     match status {

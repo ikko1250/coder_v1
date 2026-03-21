@@ -6,6 +6,7 @@ mod csv_loader;
 mod db;
 mod db_viewer_view;
 mod filter;
+mod filter_panel_view;
 mod font;
 mod condition_editor;
 mod condition_editor_view;
