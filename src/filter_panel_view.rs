@@ -126,12 +126,14 @@ fn draw_fixed_column_filter_options(
 }
 
 fn filter_option_column_count(available_width: f32) -> usize {
-    if available_width < 380.0 {
+    if available_width < 290.0 {
         1
-    } else if available_width < 580.0 {
+    } else if available_width < 435.0 {
         2
-    } else {
+    } else if available_width < 580.0 {
         3
+    } else {
+        4
     }
 }
 
