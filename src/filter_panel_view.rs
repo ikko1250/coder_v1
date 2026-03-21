@@ -180,6 +180,8 @@ fn draw_filter_option_item(
                         egui::vec2(label_width, layout_height),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
+                            // Using add_sized ensures the clickable area fills the width,
+                            // while left-to-right alignment automatically aligns the text to the left.
                             let r = ui.add_sized(
                                 [label_width, layout_height],
                                 egui::Label::new(label_text.as_str())
