@@ -1,8 +1,8 @@
 use crate::analysis_runner::{
-    build_runtime_config, cleanup_job_directories, spawn_analysis_job, spawn_export_job,
-    resolve_annotation_csv_path, AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent,
-    AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisRuntimeConfig,
-    AnalysisRuntimeOverrides, AnalysisWarningMessage, resolve_filter_config_path,
+    build_runtime_config, cleanup_job_directories, resolve_annotation_csv_path,
+    resolve_filter_config_path, spawn_analysis_job, spawn_export_job, AnalysisExportRequest,
+    AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest,
+    AnalysisJobSuccess, AnalysisRuntimeConfig, AnalysisRuntimeOverrides, AnalysisWarningMessage,
 };
 use crate::condition_editor::{
     build_default_condition_item, load_condition_document, save_condition_document_atomic,
@@ -14,8 +14,8 @@ use crate::condition_editor_view::{
     draw_condition_editor_header_panel as render_condition_editor_header_panel,
     draw_condition_editor_list_panel as render_condition_editor_list_panel,
     draw_condition_editor_selected_condition as render_condition_editor_selected_condition,
-    ConditionEditorDetailResponse, ConditionEditorFooterResponse,
-    ConditionEditorListResponse, ConfirmOverlayResponse,
+    ConditionEditorDetailResponse, ConditionEditorFooterResponse, ConditionEditorListResponse,
+    ConfirmOverlayResponse,
 };
 use crate::csv_loader::load_records;
 use crate::db::{
@@ -37,6 +37,7 @@ use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, RichText, ScrollArea, TextStyle, TextWrapMode, Ui};
 use egui_extras::{Column, Size, StripBuilder, TableBuilder};
 use std::collections::{BTreeSet, HashMap};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
@@ -109,6 +110,9 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
 
 const DB_VIEWER_VIEWPORT_ID: &str = "db_viewer_viewport";
 const CONDITION_EDITOR_VIEWPORT_ID: &str = "condition_editor_viewport";
+const RECORD_LIST_PANEL_MIN_WIDTH: f32 = 360.0;
+const RECORD_LIST_PANEL_DEFAULT_RATIO: f32 = 0.33;
+const RECORD_LIST_PANEL_MAX_RATIO: f32 = 0.85;
 
 struct RunningAnalysisJob {
     receiver: Receiver<AnalysisJobEvent>,
@@ -324,6 +328,7 @@ pub(crate) struct App {
     cached_segments: Option<(usize, Vec<TextSegment>)>,
     annotation_editor_state: AnnotationEditorState,
     condition_editor_state: ConditionEditorState,
+    record_list_panel_ratio: f32,
 }
 
 impl App {
@@ -346,6 +351,7 @@ impl App {
             cached_segments: None,
             annotation_editor_state: AnnotationEditorState::default(),
             condition_editor_state: ConditionEditorState::default(),
+            record_list_panel_ratio: RECORD_LIST_PANEL_DEFAULT_RATIO,
         };
         app.try_cleanup_analysis_jobs();
         if let Some(csv_path) = initial_csv_path {
@@ -573,9 +579,17 @@ impl App {
             label_namespace: namespace.to_string(),
             label_key: key.to_string(),
             label_value: value.to_string(),
-            tagged_by: self.annotation_editor_state.tagged_by_input.trim().to_string(),
+            tagged_by: self
+                .annotation_editor_state
+                .tagged_by_input
+                .trim()
+                .to_string(),
             tagged_at: String::new(),
-            confidence: self.annotation_editor_state.confidence_input.trim().to_string(),
+            confidence: self
+                .annotation_editor_state
+                .confidence_input
+                .trim()
+                .to_string(),
             note: self.annotation_editor_state.note_input.trim().to_string(),
         })
     }
@@ -762,10 +776,7 @@ impl App {
             return Ok(());
         }
         let path = self.resolved_filter_config_path()?;
-        self.load_condition_editor_from_path(
-            path,
-            "条件 JSON を読み込みました。",
-        )
+        self.load_condition_editor_from_path(path, "条件 JSON を読み込みました。")
     }
 
     fn load_condition_editor_from_path(
@@ -786,10 +797,9 @@ impl App {
         self.condition_editor_state.loaded_path = Some(path);
         self.condition_editor_state.pending_path_sync = None;
         self.condition_editor_state.document = Some(document);
-        self.condition_editor_state.selected_index =
-            self.clamp_condition_editor_selection(Some(0));
-        self.condition_editor_state.selected_group_index =
-            self.clamp_condition_editor_group_selection(
+        self.condition_editor_state.selected_index = self.clamp_condition_editor_selection(Some(0));
+        self.condition_editor_state.selected_group_index = self
+            .clamp_condition_editor_group_selection(
                 Some(0),
                 self.condition_editor_state.selected_index,
             );
@@ -875,8 +885,8 @@ impl App {
     ) {
         self.condition_editor_state.selected_index =
             self.clamp_condition_editor_selection(selection_draft.requested_selection);
-        self.condition_editor_state.selected_group_index =
-            self.clamp_condition_editor_group_selection(
+        self.condition_editor_state.selected_group_index = self
+            .clamp_condition_editor_group_selection(
                 selection_draft.requested_group_selection,
                 self.condition_editor_state.selected_index,
             );
@@ -1077,10 +1087,7 @@ impl App {
 
     fn handle_export_success(&mut self, success: AnalysisExportSuccess) {
         self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded {
-            summary: format!(
-                "CSV 保存完了: {}",
-                success.output_csv_path.display()
-            ),
+            summary: format!("CSV 保存完了: {}", success.output_csv_path.display()),
         };
         self.error_message = Some(format!(
             "CSV を保存しました。\n\n保存先:\n{}",
@@ -1185,9 +1192,14 @@ impl App {
         }
         match (warning.combination_count, warning.combination_cap) {
             (Some(count), Some(cap)) if count > cap => {
-                lines.push(format!("combinationCount: {count} / cap {cap} (+{})", count - cap));
+                lines.push(format!(
+                    "combinationCount: {count} / cap {cap} (+{})",
+                    count - cap
+                ));
             }
-            (Some(count), Some(cap)) => lines.push(format!("combinationCount: {count} / cap {cap}")),
+            (Some(count), Some(cap)) => {
+                lines.push(format!("combinationCount: {count} / cap {cap}"))
+            }
             (Some(count), None) => lines.push(format!("combinationCount: {count}")),
             (None, Some(cap)) => lines.push(format!("combinationCap: {cap}")),
             (None, None) => {}
@@ -1219,16 +1231,20 @@ impl App {
                 .max_height(480.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for (idx, warning) in self.analysis_runtime_state.last_warnings.iter().enumerate() {
+                    for (idx, warning) in
+                        self.analysis_runtime_state.last_warnings.iter().enumerate()
+                    {
                         ui.group(|ui| {
                             ui.label(
-                                RichText::new(format!("{}. {}", idx + 1, self.warning_headline(warning))).strong(),
+                                RichText::new(format!(
+                                    "{}. {}",
+                                    idx + 1,
+                                    self.warning_headline(warning)
+                                ))
+                                .strong(),
                             );
                             for line in self.warning_detail_lines(warning) {
-                                ui.add(
-                                    egui::Label::new(line)
-                                        .wrap_mode(TextWrapMode::Wrap),
-                                );
+                                ui.add(egui::Label::new(line).wrap_mode(TextWrapMode::Wrap));
                             }
                         });
                         if idx + 1 < self.analysis_runtime_state.last_warnings.len() {
@@ -1328,7 +1344,8 @@ impl App {
     fn load_db_viewer_context(&mut self) {
         let Some(paragraph_id) = self.db_viewer_state.source_paragraph_id else {
             self.db_viewer_state.context = None;
-            self.db_viewer_state.error_message = Some("参照元 paragraph_id が未設定です".to_string());
+            self.db_viewer_state.error_message =
+                Some("参照元 paragraph_id が未設定です".to_string());
             self.db_viewer_state.is_open = true;
             return;
         };
@@ -1514,7 +1531,8 @@ impl App {
 
                 if matches!(
                     self.analysis_runtime_state.status,
-                    AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. }
+                    AnalysisJobStatus::RunningAnalysis { .. }
+                        | AnalysisJobStatus::RunningExport { .. }
                 ) {
                     ui.add(egui::Spinner::new());
                 }
@@ -1573,8 +1591,7 @@ impl App {
                 }
 
                 let status_text = self.analysis_runtime_state.status_text();
-                let status_color =
-                    analysis_status_color(ui, &self.analysis_runtime_state.status);
+                let status_color = analysis_status_color(ui, &self.analysis_runtime_state.status);
                 ui.label(RichText::new(status_text).color(status_color));
             });
         });
@@ -1858,20 +1875,14 @@ impl App {
             .map(|message| (message, self.condition_editor_state.status_is_error))
     }
 
-    fn condition_editor_save_enabled(
-        &self,
-        can_modify: bool,
-        resolved_path_ok: bool,
-    ) -> bool {
+    fn condition_editor_save_enabled(&self, can_modify: bool, resolved_path_ok: bool) -> bool {
         can_modify
             && self.condition_editor_state.document.is_some()
             && self.condition_editor_state.pending_path_sync.is_none()
             && resolved_path_ok
     }
 
-    fn condition_editor_confirm_message(
-        confirm_action: &ConditionEditorConfirmAction,
-    ) -> String {
+    fn condition_editor_confirm_message(confirm_action: &ConditionEditorConfirmAction) -> String {
         match confirm_action {
             ConditionEditorConfirmAction::CloseWindow => {
                 "未保存の変更があります。condition editor を閉じますか。".to_string()
@@ -2084,8 +2095,10 @@ impl App {
         if let Some(document) = self.condition_editor_state.document.as_mut() {
             if delete_index < document.cooccurrence_conditions.len() {
                 document.cooccurrence_conditions.remove(delete_index);
-                self.condition_editor_state.selected_index =
-                    clamp_condition_index(Some(delete_index), document.cooccurrence_conditions.len());
+                self.condition_editor_state.selected_index = clamp_condition_index(
+                    Some(delete_index),
+                    document.cooccurrence_conditions.len(),
+                );
                 self.condition_editor_state.selected_group_index =
                     clamp_condition_group_selection_for_document(
                         document,
@@ -2110,9 +2123,7 @@ impl App {
         }
 
         match resolved_path_result {
-            Ok(path) => self
-                .request_condition_editor_reload(path.clone())
-                .err(),
+            Ok(path) => self.request_condition_editor_reload(path.clone()).err(),
             Err(error) => Some(error.clone()),
         }
     }
@@ -2171,8 +2182,10 @@ impl App {
                 save_error = Some(error);
             }
         }
-        let reload_error =
-            self.apply_condition_editor_reload_request(command_draft.should_reload, resolved_path_result);
+        let reload_error = self.apply_condition_editor_reload_request(
+            command_draft.should_reload,
+            resolved_path_result,
+        );
         self.apply_condition_editor_modal_response(ctx, viewport_id, command_draft.modal_response);
 
         save_error.or(reload_error)
@@ -2227,12 +2240,8 @@ impl App {
 
             if let Some(confirm_action) = window_inputs.current_confirm_action.as_ref() {
                 let message = Self::condition_editor_confirm_message(confirm_action);
-                let response =
-                    render_condition_editor_confirm_overlay(viewport_ctx, &message);
-                self.apply_condition_editor_confirm_overlay_response(
-                    &mut command_draft,
-                    response,
-                );
+                let response = render_condition_editor_confirm_overlay(viewport_ctx, &message);
+                self.apply_condition_editor_confirm_overlay_response(&mut command_draft, response);
             }
         });
 
@@ -2254,24 +2263,42 @@ impl App {
         tree_scroll_request: Option<TreeScrollRequest>,
     ) -> Option<usize> {
         let mut clicked_row = None;
-        let max_list_panel_width = (ui.available_width() * 0.85).clamp(360.0, 1600.0);
-        let default_list_panel_width = 620.0_f32.min(max_list_panel_width);
-        egui::SidePanel::left("record_list_panel")
+        let available_width = ui.available_width().max(1.0);
+        let record_list_panel_width_range = self.record_list_panel_width_range(available_width);
+        let default_list_panel_width = (available_width * self.record_list_panel_ratio).clamp(
+            *record_list_panel_width_range.start(),
+            *record_list_panel_width_range.end(),
+        );
+
+        let list_panel_response = egui::SidePanel::left("record_list_panel")
             .resizable(true)
             .default_width(default_list_panel_width)
-            .min_width(360.0)
-            .max_width(max_list_panel_width)
+            .min_width(*record_list_panel_width_range.start())
+            .max_width(*record_list_panel_width_range.end())
             .show_inside(ui, |ui| {
                 self.draw_filters(ui);
                 ui.separator();
                 clicked_row = self.draw_tree(ui, tree_scroll_request);
             });
 
+        self.record_list_panel_ratio =
+            (list_panel_response.response.rect.width() / available_width).clamp(
+                RECORD_LIST_PANEL_MIN_WIDTH / available_width,
+                RECORD_LIST_PANEL_MAX_RATIO,
+            );
+
         egui::CentralPanel::default().show_inside(ui, |ui| {
             self.draw_detail(ui);
         });
 
         clicked_row
+    }
+
+    fn record_list_panel_width_range(&self, available_width: f32) -> RangeInclusive<f32> {
+        let max_width = (available_width * RECORD_LIST_PANEL_MAX_RATIO)
+            .max(RECORD_LIST_PANEL_MIN_WIDTH)
+            .min(1600.0);
+        RECORD_LIST_PANEL_MIN_WIDTH..=max_width
     }
 
     fn draw_filters(&mut self, ui: &mut Ui) {
@@ -2448,7 +2475,10 @@ impl App {
         ui.label(format!("categories: {}", record.matched_categories_text));
         ui.label(format!("conditions: {}", record.matched_condition_ids_text));
         ui.label(format!("match_groups: {}", record.match_group_ids_text));
-        ui.label(format!("annotated_tokens: {}", record.annotated_token_count));
+        ui.label(format!(
+            "annotated_tokens: {}",
+            record.annotated_token_count
+        ));
         ui.label(format!(
             "manual_annotations: {}",
             record.manual_annotation_count
@@ -2461,12 +2491,7 @@ impl App {
         }
     }
 
-    fn draw_record_text_panel(
-        &self,
-        ui: &mut Ui,
-        record: &AnalysisRecord,
-        detail_job: LayoutJob,
-    ) {
+    fn draw_record_text_panel(&self, ui: &mut Ui, record: &AnalysisRecord, detail_job: LayoutJob) {
         ScrollArea::vertical()
             .id_salt("detail_scroll")
             .auto_shrink([false, false])
@@ -2486,8 +2511,7 @@ impl App {
             .default_open(false)
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new("高度条件の説明を表示中。本文強調は一部未対応です。")
-                        .italics(),
+                    RichText::new("高度条件の説明を表示中。本文強調は一部未対応です。").italics(),
                 );
                 if !record.matched_form_group_ids_text.trim().is_empty() {
                     ui.label(format!("group_ids: {}", record.matched_form_group_ids_text));
@@ -2557,7 +2581,9 @@ impl App {
                     &mut self.annotation_editor_state.namespace_input,
                 ));
                 ui.label("key");
-                ui.add(ime_safe_singleline(&mut self.annotation_editor_state.key_input));
+                ui.add(ime_safe_singleline(
+                    &mut self.annotation_editor_state.key_input,
+                ));
             });
             ui.horizontal(|ui| {
                 ui.label("tagged_by");
@@ -2572,13 +2598,11 @@ impl App {
             ui.label(RichText::new("改行は Shift+Enter").italics());
             ui.label("value");
             ui.add(
-                ime_safe_multiline(&mut self.annotation_editor_state.value_input)
-                    .desired_rows(2),
+                ime_safe_multiline(&mut self.annotation_editor_state.value_input).desired_rows(2),
             );
             ui.label("note");
             ui.add(
-                ime_safe_multiline(&mut self.annotation_editor_state.note_input)
-                    .desired_rows(2),
+                ime_safe_multiline(&mut self.annotation_editor_state.note_input).desired_rows(2),
             );
 
             ui.horizontal(|ui| {
@@ -2633,7 +2657,6 @@ fn build_record_text_layout_job(ui: &Ui, segments: &[TextSegment]) -> LayoutJob 
 
     job
 }
-
 
 fn analysis_status_color(ui: &Ui, status: &AnalysisJobStatus) -> Color32 {
     match status {
