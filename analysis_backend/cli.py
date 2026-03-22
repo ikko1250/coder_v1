@@ -199,10 +199,11 @@ def _validate_selected_count(
     *,
     expected_selected_count: int,
     records: list[dict[str, str]],
+    count_label: str = "selectedParagraphCount",
 ) -> str | None:
     if expected_selected_count != len(records):
         return (
-            "selectedParagraphCount mismatch: "
+            f"{count_label} mismatch: "
             f"meta={expected_selected_count}, records={len(records)}"
         )
     return None
@@ -231,6 +232,7 @@ def run_analysis_job(args: Namespace) -> int:
     started_at = _utc_now_iso()
     start_timestamp = datetime.now(timezone.utc)
     output_format = getattr(args, "output_format", "csv")
+    analysis_unit = "paragraph"
 
     output_dir, output_csv_path, output_meta_json_path = _resolve_output_paths(args)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -259,6 +261,7 @@ def run_analysis_job(args: Namespace) -> int:
         from .condition_evaluator import normalize_cooccurrence_conditions_result
         from .condition_evaluator import select_target_ids_by_conditions_result
         from .export_formatter import build_gui_records
+        from .export_formatter import build_sentence_gui_records
         from .manual_annotations import load_manual_annotations_result
 
         load_filter_config_result_value = load_filter_config_result(filter_config_path)
@@ -381,6 +384,7 @@ def run_analysis_job(args: Namespace) -> int:
 
         warning_sources = (
             load_filter_config_result_value.issues
+            + normalized_result.issues
             + manual_annotations_result_value.issues
             + selection_result.warning_messages
         )
@@ -434,10 +438,36 @@ def run_analysis_job(args: Namespace) -> int:
             )
             if output_format == "csv":
                 reconstructed_sentences_export_df.write_csv(output_csv_path)
-            gui_records: list[dict[str, str]] = []
+            gui_records = build_sentence_gui_records(reconstructed_sentences_result.data_frame)
             selected_paragraph_count = len(target_paragraph_ids)
             selected_sentence_count = len(target_sentence_ids)
-            target_paragraph_count = len(target_paragraph_ids)
+            target_paragraph_count = paragraph_match_summary_df.height
+            selected_count_error = _validate_selected_count(
+                expected_selected_count=selected_sentence_count,
+                records=gui_records,
+                count_label="selectedSentenceCount",
+            )
+            if selected_count_error is not None:
+                failure_payload = _build_failure_payload(
+                    job_id=args.job_id,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    duration_seconds=round(
+                        (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                        6,
+                    ),
+                    db_path=db_path,
+                    filter_config_path=filter_config_path,
+                    output_csv_path=output_csv_path,
+                    analysis_unit=analysis_unit,
+                    warning_messages=_serialize_warning_messages(warning_sources),
+                    error_summary=selected_count_error,
+                )
+                _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+                if output_format == "json":
+                    _emit_json_payload(_build_json_response_payload(meta=failure_payload))
+                print(selected_count_error, file=sys.stderr)
+                return 1
             serialized_warning_messages = _serialize_warning_messages(warning_sources)
         else:
             selected_tokens_with_position_df = build_tokens_with_position_df(
@@ -575,7 +605,7 @@ def run_analysis_job(args: Namespace) -> int:
             db_path=db_path,
             filter_config_path=filter_config_path,
             output_csv_path=output_csv_path,
-            analysis_unit="paragraph",
+            analysis_unit=analysis_unit,
             warning_messages=[],
             error_summary=str(exc),
         )

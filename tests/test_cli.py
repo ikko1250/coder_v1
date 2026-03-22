@@ -1012,6 +1012,46 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area_sentence")
             self.assertIn("[[HIT ", rows[0]["sentence_text_tagged"])
 
+    def test_run_analysis_job_emits_sentence_records_for_json_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_test_db(db_path)
+            build_sentence_unit_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="sentence-json-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="json",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertEqual(payload["meta"]["analysisUnit"], "sentence")
+            self.assertEqual(payload["meta"]["selectedSentenceCount"], 1)
+            self.assertEqual(payload["meta"]["targetParagraphCount"], 1)
+            self.assertEqual(len(payload["records"]), 1)
+            self.assertEqual(payload["records"][0]["sentence_id"], "11")
+            self.assertEqual(payload["records"][0]["paragraph_id"], "1")
+            self.assertEqual(
+                payload["records"][0]["matched_condition_ids_text"],
+                "suppress_area_sentence",
+            )
+
     def test_run_analysis_job_surfaces_matching_warnings_in_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
