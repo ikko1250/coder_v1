@@ -1201,6 +1201,48 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(condition_eval_row["matched_unit_count"], 1)
         self.assertTrue(condition_eval_row["is_match"])
 
+    def test_select_target_ids_by_conditions_result_supports_sentence_analysis_unit(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 2, 2],
+                "sentence_id": [11, 11, 12, 21, 21],
+                "token_no": [0, 1, 0, 0, 1],
+                "normalized_form": ["抑制", "区域", "その他", "抑制", "区域"],
+                "surface": ["抑制", "区域", "その他", "抑制", "区域"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12, 21],
+                "paragraph_id": [1, 1, 2],
+                "sentence_no_in_paragraph": [1, 2, 1],
+                "is_table_paragraph": [0, 0, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="suppress_area",
+                    categories=["概念:抑制区域"],
+                    category_text="概念:抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                )
+            ],
+            analysis_unit="sentence",
+        )
+
+        self.assertEqual(result.target_sentence_ids, [11, 21])
+        self.assertEqual(result.target_paragraph_ids, [1, 2])
+        self.assertEqual(result.sentence_match_summary_df.get_column("sentence_id").to_list(), [11, 21])
+        self.assertTrue(result.paragraph_match_summary_df.is_empty())
+
     def test_select_target_ids_by_conditions_result_supports_annotation_only_conditions(self) -> None:
         tokens_df = pl.DataFrame(
             {

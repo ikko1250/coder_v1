@@ -20,18 +20,25 @@ def build_tokens_with_position_df(
     tokens_df: pl.DataFrame,
     sentences_df: pl.DataFrame,
     paragraph_ids: list[int] | None = None,
+    sentence_ids: list[int] | None = None,
     target_forms: list[str] | None = None,
+    exclude_table_paragraphs: bool = False,
 ) -> pl.DataFrame:
-    if paragraph_ids is not None and not paragraph_ids:
+    if (paragraph_ids is not None and not paragraph_ids) or (sentence_ids is not None and not sentence_ids):
         return empty_df(POSITIONED_TOKEN_SCHEMA)
 
     sentence_order_df = _with_sentence_table_flag(sentences_df).select(
         ["sentence_id", "paragraph_id", "sentence_no_in_paragraph", "is_table_paragraph"]
     )
     base_tokens_df = tokens_df
+    if exclude_table_paragraphs:
+        sentence_order_df = sentence_order_df.filter(pl.col("is_table_paragraph") == 0)
     if paragraph_ids is not None:
         sentence_order_df = sentence_order_df.filter(pl.col("paragraph_id").is_in(paragraph_ids))
         base_tokens_df = base_tokens_df.filter(pl.col("paragraph_id").is_in(paragraph_ids))
+    if sentence_ids is not None:
+        sentence_order_df = sentence_order_df.filter(pl.col("sentence_id").is_in(sentence_ids))
+        base_tokens_df = base_tokens_df.filter(pl.col("sentence_id").is_in(sentence_ids))
 
     sentence_token_counts_df = (
         base_tokens_df
@@ -85,10 +92,13 @@ def build_candidate_tokens_with_position_df(
     tokens_df: pl.DataFrame,
     sentences_df: pl.DataFrame,
     target_forms: list[str],
+    *,
+    exclude_table_paragraphs: bool = False,
 ) -> pl.DataFrame:
     return build_tokens_with_position_df(
         tokens_df=tokens_df,
         sentences_df=sentences_df,
         paragraph_ids=None,
         target_forms=target_forms,
+        exclude_table_paragraphs=exclude_table_paragraphs,
     )
