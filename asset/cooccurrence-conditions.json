@@ -51,12 +51,14 @@
             "search_scope": "sentence"
         },
         {
-            "condition_id": "potential_lv1",
-            "categories": ["概念:抑制区域_保全"],
-            "forms": ["保全", "地区"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
+          "forms": [
+            "抑制",
+            "地区"
+          ],
+          "match_logic": "and",
+          "combine_logic": "or"
         }
-    ]
+      ]
+    }
+  ]
 }

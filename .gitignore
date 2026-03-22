@@ -1,2 +1,9 @@
 /target
 csv_highlight_viewer_rust.zip
+/asset
+/document
+/runtime
+/tests
+/.venv
+/.venv-win
+analysis_backend/__pycache__
