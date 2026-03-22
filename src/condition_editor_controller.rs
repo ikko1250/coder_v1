@@ -9,6 +9,17 @@ pub(crate) struct ConditionEditorSelectionDraft {
     pub(crate) requested_group_selection: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ConditionEditorCommandDraft {
+    pub(crate) should_save: bool,
+    pub(crate) should_reload: bool,
+    pub(crate) should_add_condition: bool,
+    pub(crate) should_delete_condition: Option<usize>,
+    pub(crate) close_requested: bool,
+    pub(crate) modal_response: Option<ConditionEditorModalResponse>,
+    pub(crate) document_edited: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConditionEditorModalResponse {
     Continue,
@@ -23,6 +34,7 @@ pub(crate) enum ConditionEditorAction {
     DeleteCondition {
         index: usize,
     },
+    DocumentEdited,
     RequestSave,
     RequestReload {
         resolved_path: Result<PathBuf, String>,
@@ -66,6 +78,10 @@ pub(crate) fn reduce_condition_editor_action(
             apply_delete_condition(state, index);
             Vec::new()
         }
+        ConditionEditorAction::DocumentEdited => {
+            mark_condition_editor_dirty(state, "未保存の変更があります。");
+            Vec::new()
+        }
         ConditionEditorAction::RequestSave => vec![ConditionEditorEffect::SaveDocument],
         ConditionEditorAction::RequestReload { resolved_path } => match resolved_path {
             Ok(path) => {
@@ -98,6 +114,95 @@ pub(crate) fn reduce_condition_editor_action(
             }
         },
     }
+}
+
+pub(crate) fn apply_footer_response(
+    command_draft: &mut ConditionEditorCommandDraft,
+    save_clicked: bool,
+    reload_clicked: bool,
+) {
+    if save_clicked {
+        command_draft.should_save = true;
+    }
+    if reload_clicked {
+        command_draft.should_reload = true;
+    }
+}
+
+pub(crate) fn apply_confirm_overlay_response(
+    command_draft: &mut ConditionEditorCommandDraft,
+    response: Option<ConditionEditorModalResponse>,
+) {
+    if let Some(response) = response {
+        command_draft.modal_response = Some(response);
+    }
+}
+
+pub(crate) fn apply_list_response(
+    selection_draft: &mut ConditionEditorSelectionDraft,
+    command_draft: &mut ConditionEditorCommandDraft,
+    add_clicked: bool,
+    selected_index: Option<usize>,
+    selected_group_index: Option<usize>,
+) {
+    if add_clicked {
+        command_draft.should_add_condition = true;
+    }
+    if let Some(selected_index) = selected_index {
+        selection_draft.requested_selection = Some(selected_index);
+        selection_draft.requested_group_selection = selected_group_index;
+    }
+}
+
+pub(crate) fn apply_detail_response(
+    selection_draft: &mut ConditionEditorSelectionDraft,
+    command_draft: &mut ConditionEditorCommandDraft,
+    selected_index: usize,
+    requested_group_selection: Option<usize>,
+    delete_clicked: bool,
+    changed: bool,
+) {
+    if delete_clicked {
+        command_draft.should_delete_condition = Some(selected_index);
+    }
+    if changed {
+        command_draft.document_edited = true;
+    }
+    selection_draft.requested_group_selection = requested_group_selection;
+}
+
+pub(crate) fn build_condition_editor_actions(
+    selection_draft: ConditionEditorSelectionDraft,
+    command_draft: ConditionEditorCommandDraft,
+    resolved_path_result: Result<PathBuf, String>,
+) -> Vec<ConditionEditorAction> {
+    let mut actions = vec![ConditionEditorAction::ApplySelectionDraft(selection_draft)];
+
+    if command_draft.close_requested {
+        actions.push(ConditionEditorAction::RequestClose);
+    }
+    if command_draft.should_add_condition {
+        actions.push(ConditionEditorAction::AddCondition);
+    }
+    if let Some(index) = command_draft.should_delete_condition {
+        actions.push(ConditionEditorAction::DeleteCondition { index });
+    }
+    if command_draft.document_edited {
+        actions.push(ConditionEditorAction::DocumentEdited);
+    }
+    if command_draft.should_save {
+        actions.push(ConditionEditorAction::RequestSave);
+    }
+    if command_draft.should_reload {
+        actions.push(ConditionEditorAction::RequestReload {
+            resolved_path: resolved_path_result,
+        });
+    }
+    if let Some(response) = command_draft.modal_response {
+        actions.push(ConditionEditorAction::ResolveModal(response));
+    }
+
+    actions
 }
 
 fn apply_selection_draft(state: &mut AppState, selection_draft: ConditionEditorSelectionDraft) {
@@ -289,5 +394,61 @@ mod tests {
         assert_eq!(state.condition_editor_state.selected_index, Some(0));
         assert_eq!(state.condition_editor_state.selected_group_index, Some(0));
         assert!(state.condition_editor_state.is_dirty);
+    }
+
+    #[test]
+    fn document_edited_marks_editor_dirty() {
+        let (mut state, mut ui_state) = build_state();
+
+        reduce_condition_editor_action(
+            &mut state,
+            &mut ui_state,
+            ConditionEditorAction::DocumentEdited,
+        );
+
+        assert!(state.condition_editor_state.is_dirty);
+        assert_eq!(
+            state.condition_editor_state.status_message.as_deref(),
+            Some("未保存の変更があります。")
+        );
+    }
+
+    #[test]
+    fn build_condition_editor_actions_preserves_expected_execution_order() {
+        let actions = build_condition_editor_actions(
+            ConditionEditorSelectionDraft {
+                requested_selection: Some(1),
+                requested_group_selection: Some(2),
+            },
+            ConditionEditorCommandDraft {
+                should_save: true,
+                should_reload: true,
+                should_add_condition: true,
+                should_delete_condition: Some(3),
+                close_requested: true,
+                modal_response: Some(ConditionEditorModalResponse::Continue),
+                document_edited: true,
+            },
+            Ok(PathBuf::from("next.json")),
+        );
+
+        assert_eq!(
+            actions,
+            vec![
+                ConditionEditorAction::ApplySelectionDraft(ConditionEditorSelectionDraft {
+                    requested_selection: Some(1),
+                    requested_group_selection: Some(2),
+                }),
+                ConditionEditorAction::RequestClose,
+                ConditionEditorAction::AddCondition,
+                ConditionEditorAction::DeleteCondition { index: 3 },
+                ConditionEditorAction::DocumentEdited,
+                ConditionEditorAction::RequestSave,
+                ConditionEditorAction::RequestReload {
+                    resolved_path: Ok(PathBuf::from("next.json")),
+                },
+                ConditionEditorAction::ResolveModal(ConditionEditorModalResponse::Continue),
+            ]
+        );
     }
 }
