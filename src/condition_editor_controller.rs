@@ -9,7 +9,7 @@ pub(crate) struct ConditionEditorSelectionDraft {
     pub(crate) requested_group_selection: Option<usize>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConditionEditorCommandDraft {
     pub(crate) should_save: bool,
     pub(crate) should_reload: bool,
@@ -17,7 +17,7 @@ pub(crate) struct ConditionEditorCommandDraft {
     pub(crate) should_delete_condition: Option<usize>,
     pub(crate) close_requested: bool,
     pub(crate) modal_response: Option<ConditionEditorModalResponse>,
-    pub(crate) document_edited: bool,
+    pub(crate) edited_document: Option<FilterConfigDocument>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,15 +26,15 @@ pub(crate) enum ConditionEditorModalResponse {
     Cancel,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) enum ConditionEditorAction {
+    ReplaceDocument(FilterConfigDocument),
     ApplySelectionDraft(ConditionEditorSelectionDraft),
     RequestClose,
     AddCondition,
     DeleteCondition {
         index: usize,
     },
-    DocumentEdited,
     RequestSave,
     RequestReload {
         resolved_path: Result<PathBuf, String>,
@@ -56,6 +56,11 @@ pub(crate) fn reduce_condition_editor_action(
     action: ConditionEditorAction,
 ) -> Vec<ConditionEditorEffect> {
     match action {
+        ConditionEditorAction::ReplaceDocument(document) => {
+            state.condition_editor_state.document = Some(document);
+            mark_condition_editor_dirty(state, "未保存の変更があります。");
+            Vec::new()
+        }
         ConditionEditorAction::ApplySelectionDraft(selection_draft) => {
             apply_selection_draft(state, selection_draft);
             Vec::new()
@@ -76,10 +81,6 @@ pub(crate) fn reduce_condition_editor_action(
         }
         ConditionEditorAction::DeleteCondition { index } => {
             apply_delete_condition(state, index);
-            Vec::new()
-        }
-        ConditionEditorAction::DocumentEdited => {
-            mark_condition_editor_dirty(state, "未保存の変更があります。");
             Vec::new()
         }
         ConditionEditorAction::RequestSave => vec![ConditionEditorEffect::SaveDocument],
@@ -160,13 +161,9 @@ pub(crate) fn apply_detail_response(
     selected_index: usize,
     requested_group_selection: Option<usize>,
     delete_clicked: bool,
-    changed: bool,
 ) {
     if delete_clicked {
         command_draft.should_delete_condition = Some(selected_index);
-    }
-    if changed {
-        command_draft.document_edited = true;
     }
     selection_draft.requested_group_selection = requested_group_selection;
 }
@@ -176,7 +173,12 @@ pub(crate) fn build_condition_editor_actions(
     command_draft: ConditionEditorCommandDraft,
     resolved_path_result: Result<PathBuf, String>,
 ) -> Vec<ConditionEditorAction> {
-    let mut actions = vec![ConditionEditorAction::ApplySelectionDraft(selection_draft)];
+    let mut actions = Vec::new();
+
+    if let Some(document) = command_draft.edited_document {
+        actions.push(ConditionEditorAction::ReplaceDocument(document));
+    }
+    actions.push(ConditionEditorAction::ApplySelectionDraft(selection_draft));
 
     if command_draft.close_requested {
         actions.push(ConditionEditorAction::RequestClose);
@@ -186,9 +188,6 @@ pub(crate) fn build_condition_editor_actions(
     }
     if let Some(index) = command_draft.should_delete_condition {
         actions.push(ConditionEditorAction::DeleteCondition { index });
-    }
-    if command_draft.document_edited {
-        actions.push(ConditionEditorAction::DocumentEdited);
     }
     if command_draft.should_save {
         actions.push(ConditionEditorAction::RequestSave);
@@ -296,7 +295,7 @@ fn clamp_condition_group_selection_for_document(
 mod tests {
     use super::*;
     use crate::app_state::AppState;
-    use crate::condition_editor::FilterConfigDocument;
+    use crate::condition_editor::{ConditionEditorItem, FilterConfigDocument};
     use std::path::PathBuf;
 
     fn build_state() -> (AppState, AppUiState) {
@@ -397,16 +396,29 @@ mod tests {
     }
 
     #[test]
-    fn document_edited_marks_editor_dirty() {
+    fn replace_document_updates_state_and_marks_editor_dirty() {
         let (mut state, mut ui_state) = build_state();
+        let mut document = FilterConfigDocument::default();
+        document.cooccurrence_conditions.push(ConditionEditorItem {
+            condition_id: "edited".to_string(),
+            ..Default::default()
+        });
 
         reduce_condition_editor_action(
             &mut state,
             &mut ui_state,
-            ConditionEditorAction::DocumentEdited,
+            ConditionEditorAction::ReplaceDocument(document),
         );
 
         assert!(state.condition_editor_state.is_dirty);
+        assert_eq!(
+            state
+                .condition_editor_state
+                .document
+                .as_ref()
+                .map(|document| document.cooccurrence_conditions.len()),
+            Some(1)
+        );
         assert_eq!(
             state.condition_editor_state.status_message.as_deref(),
             Some("未保存の変更があります。")
@@ -421,34 +433,46 @@ mod tests {
                 requested_group_selection: Some(2),
             },
             ConditionEditorCommandDraft {
+                edited_document: Some(FilterConfigDocument::default()),
                 should_save: true,
                 should_reload: true,
                 should_add_condition: true,
                 should_delete_condition: Some(3),
                 close_requested: true,
                 modal_response: Some(ConditionEditorModalResponse::Continue),
-                document_edited: true,
             },
             Ok(PathBuf::from("next.json")),
         );
 
-        assert_eq!(
-            actions,
-            vec![
-                ConditionEditorAction::ApplySelectionDraft(ConditionEditorSelectionDraft {
-                    requested_selection: Some(1),
-                    requested_group_selection: Some(2),
-                }),
-                ConditionEditorAction::RequestClose,
-                ConditionEditorAction::AddCondition,
-                ConditionEditorAction::DeleteCondition { index: 3 },
-                ConditionEditorAction::DocumentEdited,
-                ConditionEditorAction::RequestSave,
-                ConditionEditorAction::RequestReload {
-                    resolved_path: Ok(PathBuf::from("next.json")),
-                },
-                ConditionEditorAction::ResolveModal(ConditionEditorModalResponse::Continue),
-            ]
-        );
+        assert_eq!(actions.len(), 8);
+        assert!(matches!(
+            &actions[0],
+            ConditionEditorAction::ReplaceDocument(document)
+                if document.cooccurrence_conditions.is_empty()
+        ));
+        assert!(matches!(
+            &actions[1],
+            ConditionEditorAction::ApplySelectionDraft(ConditionEditorSelectionDraft {
+                requested_selection: Some(1),
+                requested_group_selection: Some(2),
+            })
+        ));
+        assert!(matches!(&actions[2], ConditionEditorAction::RequestClose));
+        assert!(matches!(&actions[3], ConditionEditorAction::AddCondition));
+        assert!(matches!(
+            &actions[4],
+            ConditionEditorAction::DeleteCondition { index: 3 }
+        ));
+        assert!(matches!(&actions[5], ConditionEditorAction::RequestSave));
+        assert!(matches!(
+            &actions[6],
+            ConditionEditorAction::RequestReload {
+                resolved_path: Ok(path)
+            } if path == &PathBuf::from("next.json")
+        ));
+        assert!(matches!(
+            &actions[7],
+            ConditionEditorAction::ResolveModal(ConditionEditorModalResponse::Continue)
+        ));
     }
 }

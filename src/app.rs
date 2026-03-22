@@ -946,29 +946,39 @@ impl App {
         selection_draft: &mut ConditionEditorSelectionDraft,
         command_draft: &mut ConditionEditorCommandDraft,
     ) {
-        let Some(document) = self.state.condition_editor_state.document.as_mut() else {
+        let Some(document) = self.state.condition_editor_state.document.as_ref() else {
             ui.label(RichText::new("条件 JSON 未読込").italics());
             return;
         };
+        let mut working_document = document.clone();
 
         selection_draft.requested_selection = clamp_condition_index(
             selection_draft.requested_selection,
-            document.cooccurrence_conditions.len(),
+            working_document.cooccurrence_conditions.len(),
         );
         selection_draft.requested_group_selection = clamp_condition_group_selection_for_document(
-            document,
+            &working_document,
             selection_draft.requested_selection,
             selection_draft.requested_group_selection,
         );
 
-        command_draft.document_edited |= render_condition_editor_global_settings(ui, document);
+        let mut changed = render_condition_editor_global_settings(ui, &mut working_document);
 
         let Some(selected_index) = selection_draft.requested_selection else {
             ui.label(RichText::new("condition を選択してください").italics());
+            if changed {
+                command_draft.edited_document = Some(working_document);
+            }
             return;
         };
-        let Some(condition) = document.cooccurrence_conditions.get_mut(selected_index) else {
+        let Some(condition) = working_document
+            .cooccurrence_conditions
+            .get_mut(selected_index)
+        else {
             ui.label(RichText::new("condition を選択してください").italics());
+            if changed {
+                command_draft.edited_document = Some(working_document);
+            }
             return;
         };
 
@@ -984,8 +994,11 @@ impl App {
             selected_index,
             detail_response.requested_group_selection,
             detail_response.delete_clicked,
-            detail_response.changed,
         );
+        changed |= detail_response.changed;
+        if changed {
+            command_draft.edited_document = Some(working_document);
+        }
     }
 
     fn condition_editor_status_message(&self) -> Option<(&str, bool)> {
