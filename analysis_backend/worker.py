@@ -156,6 +156,7 @@ def _build_request_failure_response(
         db_path=db_path,
         filter_config_path=filter_config_path,
         output_csv_path=Path(""),
+        analysis_unit="paragraph",
         warning_messages=[],
         error_summary=error_summary,
     )
