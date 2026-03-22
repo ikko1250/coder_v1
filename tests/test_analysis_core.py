@@ -1241,7 +1241,47 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(result.target_sentence_ids, [11, 21])
         self.assertEqual(result.target_paragraph_ids, [1, 2])
         self.assertEqual(result.sentence_match_summary_df.get_column("sentence_id").to_list(), [11, 21])
-        self.assertTrue(result.paragraph_match_summary_df.is_empty())
+        self.assertEqual(result.paragraph_match_summary_df.get_column("paragraph_id").to_list(), [1, 2])
+
+    def test_select_target_ids_by_conditions_result_sentence_unit_caps_distinct_paragraphs(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 1, 2, 2],
+                "sentence_id": [11, 11, 12, 12, 21, 21],
+                "token_no": [0, 1, 0, 1, 0, 1],
+                "normalized_form": ["抑制", "区域", "抑制", "区域", "抑制", "区域"],
+                "surface": ["抑制", "区域", "抑制", "区域", "抑制", "区域"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12, 21],
+                "paragraph_id": [1, 1, 2],
+                "sentence_no_in_paragraph": [1, 2, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="suppress_area",
+                    categories=["概念:抑制区域"],
+                    category_text="概念:抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                )
+            ],
+            analysis_unit="sentence",
+            max_paragraph_ids=1,
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        self.assertEqual(result.target_sentence_ids, [11, 12])
 
     def test_select_target_ids_by_conditions_result_applies_reference_clauses_in_sentence_analysis_unit(self) -> None:
         tokens_df = pl.DataFrame(
