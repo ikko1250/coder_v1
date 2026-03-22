@@ -386,32 +386,14 @@ def run_analysis_job(args: Namespace) -> int:
         )
 
         if analysis_unit == "sentence":
-            sentence_conditions = [
-                condition
-                for condition in normalized_result.normalized_conditions
-                if condition.search_scope == "sentence"
-            ]
-            raw_sentence_conditions = [
-                raw_condition
-                for raw_condition in filter_config.cooccurrence_conditions
-                if isinstance(raw_condition, dict)
-                and str(raw_condition.get("search_scope", "paragraph")).strip().lower() == "sentence"
-            ]
             selected_tokens_with_position_df = build_tokens_with_position_df(
                 tokens_df=analysis_tokens_df,
                 sentences_df=analysis_sentences_df,
                 sentence_ids=target_sentence_ids,
                 target_forms=None,
             )
-            condition_hit_result = build_condition_hit_result(
-                tokens_with_position_df=selected_tokens_with_position_df,
-                cooccurrence_conditions=raw_sentence_conditions,
-                distance_matching_mode=filter_config.distance_matching_mode,
-                distance_match_combination_cap=filter_config.distance_match_combination_cap,
-                distance_match_strict_safety_limit=filter_config.distance_match_strict_safety_limit,
-            )
             token_annotations_df = build_token_annotations_df(
-                condition_hit_tokens_df=condition_hit_result.condition_hit_tokens_df,
+                condition_hit_tokens_df=selection_result.sentence_hit_tokens_df,
             )
             reconstructed_sentences_base_df = build_rendered_sentences_df(
                 tokens_with_position_df=selected_tokens_with_position_df,
@@ -440,7 +422,7 @@ def run_analysis_job(args: Namespace) -> int:
                     output_csv_path=output_csv_path,
                     analysis_unit=analysis_unit,
                     warning_messages=_serialize_warning_messages(
-                        warning_sources + condition_hit_result.warning_messages + reconstructed_sentences_result.issues
+                        warning_sources + reconstructed_sentences_result.issues
                     ),
                     error_summary=error_summary,
                 )
@@ -456,9 +438,7 @@ def run_analysis_job(args: Namespace) -> int:
             selected_paragraph_count = len(target_paragraph_ids)
             selected_sentence_count = len(target_sentence_ids)
             target_paragraph_count = len(target_paragraph_ids)
-            serialized_warning_messages = _serialize_warning_messages(
-                warning_sources + condition_hit_result.warning_messages
-            )
+            serialized_warning_messages = _serialize_warning_messages(warning_sources)
         else:
             selected_tokens_with_position_df = build_tokens_with_position_df(
                 tokens_df=analysis_tokens_df,

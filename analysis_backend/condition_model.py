@@ -126,6 +126,7 @@ class TargetSelectionResult:
     condition_eval_df: pl.DataFrame
     paragraph_match_summary_df: pl.DataFrame
     sentence_match_summary_df: pl.DataFrame
+    sentence_hit_tokens_df: pl.DataFrame
     target_paragraph_ids: list[int]
     target_sentence_ids: list[int]
     warning_messages: list[MatchingWarning] = field(default_factory=list)
