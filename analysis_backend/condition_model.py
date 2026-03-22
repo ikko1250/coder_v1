@@ -18,6 +18,7 @@ class FilterConfig:
     cooccurrence_conditions: list[dict[str, object]]
     loaded_condition_count: int
     max_reconstructed_paragraphs: int
+    analysis_unit: str = "paragraph"
     distance_matching_mode: DistanceMatchingMode = "auto-approx"
     distance_match_combination_cap: int = 10000
     distance_match_strict_safety_limit: int = 1000000
@@ -124,6 +125,8 @@ class TargetSelectionResult:
     candidate_tokens_df: pl.DataFrame
     condition_eval_df: pl.DataFrame
     paragraph_match_summary_df: pl.DataFrame
+    sentence_match_summary_df: pl.DataFrame
+    sentence_hit_tokens_df: pl.DataFrame
     target_paragraph_ids: list[int]
     target_sentence_ids: list[int]
     warning_messages: list[MatchingWarning] = field(default_factory=list)

@@ -98,6 +98,7 @@ def _build_failure_payload(
     db_path: Path,
     filter_config_path: Path,
     output_csv_path: Path,
+    analysis_unit: str,
     warning_messages: list[dict[str, object]],
     error_summary: str,
 ) -> dict[str, object]:
@@ -110,8 +111,10 @@ def _build_failure_payload(
         "dbPath": str(db_path),
         "filterConfigPath": str(filter_config_path),
         "outputCsvPath": str(output_csv_path),
+        "analysisUnit": analysis_unit,
         "targetParagraphCount": 0,
         "selectedParagraphCount": 0,
+        "selectedSentenceCount": 0,
         "warningMessages": warning_messages,
         "errorSummary": error_summary,
     }
@@ -136,8 +139,10 @@ def _build_success_payload(
     db_path: Path,
     filter_config_path: Path,
     output_csv_path: Path,
+    analysis_unit: str,
     target_paragraph_count: int,
     selected_paragraph_count: int,
+    selected_sentence_count: int,
     warning_messages: list[dict[str, object]],
 ) -> dict[str, object]:
     return {
@@ -149,8 +154,10 @@ def _build_success_payload(
         "dbPath": str(db_path),
         "filterConfigPath": str(filter_config_path),
         "outputCsvPath": str(output_csv_path),
+        "analysisUnit": analysis_unit,
         "targetParagraphCount": target_paragraph_count,
         "selectedParagraphCount": selected_paragraph_count,
+        "selectedSentenceCount": selected_sentence_count,
         "warningMessages": warning_messages,
         "errorSummary": "",
     }
@@ -192,10 +199,11 @@ def _validate_selected_count(
     *,
     expected_selected_count: int,
     records: list[dict[str, str]],
+    count_label: str = "selectedParagraphCount",
 ) -> str | None:
     if expected_selected_count != len(records):
         return (
-            "selectedParagraphCount mismatch: "
+            f"{count_label} mismatch: "
             f"meta={expected_selected_count}, records={len(records)}"
         )
     return None
@@ -224,6 +232,7 @@ def run_analysis_job(args: Namespace) -> int:
     started_at = _utc_now_iso()
     start_timestamp = datetime.now(timezone.utc)
     output_format = getattr(args, "output_format", "csv")
+    analysis_unit = "paragraph"
 
     output_dir, output_csv_path, output_meta_json_path = _resolve_output_paths(args)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -238,18 +247,29 @@ def run_analysis_job(args: Namespace) -> int:
         from .analysis_core import (
             build_condition_hit_result,
             build_rendered_paragraphs_df,
+            build_rendered_sentences_df,
+            build_reconstructed_paragraphs_export_df,
+            build_reconstructed_sentences_export_df,
             build_token_annotations_df,
             build_tokens_with_position_df,
             enrich_reconstructed_paragraphs_result,
+            enrich_reconstructed_sentences_result,
             load_filter_config_result,
             read_analysis_sentences_result,
             read_analysis_tokens_result,
-            select_target_ids_by_cooccurrence_conditions,
         )
-        from .export_formatter import build_gui_records, build_reconstructed_paragraphs_export_df
+        from .condition_evaluator import normalize_cooccurrence_conditions_result
+        from .condition_evaluator import select_target_ids_by_conditions_result
+        from .export_formatter import build_gui_records
+        from .export_formatter import build_sentence_gui_records
         from .manual_annotations import load_manual_annotations_result
 
         load_filter_config_result_value = load_filter_config_result(filter_config_path)
+        filter_config = load_filter_config_result_value.filter_config
+        analysis_unit = getattr(filter_config, "analysis_unit", "paragraph") if filter_config is not None else "paragraph"
+        if not args.output_csv_path and analysis_unit == "sentence":
+            output_csv_path = output_dir / "result-sentences.csv"
+            output_csv_path.parent.mkdir(parents=True, exist_ok=True)
         manual_annotations_result_value = load_manual_annotations_result(annotation_csv_path)
         if manual_annotations_result_value.paragraph_annotations_df is None:
             error_summary = _build_error_summary_from_result_issues(
@@ -267,6 +287,7 @@ def run_analysis_job(args: Namespace) -> int:
                 db_path=db_path,
                 filter_config_path=filter_config_path,
                 output_csv_path=output_csv_path,
+                analysis_unit=analysis_unit,
                 warning_messages=_serialize_warning_messages(
                     load_filter_config_result_value.issues + manual_annotations_result_value.issues
                 ),
@@ -275,7 +296,6 @@ def run_analysis_job(args: Namespace) -> int:
             _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
             print(error_summary, file=sys.stderr)
             return 1
-        filter_config = load_filter_config_result_value.filter_config
         analysis_tokens_result = read_analysis_tokens_result(
             db_path=db_path,
             limit_rows=args.limit_rows,
@@ -296,6 +316,7 @@ def run_analysis_job(args: Namespace) -> int:
                 db_path=db_path,
                 filter_config_path=filter_config_path,
                 output_csv_path=output_csv_path,
+                analysis_unit=analysis_unit,
                 warning_messages=_serialize_warning_messages(
                     load_filter_config_result_value.issues
                     + manual_annotations_result_value.issues
@@ -324,6 +345,7 @@ def run_analysis_job(args: Namespace) -> int:
                 db_path=db_path,
                 filter_config_path=filter_config_path,
                 output_csv_path=output_csv_path,
+                analysis_unit=analysis_unit,
                 warning_messages=_serialize_warning_messages(
                     load_filter_config_result_value.issues
                     + manual_annotations_result_value.issues
@@ -341,120 +363,208 @@ def run_analysis_job(args: Namespace) -> int:
                 analysis_sentences_df=analysis_sentences_df,
             )
 
-        (
-            _candidate_tokens_df,
-            _condition_eval_df,
-            paragraph_match_summary_df,
-            target_paragraph_ids,
-            _target_sentence_ids,
-        ) = select_target_ids_by_cooccurrence_conditions(
+        normalized_result = normalize_cooccurrence_conditions_result(
+            filter_config.cooccurrence_conditions
+        )
+        selection_result = select_target_ids_by_conditions_result(
             tokens_df=analysis_tokens_df,
             sentences_df=analysis_sentences_df,
-            cooccurrence_conditions=filter_config.cooccurrence_conditions,
+            normalized_conditions=normalized_result.normalized_conditions,
             condition_match_logic=filter_config.condition_match_logic,
             max_paragraph_ids=filter_config.max_reconstructed_paragraphs,
             normalized_paragraph_annotations_df=manual_annotations_result_value.normalized_paragraph_annotations_df,
-        )
-
-        selected_tokens_with_position_df = build_tokens_with_position_df(
-            tokens_df=analysis_tokens_df,
-            sentences_df=analysis_sentences_df,
-            paragraph_ids=target_paragraph_ids,
-            target_forms=None,
-        )
-        condition_hit_result = build_condition_hit_result(
-            tokens_with_position_df=selected_tokens_with_position_df,
-            cooccurrence_conditions=filter_config.cooccurrence_conditions,
+            analysis_unit=analysis_unit,
             distance_matching_mode=filter_config.distance_matching_mode,
             distance_match_combination_cap=filter_config.distance_match_combination_cap,
             distance_match_strict_safety_limit=filter_config.distance_match_strict_safety_limit,
         )
-        condition_hit_tokens_df = condition_hit_result.condition_hit_tokens_df
-        token_annotations_df = build_token_annotations_df(
-            condition_hit_tokens_df=condition_hit_tokens_df,
+        paragraph_match_summary_df = selection_result.paragraph_match_summary_df
+        target_paragraph_ids = selection_result.target_paragraph_ids
+        target_sentence_ids = selection_result.target_sentence_ids
+
+        warning_sources = (
+            load_filter_config_result_value.issues
+            + normalized_result.issues
+            + manual_annotations_result_value.issues
+            + selection_result.warning_messages
         )
-        reconstructed_paragraphs_base_df = build_rendered_paragraphs_df(
-            tokens_with_position_df=selected_tokens_with_position_df,
-            token_annotations_df=token_annotations_df,
-            paragraph_match_summary_df=paragraph_match_summary_df,
-        )
-        reconstructed_paragraphs_result = enrich_reconstructed_paragraphs_result(
-            db_path=db_path,
-            reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
-            manual_annotation_summary_df=manual_annotations_result_value.paragraph_annotations_df,
-        )
-        if reconstructed_paragraphs_result.data_frame is None:
-            error_summary = _build_error_summary_from_result_issues(
-                reconstructed_paragraphs_result.issues,
-                "paragraph metadata read failed",
+
+        if analysis_unit == "sentence":
+            selected_tokens_with_position_df = build_tokens_with_position_df(
+                tokens_df=analysis_tokens_df,
+                sentences_df=analysis_sentences_df,
+                sentence_ids=target_sentence_ids,
+                target_forms=None,
             )
-            failure_payload = _build_failure_payload(
-                job_id=args.job_id,
-                started_at=started_at,
-                finished_at=_utc_now_iso(),
-                duration_seconds=round(
-                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
-                    6,
-                ),
+            token_annotations_df = build_token_annotations_df(
+                condition_hit_tokens_df=selection_result.sentence_hit_tokens_df,
+            )
+            reconstructed_sentences_base_df = build_rendered_sentences_df(
+                tokens_with_position_df=selected_tokens_with_position_df,
+                token_annotations_df=token_annotations_df,
+                sentence_match_summary_df=selection_result.sentence_match_summary_df,
+            )
+            reconstructed_sentences_result = enrich_reconstructed_sentences_result(
                 db_path=db_path,
-                filter_config_path=filter_config_path,
-                output_csv_path=output_csv_path,
-                warning_messages=_serialize_warning_messages(
-                    load_filter_config_result_value.issues
-                    + manual_annotations_result_value.issues
-                    + condition_hit_result.warning_messages
-                    + reconstructed_paragraphs_result.issues
-                ),
-                error_summary=error_summary,
+                reconstructed_sentences_base_df=reconstructed_sentences_base_df,
             )
-            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
-            print(error_summary, file=sys.stderr)
-            return 1
-        reconstructed_paragraphs_export_df = build_reconstructed_paragraphs_export_df(
-            reconstructed_paragraphs_df=reconstructed_paragraphs_result.data_frame,
-        )
-        gui_records = build_gui_records(reconstructed_paragraphs_result.data_frame)
-        selected_paragraph_count = len(target_paragraph_ids)
-        selected_count_error = _validate_selected_count(
-            expected_selected_count=selected_paragraph_count,
-            records=gui_records,
-        )
-        if selected_count_error is not None:
-            failure_payload = _build_failure_payload(
-                job_id=args.job_id,
-                started_at=started_at,
-                finished_at=_utc_now_iso(),
-                duration_seconds=round(
-                    (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
-                    6,
-                ),
+            if reconstructed_sentences_result.data_frame is None:
+                error_summary = _build_error_summary_from_result_issues(
+                    reconstructed_sentences_result.issues,
+                    "sentence metadata read failed",
+                )
+                failure_payload = _build_failure_payload(
+                    job_id=args.job_id,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    duration_seconds=round(
+                        (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                        6,
+                    ),
+                    db_path=db_path,
+                    filter_config_path=filter_config_path,
+                    output_csv_path=output_csv_path,
+                    analysis_unit=analysis_unit,
+                    warning_messages=_serialize_warning_messages(
+                        warning_sources + reconstructed_sentences_result.issues
+                    ),
+                    error_summary=error_summary,
+                )
+                _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+                print(error_summary, file=sys.stderr)
+                return 1
+            reconstructed_sentences_export_df = build_reconstructed_sentences_export_df(
+                reconstructed_sentences_df=reconstructed_sentences_result.data_frame,
+            )
+            if output_format == "csv":
+                reconstructed_sentences_export_df.write_csv(output_csv_path)
+            gui_records = build_sentence_gui_records(reconstructed_sentences_result.data_frame)
+            selected_paragraph_count = len(target_paragraph_ids)
+            selected_sentence_count = len(target_sentence_ids)
+            target_paragraph_count = paragraph_match_summary_df.height
+            selected_count_error = _validate_selected_count(
+                expected_selected_count=selected_sentence_count,
+                records=gui_records,
+                count_label="selectedSentenceCount",
+            )
+            if selected_count_error is not None:
+                failure_payload = _build_failure_payload(
+                    job_id=args.job_id,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    duration_seconds=round(
+                        (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                        6,
+                    ),
+                    db_path=db_path,
+                    filter_config_path=filter_config_path,
+                    output_csv_path=output_csv_path,
+                    analysis_unit=analysis_unit,
+                    warning_messages=_serialize_warning_messages(warning_sources),
+                    error_summary=selected_count_error,
+                )
+                _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+                if output_format == "json":
+                    _emit_json_payload(_build_json_response_payload(meta=failure_payload))
+                print(selected_count_error, file=sys.stderr)
+                return 1
+            serialized_warning_messages = _serialize_warning_messages(warning_sources)
+        else:
+            selected_tokens_with_position_df = build_tokens_with_position_df(
+                tokens_df=analysis_tokens_df,
+                sentences_df=analysis_sentences_df,
+                paragraph_ids=target_paragraph_ids,
+                target_forms=None,
+            )
+            condition_hit_result = build_condition_hit_result(
+                tokens_with_position_df=selected_tokens_with_position_df,
+                cooccurrence_conditions=filter_config.cooccurrence_conditions,
+                distance_matching_mode=filter_config.distance_matching_mode,
+                distance_match_combination_cap=filter_config.distance_match_combination_cap,
+                distance_match_strict_safety_limit=filter_config.distance_match_strict_safety_limit,
+            )
+            token_annotations_df = build_token_annotations_df(
+                condition_hit_tokens_df=condition_hit_result.condition_hit_tokens_df,
+            )
+            reconstructed_paragraphs_base_df = build_rendered_paragraphs_df(
+                tokens_with_position_df=selected_tokens_with_position_df,
+                token_annotations_df=token_annotations_df,
+                paragraph_match_summary_df=paragraph_match_summary_df,
+            )
+            reconstructed_paragraphs_result = enrich_reconstructed_paragraphs_result(
                 db_path=db_path,
-                filter_config_path=filter_config_path,
-                output_csv_path=output_csv_path,
-                warning_messages=_serialize_warning_messages(
-                    load_filter_config_result_value.issues
-                    + manual_annotations_result_value.issues
-                    + condition_hit_result.warning_messages
-                ),
-                error_summary=selected_count_error,
+                reconstructed_paragraphs_base_df=reconstructed_paragraphs_base_df,
+                manual_annotation_summary_df=manual_annotations_result_value.paragraph_annotations_df,
             )
-            _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
-            if output_format == "json":
-                _emit_json_payload(_build_json_response_payload(meta=failure_payload))
-            print(selected_count_error, file=sys.stderr)
-            return 1
-        if output_format == "csv":
-            reconstructed_paragraphs_export_df.write_csv(output_csv_path)
+            if reconstructed_paragraphs_result.data_frame is None:
+                error_summary = _build_error_summary_from_result_issues(
+                    reconstructed_paragraphs_result.issues,
+                    "paragraph metadata read failed",
+                )
+                failure_payload = _build_failure_payload(
+                    job_id=args.job_id,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    duration_seconds=round(
+                        (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                        6,
+                    ),
+                    db_path=db_path,
+                    filter_config_path=filter_config_path,
+                    output_csv_path=output_csv_path,
+                    analysis_unit=analysis_unit,
+                    warning_messages=_serialize_warning_messages(
+                        warning_sources + condition_hit_result.warning_messages + reconstructed_paragraphs_result.issues
+                    ),
+                    error_summary=error_summary,
+                )
+                _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+                print(error_summary, file=sys.stderr)
+                return 1
+            reconstructed_paragraphs_export_df = build_reconstructed_paragraphs_export_df(
+                reconstructed_paragraphs_df=reconstructed_paragraphs_result.data_frame,
+            )
+            gui_records = build_gui_records(reconstructed_paragraphs_result.data_frame)
+            selected_paragraph_count = len(target_paragraph_ids)
+            selected_sentence_count = len(target_sentence_ids)
+            selected_count_error = _validate_selected_count(
+                expected_selected_count=selected_paragraph_count,
+                records=gui_records,
+            )
+            if selected_count_error is not None:
+                failure_payload = _build_failure_payload(
+                    job_id=args.job_id,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    duration_seconds=round(
+                        (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
+                        6,
+                    ),
+                    db_path=db_path,
+                    filter_config_path=filter_config_path,
+                    output_csv_path=output_csv_path,
+                    analysis_unit=analysis_unit,
+                    warning_messages=_serialize_warning_messages(
+                        warning_sources + condition_hit_result.warning_messages
+                    ),
+                    error_summary=selected_count_error,
+                )
+                _write_meta_json(output_meta_json_path=output_meta_json_path, payload=failure_payload)
+                if output_format == "json":
+                    _emit_json_payload(_build_json_response_payload(meta=failure_payload))
+                print(selected_count_error, file=sys.stderr)
+                return 1
+            if output_format == "csv":
+                reconstructed_paragraphs_export_df.write_csv(output_csv_path)
+            target_paragraph_count = paragraph_match_summary_df.height
+            serialized_warning_messages = _serialize_warning_messages(
+                warning_sources + condition_hit_result.warning_messages
+            )
 
         finished_at = _utc_now_iso()
         duration_seconds = round(
             (datetime.now(timezone.utc) - start_timestamp).total_seconds(),
             6,
-        )
-        serialized_warning_messages = _serialize_warning_messages(
-            load_filter_config_result_value.issues
-            + manual_annotations_result_value.issues
-            + condition_hit_result.warning_messages
         )
         success_payload = _build_success_payload(
             job_id=args.job_id,
@@ -464,8 +574,10 @@ def run_analysis_job(args: Namespace) -> int:
             db_path=db_path,
             filter_config_path=filter_config_path,
             output_csv_path=output_csv_path,
-            target_paragraph_count=paragraph_match_summary_df.height,
+            analysis_unit=analysis_unit,
+            target_paragraph_count=target_paragraph_count,
             selected_paragraph_count=selected_paragraph_count,
+            selected_sentence_count=selected_sentence_count,
             warning_messages=serialized_warning_messages,
         )
         _write_meta_json(output_meta_json_path=output_meta_json_path, payload=success_payload)
@@ -493,6 +605,7 @@ def run_analysis_job(args: Namespace) -> int:
             db_path=db_path,
             filter_config_path=filter_config_path,
             output_csv_path=output_csv_path,
+            analysis_unit=analysis_unit,
             warning_messages=[],
             error_summary=str(exc),
         )
@@ -508,7 +621,6 @@ def run_analysis_job(args: Namespace) -> int:
             _emit_json_payload(_build_json_response_payload(meta=failure_payload))
         print(str(exc), file=sys.stderr)
         return 1
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()

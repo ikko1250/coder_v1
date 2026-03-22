@@ -6,6 +6,7 @@ import polars as pl
 
 from .condition_model import DataAccessResult
 from .data_access import read_paragraph_document_metadata_result
+from .data_access import read_sentence_document_metadata_result
 
 GUI_RECORD_COLUMNS = [
     "paragraph_id",
@@ -28,6 +29,23 @@ GUI_RECORD_COLUMNS = [
     "manual_annotation_count",
     "manual_annotation_pairs_text",
     "manual_annotation_namespaces_text",
+]
+SENTENCE_GUI_RECORD_COLUMNS = [
+    "sentence_id",
+    "paragraph_id",
+    "document_id",
+    "municipality_name",
+    "ordinance_or_rule",
+    "doc_type",
+    "sentence_no_in_paragraph",
+    "sentence_no_in_document",
+    "sentence_text",
+    "sentence_text_tagged",
+    "matched_condition_ids_text",
+    "matched_categories_text",
+    "match_group_ids_text",
+    "match_group_count",
+    "annotated_token_count",
 ]
 MANUAL_ANNOTATION_EXPORT_COLUMNS = [
     "manual_annotation_count",
@@ -281,3 +299,125 @@ def build_gui_records(
         {key: str(value) for key, value in record.items()}
         for record in build_gui_records_df(reconstructed_paragraphs_df).to_dicts()
     ]
+
+
+def build_sentence_gui_records_df(
+    reconstructed_sentences_df: pl.DataFrame,
+) -> pl.DataFrame:
+    export_df = build_reconstructed_sentences_export_df(reconstructed_sentences_df)
+    return (
+        export_df
+        .select(SENTENCE_GUI_RECORD_COLUMNS)
+        .with_columns([
+            pl.col("sentence_id").cast(pl.String).fill_null(""),
+            pl.col("paragraph_id").cast(pl.String).fill_null(""),
+            pl.col("document_id").cast(pl.String).fill_null(""),
+            pl.col("municipality_name").cast(pl.String).fill_null(""),
+            pl.col("ordinance_or_rule").cast(pl.String).fill_null(""),
+            pl.col("doc_type").cast(pl.String).fill_null(""),
+            pl.col("sentence_no_in_paragraph").cast(pl.String).fill_null(""),
+            pl.col("sentence_no_in_document").cast(pl.String).fill_null(""),
+            pl.col("sentence_text").cast(pl.String).fill_null(""),
+            pl.col("sentence_text_tagged").cast(pl.String).fill_null(""),
+            pl.col("matched_condition_ids_text").cast(pl.String).fill_null(""),
+            pl.col("matched_categories_text").cast(pl.String).fill_null(""),
+            pl.col("match_group_ids_text").cast(pl.String).fill_null(""),
+            pl.col("match_group_count").cast(pl.String).fill_null(""),
+            pl.col("annotated_token_count").cast(pl.String).fill_null(""),
+        ])
+    )
+
+
+def build_sentence_gui_records(
+    reconstructed_sentences_df: pl.DataFrame,
+) -> list[dict[str, str]]:
+    return [
+        {key: str(value) for key, value in record.items()}
+        for record in build_sentence_gui_records_df(reconstructed_sentences_df).to_dicts()
+    ]
+
+
+def enrich_reconstructed_sentences_result(
+    db_path: Path,
+    reconstructed_sentences_base_df: pl.DataFrame,
+) -> DataAccessResult:
+    sentence_ids = (
+        reconstructed_sentences_base_df.get_column("sentence_id").to_list()
+        if not reconstructed_sentences_base_df.is_empty()
+        else []
+    )
+    sentence_metadata_result = read_sentence_document_metadata_result(
+        db_path=db_path,
+        sentence_ids=sentence_ids,
+    )
+    if sentence_metadata_result.data_frame is None:
+        return DataAccessResult(
+            data_frame=None,
+            issues=sentence_metadata_result.issues,
+        )
+
+    return DataAccessResult(
+        data_frame=(
+            reconstructed_sentences_base_df
+            .join(
+                sentence_metadata_result.data_frame,
+                on=["sentence_id", "paragraph_id"],
+                how="left",
+                suffix="_metadata",
+            )
+            .with_columns([
+                pl.when(pl.col("doc_type").fill_null("").str.contains("施行規則", literal=True))
+                .then(pl.lit("施行規則"))
+                .when(pl.col("doc_type").fill_null("").str.contains("条例", literal=True))
+                .then(pl.lit("条例"))
+                .otherwise(pl.lit("不明"))
+                .alias("ordinance_or_rule"),
+                pl.col("sentence_no_in_document").fill_null(0).cast(pl.Int64),
+            ])
+            .select([
+                "sentence_id",
+                "paragraph_id",
+                "document_id",
+                "municipality_name",
+                "ordinance_or_rule",
+                "doc_type",
+                "sentence_no_in_paragraph",
+                "sentence_no_in_document",
+                "sentence_text",
+                "sentence_text_tagged",
+                "sentence_text_highlight_html",
+                "matched_condition_ids",
+                "matched_condition_ids_text",
+                "matched_categories",
+                "matched_categories_text",
+                "match_group_ids",
+                "match_group_ids_text",
+                "match_group_count",
+                "annotated_token_count",
+            ])
+        ),
+        issues=[],
+    )
+
+
+def build_reconstructed_sentences_export_df(
+    reconstructed_sentences_df: pl.DataFrame,
+) -> pl.DataFrame:
+    return reconstructed_sentences_df.select([
+        "sentence_id",
+        "paragraph_id",
+        "document_id",
+        "municipality_name",
+        "ordinance_or_rule",
+        "doc_type",
+        "sentence_no_in_paragraph",
+        "sentence_no_in_document",
+        "sentence_text",
+        "sentence_text_tagged",
+        "sentence_text_highlight_html",
+        "matched_condition_ids_text",
+        "matched_categories_text",
+        "match_group_ids_text",
+        "match_group_count",
+        "annotated_token_count",
+    ])

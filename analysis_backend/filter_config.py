@@ -83,6 +83,18 @@ def load_filter_config_result(filter_config_path: Path) -> LoadFilterConfigResul
                 )
             )
 
+    raw_analysis_unit = str(raw_config.get("analysis_unit", "paragraph")).strip().lower()
+    analysis_unit = raw_analysis_unit if raw_analysis_unit in {"paragraph", "sentence"} else "paragraph"
+    if raw_analysis_unit not in {"paragraph", "sentence"}:
+        issues.append(
+            _build_filter_config_issue(
+                code="analysis_unit_defaulted",
+                severity="warning",
+                message="Unknown analysis_unit was replaced with 'paragraph'.",
+                field_name="analysis_unit",
+            )
+        )
+
     raw_matching_mode = str(raw_config.get("distance_matching_mode", "auto-approx")).strip().lower()
     distance_matching_mode = (
         raw_matching_mode
@@ -143,6 +155,7 @@ def load_filter_config_result(filter_config_path: Path) -> LoadFilterConfigResul
             cooccurrence_conditions=raw_conditions,
             loaded_condition_count=len(raw_conditions),
             max_reconstructed_paragraphs=max_reconstructed_paragraphs,
+            analysis_unit=analysis_unit,
             distance_matching_mode=distance_matching_mode,
             distance_match_combination_cap=distance_match_combination_cap,
             distance_match_strict_safety_limit=distance_match_strict_safety_limit,

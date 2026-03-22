@@ -39,6 +39,22 @@ RENDERED_PARAGRAPH_SCHEMA = {
     "match_group_count": pl.UInt32,
     "annotated_token_count": pl.UInt32,
 }
+RENDERED_SENTENCE_SCHEMA = {
+    "sentence_id": pl.Int64,
+    "paragraph_id": pl.Int64,
+    "sentence_no_in_paragraph": pl.Int64,
+    "sentence_text": pl.String,
+    "sentence_text_tagged": pl.String,
+    "sentence_text_highlight_html": pl.String,
+    "matched_condition_ids": pl.List(pl.String),
+    "matched_condition_ids_text": pl.String,
+    "matched_categories": pl.List(pl.String),
+    "matched_categories_text": pl.String,
+    "match_group_ids": pl.List(pl.String),
+    "match_group_ids_text": pl.String,
+    "match_group_count": pl.UInt32,
+    "annotated_token_count": pl.UInt32,
+}
 
 
 def _empty_token_annotations_df() -> pl.DataFrame:
@@ -47,6 +63,10 @@ def _empty_token_annotations_df() -> pl.DataFrame:
 
 def _empty_rendered_paragraphs_df() -> pl.DataFrame:
     return empty_df(RENDERED_PARAGRAPH_SCHEMA)
+
+
+def _empty_rendered_sentences_df() -> pl.DataFrame:
+    return empty_df(RENDERED_SENTENCE_SCHEMA)
 
 
 def _unique_in_order(values: list[str]) -> list[str]:
@@ -384,4 +404,106 @@ def build_rendered_paragraphs_df(
     return _merge_paragraph_match_summary(
         rendered_paragraphs_df=rendered_paragraphs_df,
         paragraph_match_summary_df=paragraph_match_summary_df,
+    )
+
+
+def build_rendered_sentences_df(
+    tokens_with_position_df: pl.DataFrame,
+    token_annotations_df: pl.DataFrame,
+    sentence_match_summary_df: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    if tokens_with_position_df.is_empty():
+        return _empty_rendered_sentences_df()
+
+    annotation_lookup = _build_annotation_lookup(token_annotations_df)
+    sentence_rows: list[dict[str, object]] = []
+    for sentence_df in tokens_with_position_df.sort([
+        PARAGRAPH_ID_COL,
+        SENTENCE_NO_COL,
+        TOKEN_NO_COL,
+    ]).partition_by([PARAGRAPH_ID_COL, SENTENCE_ID_COL], maintain_order=True):
+        sentence_id = int(sentence_df.get_column(SENTENCE_ID_COL)[0])
+        paragraph_id = int(sentence_df.get_column(PARAGRAPH_ID_COL)[0])
+        sentence_fragment = _render_sentence_fragment(
+            sentence_df=sentence_df,
+            annotation_lookup=annotation_lookup,
+        )
+        unique_match_group_ids = _unique_in_order(sentence_fragment["match_group_ids"])
+        sentence_rows.append(
+            {
+                "sentence_id": sentence_id,
+                "paragraph_id": paragraph_id,
+                "sentence_no_in_paragraph": int(sentence_fragment["sentence_no"]),
+                "sentence_text": sentence_fragment["plain_text"],
+                "sentence_text_tagged": sentence_fragment["tagged_text"],
+                "sentence_text_highlight_html": sentence_fragment["html_text"],
+                "matched_condition_ids": _unique_in_order(sentence_fragment["matched_condition_ids"]),
+                "matched_condition_ids_text": ", ".join(
+                    _unique_in_order(sentence_fragment["matched_condition_ids"])
+                ),
+                "matched_categories": _unique_in_order(sentence_fragment["matched_categories"]),
+                "matched_categories_text": ", ".join(
+                    _unique_in_order(sentence_fragment["matched_categories"])
+                ),
+                "match_group_ids": unique_match_group_ids,
+                "match_group_ids_text": ", ".join(unique_match_group_ids),
+                "match_group_count": len(unique_match_group_ids),
+                "annotated_token_count": int(sentence_fragment["annotated_token_count"]),
+            }
+        )
+
+    rendered_sentences_df = (
+        pl.DataFrame(sentence_rows)
+        .with_columns([
+            pl.col("sentence_id").cast(pl.Int64),
+            pl.col("paragraph_id").cast(pl.Int64),
+            pl.col("sentence_no_in_paragraph").cast(pl.Int64),
+            pl.col("match_group_count").cast(pl.UInt32),
+            pl.col("annotated_token_count").cast(pl.UInt32),
+        ])
+        .sort(["paragraph_id", "sentence_no_in_paragraph", "sentence_id"])
+    )
+    if sentence_match_summary_df is None or sentence_match_summary_df.is_empty():
+        return rendered_sentences_df
+
+    summary_columns = [
+        "sentence_id",
+        "paragraph_id",
+        "matched_condition_ids",
+        "matched_condition_ids_text",
+        "matched_categories",
+        "matched_categories_text",
+    ]
+    available_summary_columns = [
+        column_name for column_name in summary_columns if column_name in sentence_match_summary_df.columns
+    ]
+    if {"sentence_id", "paragraph_id"} - set(available_summary_columns):
+        return rendered_sentences_df
+    merged_df = rendered_sentences_df.join(
+        sentence_match_summary_df.select(available_summary_columns),
+        on=["sentence_id", "paragraph_id"],
+        how="left",
+        suffix="_summary",
+    )
+    return (
+        merged_df
+        .with_columns([
+            pl.when(pl.col("matched_condition_ids_summary").is_not_null())
+            .then(pl.col("matched_condition_ids_summary"))
+            .otherwise(pl.col("matched_condition_ids"))
+            .alias("matched_condition_ids"),
+            pl.when(pl.col("matched_condition_ids_text_summary").is_not_null())
+            .then(pl.col("matched_condition_ids_text_summary"))
+            .otherwise(pl.col("matched_condition_ids_text"))
+            .alias("matched_condition_ids_text"),
+            pl.when(pl.col("matched_categories_summary").is_not_null())
+            .then(pl.col("matched_categories_summary"))
+            .otherwise(pl.col("matched_categories"))
+            .alias("matched_categories"),
+            pl.when(pl.col("matched_categories_text_summary").is_not_null())
+            .then(pl.col("matched_categories_text_summary"))
+            .otherwise(pl.col("matched_categories_text"))
+            .alias("matched_categories_text"),
+        ])
+        .select(list(RENDERED_SENTENCE_SCHEMA.keys()))
     )

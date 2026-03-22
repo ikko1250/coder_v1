@@ -12,6 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) struct FilterConfigDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) condition_match_logic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) analysis_unit: Option<String>,
     #[serde(
         default,
         deserialize_with = "deserialize_optional_u32_from_any",
@@ -120,12 +122,13 @@ pub(crate) fn load_condition_document(
 ) -> Result<(FilterConfigDocument, ConditionDocumentLoadInfo), String> {
     let json_text = fs::read_to_string(path)
         .map_err(|error| format!("条件 JSON を読めませんでした: {} ({error})", path.display()))?;
-    let mut document = serde_json::from_str::<FilterConfigDocument>(&json_text).map_err(|error| {
-        format!(
-            "条件 JSON の読込に失敗しました: {} ({error})",
-            path.display()
-        )
-    })?;
+    let mut document =
+        serde_json::from_str::<FilterConfigDocument>(&json_text).map_err(|error| {
+            format!(
+                "条件 JSON の読込に失敗しました: {} ({error})",
+                path.display()
+            )
+        })?;
     let load_info = project_legacy_conditions_for_editor(&mut document);
     Ok((document, load_info))
 }
@@ -167,6 +170,7 @@ pub(crate) fn sanitize_document_for_save(
     document: &mut FilterConfigDocument,
 ) -> Result<(), String> {
     sanitize_optional_string(&mut document.condition_match_logic);
+    sanitize_analysis_unit(&mut document.analysis_unit);
     sanitize_optional_string(&mut document.distance_matching_mode);
 
     for (index, condition) in document.cooccurrence_conditions.iter_mut().enumerate() {
@@ -242,8 +246,12 @@ pub(crate) fn build_default_condition_item() -> ConditionEditorItem {
 }
 
 fn write_condition_document(path: &Path, document: &FilterConfigDocument) -> Result<(), String> {
-    let file = File::create(path)
-        .map_err(|error| format!("条件 JSON の temp file を作成できません: {} ({error})", path.display()))?;
+    let file = File::create(path).map_err(|error| {
+        format!(
+            "条件 JSON の temp file を作成できません: {} ({error})",
+            path.display()
+        )
+    })?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer_pretty(&mut writer, document)
         .map_err(|error| format!("条件 JSON の書き込みに失敗しました: {error}"))?;
@@ -280,6 +288,15 @@ fn sanitize_optional_string(value: &mut Option<String>) {
             *value = None;
         }
     }
+}
+
+fn sanitize_analysis_unit(value: &mut Option<String>) {
+    sanitize_optional_string(value);
+    let normalized = match value.as_deref() {
+        Some(raw_value) if raw_value.eq_ignore_ascii_case("sentence") => "sentence",
+        Some(_) | None => "paragraph",
+    };
+    *value = Some(normalized.to_string());
 }
 
 fn sanitize_string_list(values: &mut Vec<String>) {
@@ -319,6 +336,8 @@ fn project_legacy_conditions_for_editor(
     document: &mut FilterConfigDocument,
 ) -> ConditionDocumentLoadInfo {
     let mut projected_legacy_condition_count = 0usize;
+
+    sanitize_analysis_unit(&mut document.analysis_unit);
 
     for condition in &mut document.cooccurrence_conditions {
         sanitize_optional_string(&mut condition.overall_search_scope);
@@ -403,11 +422,12 @@ fn normalize_condition_schema_for_save(
 
     if !condition.form_groups.is_empty() {
         if should_save_as_legacy(condition) {
-            let first_group = condition
-                .form_groups
-                .first()
-                .cloned()
-                .ok_or_else(|| format!("condition {} の group 変換に失敗しました", condition.condition_id))?;
+            let first_group = condition.form_groups.first().cloned().ok_or_else(|| {
+                format!(
+                    "condition {} の group 変換に失敗しました",
+                    condition.condition_id
+                )
+            })?;
             condition.forms = first_group.forms;
             condition.form_match_logic = Some(match first_group.match_logic.as_deref() {
                 Some("or") => "any".to_string(),
@@ -467,8 +487,10 @@ fn should_save_as_legacy(condition: &ConditionEditorItem) -> bool {
         return false;
     };
 
-    matches!(group.match_logic.as_deref(), None | Some("and") | Some("or"))
-        && group.combine_logic.is_none()
+    matches!(
+        group.match_logic.as_deref(),
+        None | Some("and") | Some("or")
+    ) && group.combine_logic.is_none()
         && group.anchor_form.is_none()
         && group.exclude_forms_any.is_empty()
 }
@@ -493,9 +515,7 @@ where
     deserialize_optional_integer_from_any(deserializer)
 }
 
-fn deserialize_optional_integer_from_any<'de, D>(
-    deserializer: D,
-) -> Result<Option<i64>, D::Error>
+fn deserialize_optional_integer_from_any<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -519,5 +539,74 @@ where
         Some(other) => Err(D::Error::custom(format!(
             "expected integer-compatible value, got {other}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_document_sets_default_analysis_unit_to_paragraph() {
+        let mut document = FilterConfigDocument {
+            cooccurrence_conditions: vec![ConditionEditorItem {
+                condition_id: "condition_1".to_string(),
+                forms: vec!["term".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        sanitize_document_for_save(&mut document).expect("document should sanitize");
+
+        assert_eq!(document.analysis_unit.as_deref(), Some("paragraph"));
+    }
+
+    #[test]
+    fn sanitize_document_normalizes_invalid_analysis_unit_to_paragraph() {
+        let mut document = FilterConfigDocument {
+            analysis_unit: Some(" token ".to_string()),
+            cooccurrence_conditions: vec![ConditionEditorItem {
+                condition_id: "condition_1".to_string(),
+                forms: vec!["term".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        sanitize_document_for_save(&mut document).expect("document should sanitize");
+
+        assert_eq!(document.analysis_unit.as_deref(), Some("paragraph"));
+    }
+
+    #[test]
+    fn save_and_load_round_trip_preserves_sentence_analysis_unit() {
+        let path = std::env::temp_dir().join(format!(
+            "condition-editor-roundtrip-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let document = FilterConfigDocument {
+            analysis_unit: Some("sentence".to_string()),
+            cooccurrence_conditions: vec![ConditionEditorItem {
+                condition_id: "condition_1".to_string(),
+                forms: vec!["term".to_string()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        save_condition_document_atomic(&path, &document).expect("document should save");
+        let saved_text = fs::read_to_string(&path).expect("saved document should be readable");
+        assert!(saved_text.contains(r#""analysis_unit": "sentence""#));
+
+        let (loaded_document, _load_info) =
+            load_condition_document(&path).expect("document should load");
+        assert_eq!(loaded_document.analysis_unit.as_deref(), Some("sentence"));
+
+        fs::remove_file(&path).expect("temp file should be removable");
     }
 }

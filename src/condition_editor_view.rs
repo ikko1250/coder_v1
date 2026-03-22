@@ -176,8 +176,7 @@ pub(crate) fn draw_condition_editor_list_panel(
                 } else {
                     for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
                         let selected = current_selection == Some(index);
-                        let categories_preview =
-                            summarize_condition_list(&condition.categories, 2);
+                        let categories_preview = summarize_condition_list(&condition.categories, 2);
                         let label = format!(
                             "{}. {} [{}] groups:{} forms:{} filters:{} refs:{}",
                             index + 1,
@@ -276,6 +275,39 @@ pub(crate) fn draw_condition_editor_selected_condition(
     response
 }
 
+pub(crate) fn draw_condition_editor_global_settings(
+    ui: &mut Ui,
+    document: &mut FilterConfigDocument,
+) -> bool {
+    let mut changed = false;
+
+    ui.group(|ui| {
+        ui.label(RichText::new("全体設定").strong());
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                egui::Label::new("analysis_unit"),
+            );
+            changed |= edit_analysis_unit_choice(
+                ui,
+                &mut document.analysis_unit,
+                CONDITION_EDITOR_CHOICE_WIDTH,
+            );
+        });
+        ui.small(
+            "analysis_unit は出力単位の設定です。condition / group の search_scope とは別に扱われます。",
+        );
+        if document.analysis_unit.as_deref() == Some("sentence") {
+            ui.small(
+                "sentence を選ぶと出力は文単位になります。paragraph 前提の結果確認や downstream 処理では差分に注意してください。",
+            );
+        }
+    });
+    ui.add_space(8.0);
+
+    changed
+}
+
 pub(crate) fn summarize_condition_list(values: &[String], preview_count: usize) -> String {
     if values.is_empty() {
         return "-".to_string();
@@ -362,7 +394,10 @@ pub(crate) fn draw_form_group_editor(
                         &logic_options_group_n
                     };
                     for option in options {
-                        if ui.selectable_label(selected_logic == *option, *option).clicked() {
+                        if ui
+                            .selectable_label(selected_logic == *option, *option)
+                            .clicked()
+                        {
                             set_form_group_logic(group, group_index, option);
                             changed = true;
                         }
@@ -479,7 +514,10 @@ pub(crate) fn edit_optional_choice(
                 changed = true;
             }
             for option in options {
-                if ui.selectable_label(current_value == *option, *option).clicked() {
+                if ui
+                    .selectable_label(current_value == *option, *option)
+                    .clicked()
+                {
                     *value = Some((*option).to_string());
                     changed = true;
                 }
@@ -489,11 +527,32 @@ pub(crate) fn edit_optional_choice(
     changed
 }
 
-pub(crate) fn draw_string_list_editor(
-    ui: &mut Ui,
-    label: &str,
-    values: &mut Vec<String>,
-) -> bool {
+fn edit_analysis_unit_choice(ui: &mut Ui, value: &mut Option<String>, width: f32) -> bool {
+    let current_value = match value.as_deref() {
+        Some(raw_value) if raw_value.eq_ignore_ascii_case("sentence") => "sentence",
+        _ => "paragraph",
+    };
+    let mut changed = false;
+
+    egui::ComboBox::from_id_salt(ui.next_auto_id())
+        .width(width)
+        .selected_text(current_value)
+        .show_ui(ui, |ui| {
+            for option in ["paragraph", "sentence"] {
+                if ui
+                    .selectable_label(current_value == option, option)
+                    .clicked()
+                {
+                    *value = Some(option.to_string());
+                    changed = true;
+                }
+            }
+        });
+
+    changed
+}
+
+pub(crate) fn draw_string_list_editor(ui: &mut Ui, label: &str, values: &mut Vec<String>) -> bool {
     let mut changed = false;
     let mut remove_index = None;
 
@@ -760,12 +819,7 @@ fn edit_anchor_form_choice(
     changed
 }
 
-fn edit_optional_i64(
-    ui: &mut Ui,
-    value: &mut Option<i64>,
-    default_value: i64,
-    width: f32,
-) -> bool {
+fn edit_optional_i64(ui: &mut Ui, value: &mut Option<i64>, default_value: i64, width: f32) -> bool {
     let mut changed = false;
     let mut enabled = value.is_some();
     if ui.checkbox(&mut enabled, "有効").changed() {

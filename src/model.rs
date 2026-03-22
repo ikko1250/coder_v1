@@ -1,15 +1,46 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AnalysisUnit {
+    #[default]
+    Paragraph,
+    Sentence,
+}
+
+impl AnalysisUnit {
+    pub(crate) fn id_column_name(self) -> &'static str {
+        match self {
+            Self::Paragraph => "paragraph_id",
+            Self::Sentence => "sentence_id",
+        }
+    }
+
+    pub(crate) fn count_label(self) -> &'static str {
+        match self {
+            Self::Paragraph => "段落",
+            Self::Sentence => "文",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnalysisRecord {
     pub(crate) row_no: usize,
+    pub(crate) analysis_unit: AnalysisUnit,
     pub(crate) paragraph_id: String,
+    pub(crate) sentence_id: String,
     pub(crate) document_id: String,
     pub(crate) municipality_name: String,
     pub(crate) ordinance_or_rule: String,
     pub(crate) doc_type: String,
     pub(crate) sentence_count: String,
+    pub(crate) sentence_no_in_paragraph: String,
+    pub(crate) sentence_no_in_document: String,
+    pub(crate) sentence_text: String,
+    pub(crate) sentence_text_tagged: String,
     pub(crate) paragraph_text: String,
     pub(crate) paragraph_text_tagged: String,
     pub(crate) matched_condition_ids_text: String,
@@ -24,6 +55,37 @@ pub(crate) struct AnalysisRecord {
     pub(crate) manual_annotation_count: String,
     pub(crate) manual_annotation_pairs_text: String,
     pub(crate) manual_annotation_namespaces_text: String,
+}
+
+impl AnalysisRecord {
+    pub(crate) fn unit_id(&self) -> &str {
+        match self.analysis_unit {
+            AnalysisUnit::Paragraph => &self.paragraph_id,
+            AnalysisUnit::Sentence => &self.sentence_id,
+        }
+    }
+
+    pub(crate) fn primary_text(&self) -> &str {
+        match self.analysis_unit {
+            AnalysisUnit::Paragraph => &self.paragraph_text,
+            AnalysisUnit::Sentence => &self.sentence_text,
+        }
+    }
+
+    pub(crate) fn primary_text_tagged(&self) -> &str {
+        match self.analysis_unit {
+            AnalysisUnit::Paragraph => &self.paragraph_text_tagged,
+            AnalysisUnit::Sentence => &self.sentence_text_tagged,
+        }
+    }
+
+    pub(crate) fn supports_db_viewer(&self) -> bool {
+        self.analysis_unit == AnalysisUnit::Paragraph
+    }
+
+    pub(crate) fn supports_manual_annotation(&self) -> bool {
+        self.analysis_unit == AnalysisUnit::Paragraph
+    }
 }
 
 #[derive(Clone, Debug)]
