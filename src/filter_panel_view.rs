@@ -186,6 +186,8 @@ fn draw_filter_option_item(
                                 [label_width, layout_height],
                                 egui::Label::new(label_text.as_str())
                                     .truncate()
+                                    .selectable(false)
+                                    .halign(egui::Align::LEFT)
                                     .sense(egui::Sense::click()),
                             );
                             r
