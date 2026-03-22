@@ -90,9 +90,18 @@ mod tests {
         assert_eq!(segments[0].text, "前文");
         assert!(segments[1].is_hit);
         assert_eq!(segments[1].text, "抑制区域");
-        assert_eq!(segments[1].attributes.get("condition_ids"), Some(&"cond\"1".to_string()));
-        assert_eq!(segments[1].attributes.get("categories"), Some(&"cat\\1".to_string()));
-        assert_eq!(segments[1].attributes.get("groups"), Some(&"group\\\"1".to_string()));
+        assert_eq!(
+            segments[1].attributes.get("condition_ids"),
+            Some(&"cond\"1".to_string())
+        );
+        assert_eq!(
+            segments[1].attributes.get("categories"),
+            Some(&"cat\\1".to_string())
+        );
+        assert_eq!(
+            segments[1].attributes.get("groups"),
+            Some(&"group\\\"1".to_string())
+        );
         assert!(!segments[2].is_hit);
         assert_eq!(segments[2].text, "後文");
     }

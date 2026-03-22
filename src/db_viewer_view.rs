@@ -19,10 +19,8 @@ pub(crate) fn render_db_viewer_contents(
             RichText::new("表示中テキスト と DB 中心段落は不一致")
                 .color(Color32::from_rgb(200, 64, 64))
         }
-        Some(_) => {
-            RichText::new("表示中テキスト と DB 中心段落は一致")
-                .color(Color32::from_rgb(70, 130, 70))
-        }
+        Some(_) => RichText::new("表示中テキスト と DB 中心段落は一致")
+            .color(Color32::from_rgb(70, 130, 70)),
         None => RichText::new("DB 中心段落未取得").italics(),
     };
     let body_scroll_id = state
@@ -42,9 +40,7 @@ pub(crate) fn render_db_viewer_contents(
     if let Some(context) = &state.context {
         ui.label(format!(
             "paragraph_id: {} / document_id: {} / paragraph_no: {}",
-            context.center.paragraph_id,
-            context.center.document_id,
-            context.center.paragraph_no
+            context.center.paragraph_id, context.center.document_id, context.center.paragraph_no
         ));
     } else if let Some(paragraph_id) = state.source_paragraph_id {
         ui.label(format!("paragraph_id: {}", paragraph_id));

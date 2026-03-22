@@ -39,7 +39,10 @@ pub(crate) fn fetch_paragraph_context(
         DEFAULT_CONTEXT_RADIUS,
     )?;
 
-    if !paragraphs.iter().any(|paragraph| paragraph.paragraph_id == center.paragraph_id) {
+    if !paragraphs
+        .iter()
+        .any(|paragraph| paragraph.paragraph_id == center.paragraph_id)
+    {
         return Err(format!(
             "中心段落が前後コンテキストに含まれていません: paragraph_id={}",
             center.paragraph_id
@@ -131,7 +134,10 @@ fn open_read_only_connection(db_path: &Path) -> Result<Connection, String> {
         .map_err(|error| format!("DB を読み取り専用で開けませんでした: {error}"))
 }
 
-fn fetch_center_paragraph(connection: &Connection, paragraph_id: i64) -> Result<DbParagraph, String> {
+fn fetch_center_paragraph(
+    connection: &Connection,
+    paragraph_id: i64,
+) -> Result<DbParagraph, String> {
     let mut statement = connection
         .prepare(
             "SELECT paragraph_id, document_id, paragraph_no, paragraph_text
@@ -142,7 +148,12 @@ fn fetch_center_paragraph(connection: &Connection, paragraph_id: i64) -> Result<
 
     statement
         .query_row([paragraph_id], read_db_paragraph)
-        .map_err(|error| format!("paragraph_id={} の中心段落取得に失敗しました: {error}", paragraph_id))
+        .map_err(|error| {
+            format!(
+                "paragraph_id={} の中心段落取得に失敗しました: {error}",
+                paragraph_id
+            )
+        })
 }
 
 fn read_db_paragraph(row: &Row<'_>) -> rusqlite::Result<DbParagraph> {
