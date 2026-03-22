@@ -324,6 +324,31 @@ def build_sentence_unit_filter_config(filter_config_path: Path) -> None:
     )
 
 
+def build_sentence_unit_overall_scope_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "analysis_unit": "sentence",
+        "condition_match_logic": "any",
+        "max_reconstructed_paragraphs": 10,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "suppress_area_sentence",
+                "categories": ["概念:抑制区域"],
+                "overall_search_scope": "sentence",
+                "form_groups": [
+                    {
+                        "forms": ["抑制", "区域"],
+                        "match_logic": "and",
+                    }
+                ],
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def build_warning_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "unexpected",
@@ -949,6 +974,42 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["sentence_id"], "11")
             self.assertEqual(rows[0]["sentence_text"], "抑制区域")
+            self.assertIn("[[HIT ", rows[0]["sentence_text_tagged"])
+
+    def test_run_analysis_job_keeps_highlights_for_overall_sentence_scope_conditions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_test_db(db_path)
+            build_sentence_unit_overall_scope_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="sentence-overall-scope-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="csv",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            csv_path = output_dir / "result-sentences.csv"
+            with csv_path.open(encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area_sentence")
             self.assertIn("[[HIT ", rows[0]["sentence_text_tagged"])
 
     def test_run_analysis_job_surfaces_matching_warnings_in_meta_json(self) -> None:
