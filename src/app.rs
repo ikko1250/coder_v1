@@ -77,7 +77,7 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
         value: tree_row_no_value,
     },
     TreeColumnSpec {
-        header: "paragraph_id",
+        header: "unit_id",
         build_column: build_tree_paragraph_id_column,
         value: tree_paragraph_id_value,
     },
@@ -404,6 +404,9 @@ impl App {
         let record = self
             .selected_record()
             .ok_or_else(|| "レコードが選択されていません".to_string())?;
+        if !record.supports_db_viewer() {
+            return Err("sentence 行では DB viewer は未対応です".to_string());
+        }
 
         record.paragraph_id.parse::<i64>().map_err(|error| {
             format!(
@@ -415,11 +418,14 @@ impl App {
 
     #[allow(dead_code)]
     fn prepare_db_viewer_state(&mut self) -> Result<(), String> {
-        let paragraph_id = self.selected_paragraph_id_for_db()?;
-        let source_paragraph_text = self
+        let selected_record = self
             .selected_record()
-            .map(|record| record.paragraph_text.clone())
             .ok_or_else(|| "レコードが選択されていません".to_string())?;
+        if !selected_record.supports_db_viewer() {
+            return Err("sentence 行では DB viewer は未対応です".to_string());
+        }
+        let paragraph_id = self.selected_paragraph_id_for_db()?;
+        let source_paragraph_text = selected_record.paragraph_text.clone();
 
         self.db_viewer_state.is_open = true;
         self.db_viewer_state.source_paragraph_id = Some(paragraph_id);
@@ -534,7 +540,9 @@ impl App {
     }
 
     fn annotation_save_enabled(&self) -> bool {
-        self.selected_record().is_some() && self.analysis_runtime_state.current_job.is_none()
+        self.selected_record()
+            .is_some_and(AnalysisRecord::supports_manual_annotation)
+            && self.analysis_runtime_state.current_job.is_none()
     }
 
     fn clear_annotation_editor_status(&mut self) {
@@ -552,6 +560,9 @@ impl App {
         let record = self
             .selected_record()
             .ok_or_else(|| "レコードが選択されていません".to_string())?;
+        if !record.supports_manual_annotation() {
+            return Err("manual annotation は paragraph 行のみ対応です".to_string());
+        }
 
         let paragraph_id = record.paragraph_id.trim();
         if paragraph_id.is_empty() {
@@ -724,7 +735,11 @@ impl App {
                     return segs.clone();
                 }
             }
-            let tagged = record.paragraph_text_tagged.clone();
+            let tagged = if record.primary_text_tagged().trim().is_empty() {
+                record.primary_text().to_string()
+            } else {
+                record.primary_text_tagged().to_string()
+            };
             let segs = parse_tagged_text(&tagged);
             self.cached_segments = Some((row_no, segs.clone()));
             segs
@@ -1062,8 +1077,10 @@ impl App {
         let source_label = format!("分析結果: {}", success.meta.job_id);
         self.replace_records(success.records, source_label);
         let mut summary = format!(
-            "{} 件抽出 / {:.2} 秒",
-            success.meta.selected_paragraph_count, success.meta.duration_seconds
+            "{}{}抽出 / {:.2} 秒",
+            success.meta.selected_unit_count(),
+            success.meta.analysis_unit.count_label(),
+            success.meta.duration_seconds
         );
         if warning_count > 0 {
             summary.push_str(&format!(" / 警告 {} 件", warning_count));
@@ -2431,7 +2448,10 @@ impl App {
 
     fn draw_detail(&mut self, ui: &mut Ui) {
         if let Some(record) = self.selected_record().cloned() {
-            self.draw_db_viewer_button(ui, true);
+            self.draw_db_viewer_button(ui, record.supports_db_viewer());
+            if !record.supports_db_viewer() {
+                ui.label("sentence 行では DB viewer は無効です。");
+            }
             ui.add_space(6.0);
             self.draw_record_summary(ui, &record);
             ui.separator();
@@ -2459,8 +2479,11 @@ impl App {
     fn draw_record_summary(&self, ui: &mut Ui, record: &AnalysisRecord) {
         ui.label(
             RichText::new(format!(
-                "{} / {} / paragraph_id={}",
-                record.municipality_name, record.ordinance_or_rule, record.paragraph_id
+                "{} / {} / {}={}",
+                record.municipality_name,
+                record.ordinance_or_rule,
+                record.analysis_unit.id_column_name(),
+                record.unit_id()
             ))
             .size(14.0)
             .strong(),
@@ -2468,8 +2491,24 @@ impl App {
 
         ui.add_space(6.0);
         ui.label(format!("document_id: {}", record.document_id));
+        ui.label(format!("paragraph_id: {}", record.paragraph_id));
+        if !record.sentence_id.trim().is_empty() {
+            ui.label(format!("sentence_id: {}", record.sentence_id));
+        }
         ui.label(format!("doc_type: {}", record.doc_type));
         ui.label(format!("sentence_count: {}", record.sentence_count));
+        if !record.sentence_no_in_paragraph.trim().is_empty() {
+            ui.label(format!(
+                "sentence_no_in_paragraph: {}",
+                record.sentence_no_in_paragraph
+            ));
+        }
+        if !record.sentence_no_in_document.trim().is_empty() {
+            ui.label(format!(
+                "sentence_no_in_document: {}",
+                record.sentence_no_in_document
+            ));
+        }
 
         ui.add_space(6.0);
         ui.label(format!("categories: {}", record.matched_categories_text));
@@ -2542,6 +2581,7 @@ impl App {
     }
 
     fn draw_annotation_editor_panel(&mut self, ui: &mut Ui, record: &AnalysisRecord) {
+        let annotation_supported = record.supports_manual_annotation();
         let annotation_summary = if record.manual_annotation_pairs_text.trim().is_empty() {
             "annotation なし".to_string()
         } else {
@@ -2556,6 +2596,9 @@ impl App {
         ui.group(|ui| {
             ui.label(RichText::new("annotation 追記").strong());
             ui.label(format!("保存先: {annotation_path_label}"));
+            if !annotation_supported {
+                ui.label("sentence 行では manual annotation editor は無効です。");
+            }
             ui.label(format!(
                 "現在件数: {} / namespaces: {}",
                 record.manual_annotation_count,
@@ -2575,35 +2618,39 @@ impl App {
                 });
 
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("namespace");
-                ui.add(ime_safe_singleline(
-                    &mut self.annotation_editor_state.namespace_input,
-                ));
-                ui.label("key");
-                ui.add(ime_safe_singleline(
-                    &mut self.annotation_editor_state.key_input,
-                ));
+            ui.add_enabled_ui(annotation_supported, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("namespace");
+                    ui.add(ime_safe_singleline(
+                        &mut self.annotation_editor_state.namespace_input,
+                    ));
+                    ui.label("key");
+                    ui.add(ime_safe_singleline(
+                        &mut self.annotation_editor_state.key_input,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("tagged_by");
+                    ui.add(ime_safe_singleline(
+                        &mut self.annotation_editor_state.tagged_by_input,
+                    ));
+                    ui.label("confidence");
+                    ui.add(ime_safe_singleline(
+                        &mut self.annotation_editor_state.confidence_input,
+                    ));
+                });
+                ui.label(RichText::new("改行は Shift+Enter").italics());
+                ui.label("value");
+                ui.add(
+                    ime_safe_multiline(&mut self.annotation_editor_state.value_input)
+                        .desired_rows(2),
+                );
+                ui.label("note");
+                ui.add(
+                    ime_safe_multiline(&mut self.annotation_editor_state.note_input)
+                        .desired_rows(2),
+                );
             });
-            ui.horizontal(|ui| {
-                ui.label("tagged_by");
-                ui.add(ime_safe_singleline(
-                    &mut self.annotation_editor_state.tagged_by_input,
-                ));
-                ui.label("confidence");
-                ui.add(ime_safe_singleline(
-                    &mut self.annotation_editor_state.confidence_input,
-                ));
-            });
-            ui.label(RichText::new("改行は Shift+Enter").italics());
-            ui.label("value");
-            ui.add(
-                ime_safe_multiline(&mut self.annotation_editor_state.value_input).desired_rows(2),
-            );
-            ui.label("note");
-            ui.add(
-                ime_safe_multiline(&mut self.annotation_editor_state.note_input).desired_rows(2),
-            );
 
             ui.horizontal(|ui| {
                 if ui
@@ -2616,7 +2663,9 @@ impl App {
                     self.clear_annotation_editor_inputs();
                     self.clear_annotation_editor_status();
                 }
-                if !annotation_save_enabled {
+                if !annotation_supported {
+                    ui.label("sentence annotation 対応までは paragraph 専用です。");
+                } else if !annotation_save_enabled {
                     ui.label("分析ジョブ実行中は保存できません。");
                 }
             });
@@ -2767,7 +2816,7 @@ fn tree_row_no_value(record: &AnalysisRecord) -> String {
 }
 
 fn tree_paragraph_id_value(record: &AnalysisRecord) -> String {
-    record.paragraph_id.clone()
+    record.unit_id().to_string()
 }
 
 fn tree_municipality_value(record: &AnalysisRecord) -> String {

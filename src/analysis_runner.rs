@@ -1,4 +1,4 @@
-use crate::model::AnalysisRecord;
+use crate::model::{AnalysisRecord, AnalysisUnit};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::ffi::OsString;
@@ -160,17 +160,36 @@ pub(crate) struct AnalysisMeta {
     pub(crate) db_path: String,
     pub(crate) filter_config_path: String,
     pub(crate) output_csv_path: String,
+    #[serde(default)]
+    pub(crate) analysis_unit: AnalysisUnit,
     pub(crate) target_paragraph_count: usize,
     pub(crate) selected_paragraph_count: usize,
+    #[serde(default)]
+    pub(crate) selected_sentence_count: usize,
     #[serde(default, deserialize_with = "deserialize_warning_messages")]
     pub(crate) warning_messages: Vec<AnalysisWarningMessage>,
     pub(crate) error_summary: String,
+}
+
+impl AnalysisMeta {
+    fn expected_record_count(&self) -> usize {
+        match self.analysis_unit {
+            AnalysisUnit::Paragraph => self.selected_paragraph_count,
+            AnalysisUnit::Sentence => self.selected_sentence_count,
+        }
+    }
+
+    pub(crate) fn selected_unit_count(&self) -> usize {
+        self.expected_record_count()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct AnalysisJsonRecord {
     #[serde(default)]
     paragraph_id: String,
+    #[serde(default)]
+    sentence_id: String,
     #[serde(default)]
     document_id: String,
     #[serde(default)]
@@ -181,6 +200,14 @@ struct AnalysisJsonRecord {
     doc_type: String,
     #[serde(default)]
     sentence_count: String,
+    #[serde(default)]
+    sentence_no_in_paragraph: String,
+    #[serde(default)]
+    sentence_no_in_document: String,
+    #[serde(default)]
+    sentence_text: String,
+    #[serde(default)]
+    sentence_text_tagged: String,
     #[serde(default)]
     paragraph_text: String,
     #[serde(default)]
@@ -212,15 +239,21 @@ struct AnalysisJsonRecord {
 }
 
 impl AnalysisJsonRecord {
-    fn into_analysis_record(self, row_no: usize) -> AnalysisRecord {
+    fn into_analysis_record(self, row_no: usize, analysis_unit: AnalysisUnit) -> AnalysisRecord {
         AnalysisRecord {
             row_no,
+            analysis_unit,
             paragraph_id: self.paragraph_id,
+            sentence_id: self.sentence_id,
             document_id: self.document_id,
             municipality_name: self.municipality_name,
             ordinance_or_rule: self.ordinance_or_rule,
             doc_type: self.doc_type,
             sentence_count: self.sentence_count,
+            sentence_no_in_paragraph: self.sentence_no_in_paragraph,
+            sentence_no_in_document: self.sentence_no_in_document,
+            sentence_text: self.sentence_text,
+            sentence_text_tagged: self.sentence_text_tagged,
             paragraph_text: self.paragraph_text,
             paragraph_text_tagged: self.paragraph_text_tagged,
             matched_condition_ids_text: self.matched_condition_ids_text,
@@ -369,7 +402,8 @@ pub(crate) fn cleanup_job_directories(jobs_root: &Path) -> Result<(), String> {
     let entries = fs::read_dir(jobs_root)
         .map_err(|error| format!("job ディレクトリ一覧の取得に失敗しました: {error}"))?;
     for entry in entries {
-        let entry = entry.map_err(|error| format!("job ディレクトリ読込に失敗しました: {error}"))?;
+        let entry =
+            entry.map_err(|error| format!("job ディレクトリ読込に失敗しました: {error}"))?;
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -388,14 +422,20 @@ pub(crate) fn cleanup_job_directories(jobs_root: &Path) -> Result<(), String> {
     job_directories.sort_by_key(|(modified_at, _)| *modified_at);
     let remove_count = job_directories.len().saturating_sub(JOB_HISTORY_KEEP_COUNT);
     for (_, path) in job_directories.into_iter().take(remove_count) {
-        fs::remove_dir_all(&path)
-            .map_err(|error| format!("古い job ディレクトリ削除に失敗しました ({}): {error}", path.display()))?;
+        fs::remove_dir_all(&path).map_err(|error| {
+            format!(
+                "古い job ディレクトリ削除に失敗しました ({}): {error}",
+                path.display()
+            )
+        })?;
     }
 
     Ok(())
 }
 
-pub(crate) fn spawn_analysis_job(request: AnalysisJobRequest) -> (String, Receiver<AnalysisJobEvent>) {
+pub(crate) fn spawn_analysis_job(
+    request: AnalysisJobRequest,
+) -> (String, Receiver<AnalysisJobEvent>) {
     let (sender, receiver) = mpsc::channel();
     let job_id = build_job_id();
     let request_job_id = job_id.clone();
@@ -408,7 +448,9 @@ pub(crate) fn spawn_analysis_job(request: AnalysisJobRequest) -> (String, Receiv
     (job_id, receiver)
 }
 
-pub(crate) fn spawn_export_job(request: AnalysisExportRequest) -> (String, Receiver<AnalysisJobEvent>) {
+pub(crate) fn spawn_export_job(
+    request: AnalysisExportRequest,
+) -> (String, Receiver<AnalysisJobEvent>) {
     let (sender, receiver) = mpsc::channel();
     let job_id = build_job_id();
     let request_job_id = job_id.clone();
@@ -502,7 +544,8 @@ fn run_export_job(job_id: String, request: AnalysisExportRequest) -> AnalysisJob
     let output_csv_path = request.output_csv_path;
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let result = send_export_request(worker_handle_for_request, worker_request, output_csv_path);
+        let result =
+            send_export_request(worker_handle_for_request, worker_request, output_csv_path);
         let _ = sender.send(result);
     });
 
@@ -528,7 +571,8 @@ fn run_export_job(job_id: String, request: AnalysisExportRequest) -> AnalysisJob
             AnalysisJobEvent::ExportCompleted(Err(AnalysisJobFailure {
                 meta: None,
                 stderr,
-                message: "Python worker の CSV 保存応答待機中にチャネルが切断されました".to_string(),
+                message: "Python worker の CSV 保存応答待機中にチャネルが切断されました"
+                    .to_string(),
             }))
         }
     }
@@ -663,7 +707,10 @@ fn worker_stderr_snapshot(handle: &WorkerHandle) -> String {
         .unwrap_or_default()
 }
 
-fn send_simple_worker_request(handle: &WorkerHandle, request_type: &'static str) -> Result<(), String> {
+fn send_simple_worker_request(
+    handle: &WorkerHandle,
+    request_type: &'static str,
+) -> Result<(), String> {
     let request = WorkerSimpleRequest {
         request_id: format!("worker-{request_type}"),
         request_type,
@@ -719,23 +766,25 @@ fn send_analyze_request(
                 message: "Python worker 成功応答に meta が含まれていません".to_string(),
             });
         };
-        if meta.selected_paragraph_count != response.records.len() {
-            let selected_paragraph_count = meta.selected_paragraph_count;
+        if meta.expected_record_count() != response.records.len() {
+            let selected_count = meta.expected_record_count();
             let record_count = response.records.len();
+            let analysis_unit = meta.analysis_unit;
             return Err(AnalysisJobFailure {
                 meta: Some(meta),
                 stderr,
                 message: format!(
-                    "返却件数が selectedParagraphCount と一致しません: meta={}, records={}",
-                    selected_paragraph_count, record_count
+                    "返却件数が選択件数と一致しません: unit={:?}, meta={}, records={}",
+                    analysis_unit, selected_count, record_count
                 ),
             });
         }
+        let analysis_unit = meta.analysis_unit;
         let records = response
             .records
             .into_iter()
             .enumerate()
-            .map(|(idx, record)| record.into_analysis_record(idx + 1))
+            .map(|(idx, record)| record.into_analysis_record(idx + 1, analysis_unit))
             .collect();
         return Ok(AnalysisJobSuccess { meta, records });
     }
@@ -883,8 +932,12 @@ fn build_worker_response_message(
 fn read_meta_json(path: &Path) -> Result<AnalysisMeta, String> {
     let text = fs::read_to_string(path)
         .map_err(|error| format!("meta.json を読めませんでした ({}): {error}", path.display()))?;
-    serde_json::from_str(&text)
-        .map_err(|error| format!("meta.json の解析に失敗しました ({}): {error}", path.display()))
+    serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "meta.json の解析に失敗しました ({}): {error}",
+            path.display()
+        )
+    })
 }
 
 fn read_json_response(text: &str) -> Result<AnalysisJsonResponse, String> {
@@ -920,6 +973,7 @@ mod tests {
   "dbPath": "/tmp/db.sqlite3",
   "filterConfigPath": "/tmp/filter.json",
   "outputCsvPath": "/tmp/result.csv",
+  "analysisUnit": "paragraph",
   "targetParagraphCount": 2,
   "selectedParagraphCount": 1,
   "warningMessages": [
@@ -982,6 +1036,7 @@ mod tests {
   "dbPath": "/tmp/db.sqlite3",
   "filterConfigPath": "/tmp/filter.json",
   "outputCsvPath": "/tmp/result.csv",
+  "analysisUnit": "paragraph",
   "targetParagraphCount": 2,
   "selectedParagraphCount": 1,
   "warningMessages": ["legacy warning"],
@@ -1016,6 +1071,7 @@ mod tests {
   "dbPath": "/tmp/db.sqlite3",
   "filterConfigPath": "/tmp/filter.json",
   "outputCsvPath": "/tmp/result.csv",
+  "analysisUnit": "paragraph",
   "targetParagraphCount": 2,
   "selectedParagraphCount": 1,
   "warningMessages": [
@@ -1055,6 +1111,7 @@ mod tests {
     "dbPath": "/tmp/db.sqlite3",
     "filterConfigPath": "/tmp/filter.json",
     "outputCsvPath": "/tmp/result.csv",
+    "analysisUnit": "paragraph",
     "targetParagraphCount": 1,
     "selectedParagraphCount": 1,
     "warningMessages": [],
@@ -1084,6 +1141,7 @@ mod tests {
 
         let response = read_json_response(payload).unwrap();
 
+        assert_eq!(response.meta.analysis_unit, super::AnalysisUnit::Paragraph);
         assert_eq!(response.meta.selected_paragraph_count, 1);
         assert_eq!(response.records.len(), 1);
         let first_record = response
@@ -1091,12 +1149,100 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .into_analysis_record(1);
+            .into_analysis_record(1, response.meta.analysis_unit);
         assert_eq!(first_record.row_no, 1);
         assert_eq!(first_record.paragraph_id, "1");
         assert_eq!(first_record.municipality_name, "札幌市");
         assert_eq!(first_record.annotated_token_count, "2");
         assert_eq!(first_record.manual_annotation_count, "1");
+    }
+
+    #[test]
+    fn read_meta_json_accepts_sentence_analysis_payload() {
+        let path = temp_meta_path("sentence-meta");
+        let payload = r#"{
+  "jobId": "job-sentence",
+  "status": "succeeded",
+  "startedAt": "2026-03-16T00:00:00Z",
+  "finishedAt": "2026-03-16T00:00:01Z",
+  "durationSeconds": 1.0,
+  "dbPath": "/tmp/db.sqlite3",
+  "filterConfigPath": "/tmp/filter.json",
+  "outputCsvPath": "/tmp/result-sentences.csv",
+  "analysisUnit": "sentence",
+  "targetParagraphCount": 1,
+  "selectedParagraphCount": 1,
+  "selectedSentenceCount": 2,
+  "warningMessages": [],
+  "errorSummary": ""
+}"#;
+        fs::write(&path, payload).unwrap();
+
+        let meta = read_meta_json(&path).unwrap();
+
+        assert_eq!(meta.analysis_unit, super::AnalysisUnit::Sentence);
+        assert_eq!(meta.selected_paragraph_count, 1);
+        assert_eq!(meta.selected_sentence_count, 2);
+        assert_eq!(meta.selected_unit_count(), 2);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_json_response_accepts_sentence_records_payload() {
+        let payload = r#"{
+  "meta": {
+    "jobId": "job-5",
+    "status": "succeeded",
+    "startedAt": "2026-03-16T00:00:00Z",
+    "finishedAt": "2026-03-16T00:00:01Z",
+    "durationSeconds": 1.0,
+    "dbPath": "/tmp/db.sqlite3",
+    "filterConfigPath": "/tmp/filter.json",
+    "outputCsvPath": "/tmp/result-sentences.csv",
+    "analysisUnit": "sentence",
+    "targetParagraphCount": 1,
+    "selectedParagraphCount": 1,
+    "selectedSentenceCount": 1,
+    "warningMessages": [],
+    "errorSummary": ""
+  },
+  "records": [
+    {
+      "sentence_id": "11",
+      "paragraph_id": "1",
+      "document_id": "2",
+      "municipality_name": "札幌市",
+      "ordinance_or_rule": "条例",
+      "doc_type": "",
+      "sentence_no_in_paragraph": "2",
+      "sentence_no_in_document": "5",
+      "sentence_text": "文本文",
+      "sentence_text_tagged": "<hit>文</hit>本文",
+      "matched_condition_ids_text": "",
+      "matched_categories_text": "抑制区域",
+      "match_group_ids_text": "",
+      "match_group_count": "1",
+      "annotated_token_count": "2"
+    }
+  ]
+}"#;
+
+        let response = read_json_response(payload).unwrap();
+
+        assert_eq!(response.meta.analysis_unit, super::AnalysisUnit::Sentence);
+        assert_eq!(response.meta.selected_unit_count(), 1);
+        let first_record = response
+            .records
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_analysis_record(1, response.meta.analysis_unit);
+        assert_eq!(first_record.analysis_unit, super::AnalysisUnit::Sentence);
+        assert_eq!(first_record.sentence_id, "11");
+        assert_eq!(first_record.sentence_no_in_paragraph, "2");
+        assert_eq!(first_record.sentence_text, "文本文");
+        assert_eq!(first_record.primary_text_tagged(), "<hit>文</hit>本文");
     }
 }
 
@@ -1116,17 +1262,11 @@ pub(crate) fn resolve_filter_config_path(
             return Ok(path.clone());
         }
 
-        return Err(format!(
-            "条件 JSON が見つかりません: {}",
-            path.display()
-        ));
+        return Err(format!("条件 JSON が見つかりません: {}", path.display()));
     }
 
-    resolve_project_file(DEFAULT_FILTER_CONFIG_RELATIVE_PATH).ok_or_else(|| {
-        format!(
-            "条件 JSON が見つかりません: {DEFAULT_FILTER_CONFIG_RELATIVE_PATH}"
-        )
-    })
+    resolve_project_file(DEFAULT_FILTER_CONFIG_RELATIVE_PATH)
+        .ok_or_else(|| format!("条件 JSON が見つかりません: {DEFAULT_FILTER_CONFIG_RELATIVE_PATH}"))
 }
 
 pub(crate) fn resolve_annotation_csv_path(

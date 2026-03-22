@@ -63,7 +63,7 @@ const FILTER_COLUMN_SPECS: &[FilterColumnSpec] = &[
     },
     FilterColumnSpec {
         column: FilterColumn::ParagraphId,
-        label: "paragraph_id",
+        label: "unit_id",
         value_kind: FilterValueKind::Single(record_paragraph_id_value),
         sort_kind: FilterSortKind::Text,
     },
@@ -186,7 +186,7 @@ fn normalize_single_filter_value(value: &str) -> String {
 }
 
 fn record_paragraph_id_value(record: &AnalysisRecord) -> String {
-    normalize_single_filter_value(&record.paragraph_id)
+    normalize_single_filter_value(record.unit_id())
 }
 
 fn record_document_id_value(record: &AnalysisRecord) -> String {
