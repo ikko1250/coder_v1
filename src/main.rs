@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod analysis_job_manager;
 mod analysis_runner;
 mod app;
+mod app_services;
+mod app_state;
+mod app_ui_state;
 mod condition_editor;
 mod condition_editor_view;
 mod csv_loader;
