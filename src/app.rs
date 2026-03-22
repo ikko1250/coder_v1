@@ -1,13 +1,22 @@
-use crate::analysis_runner::{
-    build_runtime_config, cleanup_job_directories, resolve_annotation_csv_path,
-    resolve_filter_config_path, spawn_analysis_job, spawn_export_job, AnalysisExportRequest,
-    AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest,
-    AnalysisJobSuccess, AnalysisRuntimeConfig, AnalysisRuntimeOverrides, AnalysisWarningMessage,
+use crate::analysis_job_manager::AnalysisJobManager;
+use crate::analysis_runner::{build_runtime_config, AnalysisWarningMessage};
+use crate::app_services::{
+    apply_analysis_settings_update, cleanup_analysis_jobs,
+    load_condition_editor_from_path as load_condition_editor_document,
+    load_csv as load_csv_records, load_db_viewer_context_for_location,
+    open_db_viewer_for_selected_record, poll_analysis_job as poll_analysis_jobs,
+    request_condition_editor_reload as request_condition_reload,
+    resolved_filter_config_path as resolve_filter_config_path_for_state,
+    save_annotation_for_selected_record as save_selected_annotation,
+    save_condition_editor_document as save_condition_document_for_state,
+    start_analysis_job as start_analysis, start_export_job as start_export, AnalysisSettingsUpdate,
+    OptionalPathUpdate, PollAnalysisJobResult,
 };
-use crate::condition_editor::{
-    build_default_condition_item, load_condition_document, save_condition_document_atomic,
-    FilterConfigDocument,
+use crate::app_state::{
+    AnalysisJobStatus, AppState, ConditionEditorConfirmAction, ScrollBehavior, SelectionChange,
 };
+use crate::app_ui_state::{AppUiState, TreeScrollRequest};
+use crate::condition_editor::{build_default_condition_item, FilterConfigDocument};
 use crate::condition_editor_view::{
     draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
     draw_condition_editor_footer_panel as render_condition_editor_footer_panel,
@@ -18,51 +27,21 @@ use crate::condition_editor_view::{
     ConditionEditorDetailResponse, ConditionEditorFooterResponse, ConditionEditorListResponse,
     ConfirmOverlayResponse,
 };
-use crate::csv_loader::load_records;
-use crate::db::{
-    fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
-};
+use crate::db::resolve_default_db_path;
 use crate::db_viewer_view::render_db_viewer_contents;
-use crate::filter::{build_filter_options, normalize_filter_candidate_search_text};
+use crate::filter::normalize_filter_candidate_search_text;
 use crate::filter_panel_view::draw_filter_panel as render_filter_panel;
-use crate::manual_annotation_store::{
-    append_manual_annotation_namespaces_text, append_manual_annotation_pairs_text,
-    append_manual_annotation_row, build_manual_annotation_pair, first_manual_annotation_line,
-    increment_manual_annotation_count, ManualAnnotationAppendRow,
-};
-use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
-use crate::tagged_text::parse_tagged_text;
+use crate::manual_annotation_store::first_manual_annotation_line;
+use crate::model::{AnalysisRecord, FilterColumn, TextSegment};
 use crate::ui_helpers::{ime_safe_multiline, ime_safe_singleline};
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, RichText, ScrollArea, TextStyle, TextWrapMode, Ui};
 use egui_extras::{Column, Size, StripBuilder, TableBuilder};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TreeScrollRequest {
-    row_index: usize,
-    align: Option<egui::Align>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScrollBehavior {
-    None,
-    KeepVisible,
-    AlignMin,
-    AlignMax,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SelectionChange {
-    selected_row: Option<usize>,
-    scroll_behavior: ScrollBehavior,
-}
 
 #[derive(Clone, Copy)]
 struct TreeColumnSpec {
@@ -115,115 +94,6 @@ const RECORD_LIST_PANEL_MIN_WIDTH: f32 = 360.0;
 const RECORD_LIST_PANEL_DEFAULT_RATIO: f32 = 0.33;
 const RECORD_LIST_PANEL_MAX_RATIO: f32 = 0.85;
 
-struct RunningAnalysisJob {
-    receiver: Receiver<AnalysisJobEvent>,
-}
-
-#[derive(Clone)]
-struct AnalysisExportContext {
-    db_path: PathBuf,
-    filter_config_path: PathBuf,
-    annotation_csv_path: PathBuf,
-}
-
-enum AnalysisJobStatus {
-    Idle,
-    RunningAnalysis { job_id: String },
-    RunningExport { job_id: String },
-    Succeeded { summary: String },
-    Failed { summary: String },
-}
-
-struct AnalysisRuntimeState {
-    runtime: Option<AnalysisRuntimeConfig>,
-    current_job: Option<RunningAnalysisJob>,
-    status: AnalysisJobStatus,
-    last_warnings: Vec<AnalysisWarningMessage>,
-    warning_window_open: bool,
-    last_export_context: Option<AnalysisExportContext>,
-}
-
-impl AnalysisRuntimeState {
-    fn from_runtime(runtime: Result<AnalysisRuntimeConfig, String>) -> Self {
-        match runtime {
-            Ok(runtime) => Self {
-                runtime: Some(runtime),
-                current_job: None,
-                status: AnalysisJobStatus::Idle,
-                last_warnings: Vec::new(),
-                warning_window_open: false,
-                last_export_context: None,
-            },
-            Err(error) => Self {
-                runtime: None,
-                current_job: None,
-                status: AnalysisJobStatus::Failed { summary: error },
-                last_warnings: Vec::new(),
-                warning_window_open: false,
-                last_export_context: None,
-            },
-        }
-    }
-
-    fn can_start(&self) -> bool {
-        self.runtime.is_some() && self.current_job.is_none()
-    }
-
-    fn status_text(&self) -> String {
-        match &self.status {
-            AnalysisJobStatus::Idle => "分析待機中".to_string(),
-            AnalysisJobStatus::RunningAnalysis { job_id } => format!("分析実行中: {job_id}"),
-            AnalysisJobStatus::RunningExport { job_id } => format!("CSV 保存中: {job_id}"),
-            AnalysisJobStatus::Succeeded { summary } => format!("分析成功: {summary}"),
-            AnalysisJobStatus::Failed { summary } => format!("分析失敗: {summary}"),
-        }
-    }
-
-    fn has_warning_details(&self) -> bool {
-        !self.last_warnings.is_empty()
-    }
-
-    fn can_export(&self) -> bool {
-        self.runtime.is_some() && self.current_job.is_none() && self.last_export_context.is_some()
-    }
-}
-
-#[derive(Default)]
-struct AnalysisRequestState {
-    python_path_override: Option<PathBuf>,
-    filter_config_path_override: Option<PathBuf>,
-    annotation_csv_path_override: Option<PathBuf>,
-    settings_window_open: bool,
-}
-
-impl AnalysisRequestState {
-    fn runtime_overrides(&self) -> AnalysisRuntimeOverrides {
-        AnalysisRuntimeOverrides {
-            python_path: self.python_path_override.clone(),
-            filter_config_path: self.filter_config_path_override.clone(),
-            annotation_csv_path: self.annotation_csv_path_override.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct AnnotationEditorState {
-    namespace_input: String,
-    key_input: String,
-    value_input: String,
-    tagged_by_input: String,
-    confidence_input: String,
-    note_input: String,
-    status_message: Option<String>,
-    status_is_error: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ConditionEditorConfirmAction {
-    CloseWindow,
-    ReloadPath(PathBuf),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConditionEditorModalResponse {
     Continue,
@@ -256,108 +126,24 @@ struct ConditionEditorWindowInputs {
     panel_fill: Color32,
 }
 
-#[derive(Clone, Debug, Default)]
-struct ConditionEditorState {
-    window_open: bool,
-    loaded_path: Option<PathBuf>,
-    pending_path_sync: Option<PathBuf>,
-    document: Option<FilterConfigDocument>,
-    selected_index: Option<usize>,
-    selected_group_index: Option<usize>,
-    projected_legacy_condition_count: usize,
-    status_message: Option<String>,
-    status_is_error: bool,
-    is_dirty: bool,
-    confirm_action: Option<ConditionEditorConfirmAction>,
-}
-
-impl SelectionChange {
-    fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
-        Self {
-            selected_row,
-            scroll_behavior,
-        }
-    }
-
-    fn first_filtered_row(filtered_len: usize, scroll_behavior: ScrollBehavior) -> Self {
-        Self::new((filtered_len > 0).then_some(0), scroll_behavior)
-    }
-}
-
-fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usize) -> Option<usize> {
-    match (selected_row, filtered_len) {
-        (_, 0) => None,
-        (Some(idx), len) => Some(idx.min(len - 1)),
-        (None, _) => None,
-    }
-}
-
-fn build_tree_scroll_request(
-    selected_row: Option<usize>,
-    scroll_behavior: ScrollBehavior,
-) -> Option<TreeScrollRequest> {
-    match scroll_behavior {
-        ScrollBehavior::None => None,
-        ScrollBehavior::KeepVisible => selected_row.map(|row_index| TreeScrollRequest {
-            row_index,
-            align: None,
-        }),
-        ScrollBehavior::AlignMin => selected_row.map(|row_index| TreeScrollRequest {
-            row_index,
-            align: Some(egui::Align::Min),
-        }),
-        ScrollBehavior::AlignMax => selected_row.map(|row_index| TreeScrollRequest {
-            row_index,
-            align: Some(egui::Align::Max),
-        }),
-    }
-}
-
 pub(crate) struct App {
-    records_source_label: String,
-    db_viewer_state: DbViewerState,
-    analysis_request_state: AnalysisRequestState,
-    analysis_runtime_state: AnalysisRuntimeState,
-    all_records: Vec<AnalysisRecord>,
-    filtered_indices: Vec<usize>,
-    filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
-    selected_filter_values: HashMap<FilterColumn, BTreeSet<String>>,
-    filter_candidate_queries: HashMap<FilterColumn, String>,
-    active_filter_column: FilterColumn,
-    selected_row: Option<usize>,
-    pending_tree_scroll: Option<TreeScrollRequest>,
+    state: AppState,
+    ui_state: AppUiState,
+    job_manager: AnalysisJobManager,
     pub(crate) error_message: Option<String>,
-    cached_segments: Option<(usize, Vec<TextSegment>)>,
-    annotation_editor_state: AnnotationEditorState,
-    condition_editor_state: ConditionEditorState,
-    record_list_panel_ratio: f32,
-    annotation_panel_expanded: bool,
 }
 
 impl App {
     pub(crate) fn new(initial_csv_path: Option<PathBuf>) -> Self {
-        let analysis_request_state = AnalysisRequestState::default();
+        let analysis_request_state = crate::app_state::AnalysisRequestState::default();
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let mut app = Self {
-            records_source_label: "分析結果なし".to_string(),
-            db_viewer_state: DbViewerState::new(resolve_default_db_path()),
-            analysis_request_state,
-            analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
-            all_records: Vec::new(),
-            filtered_indices: Vec::new(),
-            filter_options: HashMap::new(),
-            selected_filter_values: HashMap::new(),
-            filter_candidate_queries: HashMap::new(),
-            active_filter_column: FilterColumn::MatchedCategories,
-            selected_row: None,
-            pending_tree_scroll: None,
+            state: AppState::new(runtime, resolve_default_db_path()),
+            ui_state: AppUiState::new(RECORD_LIST_PANEL_DEFAULT_RATIO),
+            job_manager: AnalysisJobManager::default(),
             error_message: None,
-            cached_segments: None,
-            annotation_editor_state: AnnotationEditorState::default(),
-            condition_editor_state: ConditionEditorState::default(),
-            record_list_panel_ratio: RECORD_LIST_PANEL_DEFAULT_RATIO,
-            annotation_panel_expanded: false,
         };
+        app.state.analysis_request_state = analysis_request_state;
         app.try_cleanup_analysis_jobs();
         if let Some(csv_path) = initial_csv_path {
             app.load_csv(csv_path);
@@ -366,146 +152,15 @@ impl App {
     }
 
     fn load_csv(&mut self, path: PathBuf) {
-        match load_records(&path) {
-            Ok(records) => {
-                self.replace_records(records, path.display().to_string());
-                self.analysis_runtime_state.last_export_context = None;
-            }
-            Err(e) => {
-                self.error_message = Some(e);
-            }
-        }
-    }
-
-    fn replace_records(&mut self, records: Vec<AnalysisRecord>, source_label: String) {
-        self.all_records = records;
-        self.records_source_label = source_label;
-        self.db_viewer_state.reset_loaded_state();
-        self.filter_options = build_filter_options(&self.all_records);
-        self.selected_filter_values.clear();
-        self.filter_candidate_queries.clear();
-        self.filtered_indices = (0..self.all_records.len()).collect();
-        self.cached_segments = None;
-        self.apply_selection_change(SelectionChange::first_filtered_row(
-            self.filtered_indices.len(),
-            ScrollBehavior::AlignMin,
-        ));
-        self.error_message = None;
-        self.annotation_editor_state.status_message = None;
-        self.annotation_editor_state.status_is_error = false;
-    }
-
-    #[allow(dead_code)]
-    fn db_viewer_state(&self) -> &DbViewerState {
-        &self.db_viewer_state
-    }
-
-    #[allow(dead_code)]
-    fn db_viewer_state_mut(&mut self) -> &mut DbViewerState {
-        &mut self.db_viewer_state
-    }
-
-    #[allow(dead_code)]
-    fn selected_paragraph_id_for_db(&self) -> Result<i64, String> {
-        let record = self
-            .selected_record()
-            .ok_or_else(|| "レコードが選択されていません".to_string())?;
-        if !record.supports_db_viewer() {
-            return Err("sentence 行では DB viewer は未対応です".to_string());
-        }
-
-        record.paragraph_id.parse::<i64>().map_err(|error| {
-            format!(
-                "paragraph_id を数値として解釈できません: {} ({error})",
-                record.paragraph_id
-            )
-        })
-    }
-
-    #[allow(dead_code)]
-    fn prepare_db_viewer_state(&mut self) -> Result<(), String> {
-        let selected_record = self
-            .selected_record()
-            .ok_or_else(|| "レコードが選択されていません".to_string())?;
-        if !selected_record.supports_db_viewer() {
-            return Err("sentence 行では DB viewer は未対応です".to_string());
-        }
-        let paragraph_id = self.selected_paragraph_id_for_db()?;
-        let source_paragraph_text = selected_record.paragraph_text.clone();
-
-        self.db_viewer_state.is_open = true;
-        self.db_viewer_state.source_paragraph_id = Some(paragraph_id);
-        self.db_viewer_state.source_paragraph_text = Some(source_paragraph_text);
-        self.db_viewer_state.context = None;
-        self.db_viewer_state.error_message = None;
-        Ok(())
-    }
-
-    fn apply_selection_change(&mut self, change: SelectionChange) -> bool {
-        let next = clamp_selected_row(change.selected_row, self.filtered_indices.len());
-        let selection_changed = self.selected_row != next;
-        if selection_changed {
-            self.selected_row = next;
-            self.cached_segments = None;
-            self.clear_annotation_editor_status();
-        }
-
-        let next_scroll_request = build_tree_scroll_request(next, change.scroll_behavior);
-        let scroll_changed = self.pending_tree_scroll != next_scroll_request;
-        self.pending_tree_scroll = next_scroll_request;
-
-        selection_changed || scroll_changed
-    }
-
-    fn select_first_filtered_row(&mut self, scroll_behavior: ScrollBehavior) -> bool {
-        self.apply_selection_change(SelectionChange::first_filtered_row(
-            self.filtered_indices.len(),
-            scroll_behavior,
-        ))
-    }
-
-    fn move_selection_up(&mut self) {
-        if self.filtered_indices.is_empty() {
-            return;
-        }
-
-        match self.selected_row {
-            Some(idx) if idx > 0 => {
-                self.apply_selection_change(SelectionChange::new(
-                    Some(idx - 1),
-                    ScrollBehavior::KeepVisible,
-                ));
-            }
-            None => {
-                self.select_first_filtered_row(ScrollBehavior::AlignMin);
-            }
-            _ => {}
-        }
-    }
-
-    fn move_selection_down(&mut self) {
-        let current_len = self.filtered_indices.len();
-        if current_len == 0 {
-            return;
-        }
-
-        match self.selected_row {
-            Some(idx) if idx + 1 < current_len => {
-                self.apply_selection_change(SelectionChange::new(
-                    Some(idx + 1),
-                    ScrollBehavior::KeepVisible,
-                ));
-            }
-            None => {
-                self.select_first_filtered_row(ScrollBehavior::AlignMin);
-            }
-            _ => {}
+        match load_csv_records(&mut self.state, &mut self.ui_state, path) {
+            Ok(()) => self.error_message = None,
+            Err(error) => self.error_message = Some(error),
         }
     }
 
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
         if self.error_message.is_some()
-            || self.filtered_indices.is_empty()
+            || self.state.filtered_indices.is_empty()
             || ctx.wants_keyboard_input()
         {
             return;
@@ -519,267 +174,25 @@ impl App {
         });
 
         if down_pressed {
-            self.move_selection_down();
+            self.state.move_selection_down(&mut self.ui_state);
         } else if up_pressed {
-            self.move_selection_up();
+            self.state.move_selection_up(&mut self.ui_state);
         }
-    }
-
-    fn selected_record(&self) -> Option<&AnalysisRecord> {
-        let filtered_idx = self.selected_row?;
-        let record_idx = *self.filtered_indices.get(filtered_idx)?;
-        self.all_records.get(record_idx)
-    }
-
-    fn selected_record_index(&self) -> Option<usize> {
-        let filtered_idx = self.selected_row?;
-        self.filtered_indices.get(filtered_idx).copied()
-    }
-
-    fn selected_record_mut(&mut self) -> Option<&mut AnalysisRecord> {
-        let record_idx = self.selected_record_index()?;
-        self.all_records.get_mut(record_idx)
-    }
-
-    fn resolved_annotation_csv_path(&self) -> Result<PathBuf, String> {
-        resolve_annotation_csv_path(&self.analysis_request_state.runtime_overrides())
-    }
-
-    fn annotation_save_enabled(&self) -> bool {
-        self.selected_record()
-            .is_some_and(AnalysisRecord::supports_manual_annotation)
-            && self.analysis_runtime_state.current_job.is_none()
-    }
-
-    fn clear_annotation_editor_status(&mut self) {
-        self.annotation_editor_state.status_message = None;
-        self.annotation_editor_state.status_is_error = false;
-    }
-
-    fn clear_annotation_editor_inputs(&mut self) {
-        self.annotation_editor_state.value_input.clear();
-        self.annotation_editor_state.confidence_input.clear();
-        self.annotation_editor_state.note_input.clear();
-    }
-
-    fn build_annotation_append_row(&self) -> Result<ManualAnnotationAppendRow, String> {
-        let record = self
-            .selected_record()
-            .ok_or_else(|| "レコードが選択されていません".to_string())?;
-        if !record.supports_manual_annotation() {
-            return Err("manual annotation は paragraph 行のみ対応です".to_string());
-        }
-
-        let paragraph_id = record.paragraph_id.trim();
-        if paragraph_id.is_empty() {
-            return Err("paragraph_id が空のため annotation を保存できません".to_string());
-        }
-
-        let namespace = self.annotation_editor_state.namespace_input.trim();
-        if namespace.is_empty() {
-            return Err("namespace を入力してください".to_string());
-        }
-
-        let key = self.annotation_editor_state.key_input.trim();
-        if key.is_empty() {
-            return Err("key を入力してください".to_string());
-        }
-
-        let value = self.annotation_editor_state.value_input.trim();
-        if value.is_empty() {
-            return Err("value を入力してください".to_string());
-        }
-
-        Ok(ManualAnnotationAppendRow {
-            target_type: "paragraph".to_string(),
-            target_id: paragraph_id.to_string(),
-            label_namespace: namespace.to_string(),
-            label_key: key.to_string(),
-            label_value: value.to_string(),
-            tagged_by: self
-                .annotation_editor_state
-                .tagged_by_input
-                .trim()
-                .to_string(),
-            tagged_at: String::new(),
-            confidence: self
-                .annotation_editor_state
-                .confidence_input
-                .trim()
-                .to_string(),
-            note: self.annotation_editor_state.note_input.trim().to_string(),
-        })
-    }
-
-    fn apply_saved_annotation_to_selected_record(
-        &mut self,
-        annotation_row: &ManualAnnotationAppendRow,
-    ) -> Result<(), String> {
-        let pair = build_manual_annotation_pair(
-            &annotation_row.label_namespace,
-            &annotation_row.label_key,
-            &annotation_row.label_value,
-        );
-        {
-            let updated_record = self
-                .selected_record_mut()
-                .ok_or_else(|| "レコードが選択されていません".to_string())?;
-            updated_record.manual_annotation_count =
-                increment_manual_annotation_count(&updated_record.manual_annotation_count);
-            updated_record.manual_annotation_pairs_text = append_manual_annotation_pairs_text(
-                &updated_record.manual_annotation_pairs_text,
-                &pair,
-            );
-            updated_record.manual_annotation_namespaces_text =
-                append_manual_annotation_namespaces_text(
-                    &updated_record.manual_annotation_namespaces_text,
-                    &annotation_row.label_namespace,
-                );
-        }
-        self.filter_options = build_filter_options(&self.all_records);
-        Ok(())
     }
 
     fn save_annotation_for_selected_record(&mut self) {
-        self.clear_annotation_editor_status();
-        let annotation_row = match self.build_annotation_append_row() {
-            Ok(annotation_row) => annotation_row,
-            Err(error) => {
-                self.annotation_editor_state.status_message = Some(error);
-                self.annotation_editor_state.status_is_error = true;
-                return;
-            }
-        };
-
-        let annotation_csv_path = match self.resolved_annotation_csv_path() {
-            Ok(annotation_csv_path) => annotation_csv_path,
-            Err(error) => {
-                self.annotation_editor_state.status_message = Some(error);
-                self.annotation_editor_state.status_is_error = true;
-                return;
-            }
-        };
-
-        if let Err(error) = append_manual_annotation_row(&annotation_csv_path, &annotation_row) {
-            self.annotation_editor_state.status_message = Some(error);
-            self.annotation_editor_state.status_is_error = true;
-            return;
-        }
-
-        if let Err(error) = self.apply_saved_annotation_to_selected_record(&annotation_row) {
-            self.annotation_editor_state.status_message = Some(error);
-            self.annotation_editor_state.status_is_error = true;
-            return;
-        }
-
-        self.clear_annotation_editor_inputs();
-        self.annotation_editor_state.status_message = Some(format!(
-            "annotation を追記しました: {}",
-            annotation_csv_path.display()
-        ));
-        self.annotation_editor_state.status_is_error = false;
-    }
-
-    fn apply_filters(&mut self) {
-        self.filtered_indices = self
-            .all_records
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
-            .collect();
-        self.cached_segments = None;
-        self.select_first_filtered_row(ScrollBehavior::AlignMin);
-    }
-
-    fn record_matches_filters(&self, record: &AnalysisRecord) -> bool {
-        self.selected_filter_values
-            .iter()
-            .all(|(column, selected)| column.matches(record, selected))
-    }
-
-    fn clear_filters_for_column(&mut self, column: FilterColumn) {
-        if self.selected_filter_values.remove(&column).is_some() {
-            self.apply_filters();
-        }
-    }
-
-    fn clear_all_filters(&mut self) {
-        if !self.selected_filter_values.is_empty() {
-            self.selected_filter_values.clear();
-            self.apply_filters();
-        }
-    }
-
-    fn toggle_filter_value(&mut self, column: FilterColumn, value: &str, selected: bool) {
-        let changed = {
-            let entry = self.selected_filter_values.entry(column).or_default();
-            if selected {
-                entry.insert(value.to_string())
-            } else {
-                entry.remove(value)
-            }
-        };
-
-        if self
-            .selected_filter_values
-            .get(&column)
-            .is_some_and(BTreeSet::is_empty)
-        {
-            self.selected_filter_values.remove(&column);
-        }
-
-        if changed {
-            self.apply_filters();
-        }
-    }
-
-    fn get_segments(&mut self) -> Vec<TextSegment> {
-        if let Some(record) = self.selected_record() {
-            let row_no = record.row_no;
-            if let Some((cached_row, ref segs)) = self.cached_segments {
-                if cached_row == row_no {
-                    return segs.clone();
-                }
-            }
-            let tagged = if record.primary_text_tagged().trim().is_empty() {
-                record.primary_text().to_string()
-            } else {
-                record.primary_text_tagged().to_string()
-            };
-            let segs = parse_tagged_text(&tagged);
-            self.cached_segments = Some((row_no, segs.clone()));
-            segs
-        } else {
-            Vec::new()
+        if let Err(error) = save_selected_annotation(&mut self.state) {
+            self.state.annotation_editor_state.status_message = Some(error);
+            self.state.annotation_editor_state.status_is_error = true;
         }
     }
 
     fn try_cleanup_analysis_jobs(&mut self) {
-        let Some(runtime) = self.analysis_runtime_state.runtime.as_ref() else {
-            return;
-        };
-
-        if let Err(error) = cleanup_job_directories(&runtime.jobs_root) {
-            self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary: error };
-        }
-    }
-
-    fn refresh_analysis_runtime(&mut self) {
-        if self.analysis_runtime_state.current_job.is_some() {
-            return;
-        }
-
-        let runtime = build_runtime_config(&self.analysis_request_state.runtime_overrides());
-        self.analysis_runtime_state = AnalysisRuntimeState::from_runtime(runtime);
-        self.try_cleanup_analysis_jobs();
-        self.sync_condition_editor_with_runtime_path();
+        cleanup_analysis_jobs(&mut self.state);
     }
 
     fn resolved_filter_config_path(&self) -> Result<PathBuf, String> {
-        if let Some(runtime) = self.analysis_runtime_state.runtime.as_ref() {
-            return Ok(runtime.filter_config_path.clone());
-        }
-        resolve_filter_config_path(&self.analysis_request_state.runtime_overrides())
+        resolve_filter_config_path_for_state(&self.state)
     }
 
     fn focus_condition_editor_viewport(&self, ctx: &egui::Context) {
@@ -789,10 +202,10 @@ impl App {
     }
 
     fn open_condition_editor(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        if self.condition_editor_state.window_open {
-            self.condition_editor_state.status_message =
+        if self.ui_state.condition_editor.window_open {
+            self.state.condition_editor_state.status_message =
                 Some("condition editor は既に開いています。".to_string());
-            self.condition_editor_state.status_is_error = false;
+            self.state.condition_editor_state.status_is_error = false;
             self.focus_condition_editor_viewport(ctx);
             return Ok(());
         }
@@ -805,75 +218,20 @@ impl App {
         path: PathBuf,
         status_message: &str,
     ) -> Result<(), String> {
-        let (document, load_info) = load_condition_document(&path)?;
-        let projected_count = load_info.projected_legacy_condition_count;
-        let mut final_status_message = status_message.to_string();
-        if projected_count > 0 {
-            final_status_message.push_str(&format!(
-                " legacy 条件 {} 件を group editor 用に投影しました。",
-                projected_count
-            ));
-        }
-        self.condition_editor_state.window_open = true;
-        self.condition_editor_state.loaded_path = Some(path);
-        self.condition_editor_state.pending_path_sync = None;
-        self.condition_editor_state.document = Some(document);
-        self.condition_editor_state.selected_index = self.clamp_condition_editor_selection(Some(0));
-        self.condition_editor_state.selected_group_index = self
-            .clamp_condition_editor_group_selection(
-                Some(0),
-                self.condition_editor_state.selected_index,
-            );
-        self.condition_editor_state.projected_legacy_condition_count = projected_count;
-        self.condition_editor_state.status_message = Some(final_status_message);
-        self.condition_editor_state.status_is_error = false;
-        self.condition_editor_state.is_dirty = false;
-        self.condition_editor_state.confirm_action = None;
-        Ok(())
-    }
-
-    fn clamp_condition_editor_selection(&self, selected_index: Option<usize>) -> Option<usize> {
-        let Some(document) = self.condition_editor_state.document.as_ref() else {
-            return None;
-        };
-        match (selected_index, document.cooccurrence_conditions.len()) {
-            (_, 0) => None,
-            (Some(index), len) => Some(index.min(len - 1)),
-            (None, len) => Some(len - 1),
-        }
-    }
-
-    fn clamp_condition_editor_group_selection(
-        &self,
-        selected_group_index: Option<usize>,
-        condition_index: Option<usize>,
-    ) -> Option<usize> {
-        let Some(document) = self.condition_editor_state.document.as_ref() else {
-            return None;
-        };
-        let Some(condition_index) = condition_index else {
-            return None;
-        };
-        let Some(condition) = document.cooccurrence_conditions.get(condition_index) else {
-            return None;
-        };
-        match (selected_group_index, condition.form_groups.len()) {
-            (_, 0) => None,
-            (Some(index), len) => Some(index.min(len - 1)),
-            (None, len) => Some(len - 1),
-        }
+        load_condition_editor_document(&mut self.state, &mut self.ui_state, path, status_message)
     }
 
     fn mark_condition_editor_dirty(&mut self) {
-        self.condition_editor_state.is_dirty = true;
-        self.condition_editor_state.status_message = Some("未保存の変更があります。".to_string());
-        self.condition_editor_state.status_is_error = false;
+        self.state.condition_editor_state.is_dirty = true;
+        self.state.condition_editor_state.status_message =
+            Some("未保存の変更があります。".to_string());
+        self.state.condition_editor_state.status_is_error = false;
     }
 
     fn condition_editor_selection_draft(&self) -> ConditionEditorSelectionDraft {
         ConditionEditorSelectionDraft {
-            requested_selection: self.condition_editor_state.selected_index,
-            requested_group_selection: self.condition_editor_state.selected_group_index,
+            requested_selection: self.state.condition_editor_state.selected_index,
+            requested_group_selection: self.state.condition_editor_state.selected_group_index,
         }
     }
 
@@ -884,6 +242,7 @@ impl App {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|error| format!("解決失敗: {error}"));
         let loaded_path_label = self
+            .state
             .condition_editor_state
             .loaded_path
             .as_ref()
@@ -891,11 +250,11 @@ impl App {
             .unwrap_or_else(|| "-".to_string());
 
         ConditionEditorWindowInputs {
-            can_modify: self.analysis_runtime_state.current_job.is_none(),
+            can_modify: !self.job_manager.has_running_job(),
             resolved_path_result,
             resolved_path_label,
             loaded_path_label,
-            current_confirm_action: self.condition_editor_state.confirm_action.clone(),
+            current_confirm_action: self.ui_state.condition_editor.confirm_action.clone(),
             panel_fill: ctx.style().visuals.panel_fill,
         }
     }
@@ -904,13 +263,27 @@ impl App {
         &mut self,
         selection_draft: ConditionEditorSelectionDraft,
     ) {
-        self.condition_editor_state.selected_index =
-            self.clamp_condition_editor_selection(selection_draft.requested_selection);
-        self.condition_editor_state.selected_group_index = self
-            .clamp_condition_editor_group_selection(
-                selection_draft.requested_group_selection,
-                self.condition_editor_state.selected_index,
-            );
+        let selected_index = clamp_condition_index(
+            selection_draft.requested_selection,
+            self.state
+                .condition_editor_state
+                .document
+                .as_ref()
+                .map_or(0, |document| document.cooccurrence_conditions.len()),
+        );
+        self.state.condition_editor_state.selected_index = selected_index;
+        self.state.condition_editor_state.selected_group_index = self
+            .state
+            .condition_editor_state
+            .document
+            .as_ref()
+            .and_then(|document| {
+                clamp_condition_group_selection_for_document(
+                    document,
+                    selected_index,
+                    selection_draft.requested_group_selection,
+                )
+            });
     }
 
     fn reload_condition_editor(&mut self, path: PathBuf) -> Result<(), String> {
@@ -918,229 +291,39 @@ impl App {
     }
 
     fn request_condition_editor_reload(&mut self, path: PathBuf) -> Result<(), String> {
-        if self.condition_editor_state.is_dirty {
-            self.condition_editor_state.confirm_action =
-                Some(ConditionEditorConfirmAction::ReloadPath(path));
-            return Ok(());
-        }
-        self.reload_condition_editor(path)
+        request_condition_reload(&mut self.state, &mut self.ui_state, path)
     }
 
     fn save_condition_editor_document(&mut self) -> Result<(), String> {
-        let path = self
-            .condition_editor_state
-            .loaded_path
-            .clone()
-            .ok_or_else(|| "保存先の条件 JSON パスが未設定です".to_string())?;
-        let document = self
-            .condition_editor_state
-            .document
-            .as_ref()
-            .ok_or_else(|| "保存対象の条件 JSON が読み込まれていません".to_string())?;
-        save_condition_document_atomic(&path, document)?;
-        self.load_condition_editor_from_path(path.clone(), "条件 JSON を保存しました。")?;
-        self.condition_editor_state.status_message =
-            Some(format!("条件 JSON を保存しました: {}", path.display()));
-        self.condition_editor_state.status_is_error = false;
-        Ok(())
-    }
-
-    fn sync_condition_editor_with_runtime_path(&mut self) {
-        if !self.condition_editor_state.window_open {
-            return;
-        }
-
-        let Ok(resolved_path) = self.resolved_filter_config_path() else {
-            return;
-        };
-        let Some(loaded_path) = self.condition_editor_state.loaded_path.clone() else {
-            return;
-        };
-        if resolved_path == loaded_path {
-            self.condition_editor_state.pending_path_sync = None;
-            return;
-        }
-
-        if self.condition_editor_state.is_dirty {
-            self.condition_editor_state.pending_path_sync = Some(resolved_path.clone());
-            self.condition_editor_state.status_message = Some(format!(
-                "分析設定で条件 JSON の解決先が変更されました。再読込が必要です: {}",
-                resolved_path.display()
-            ));
-            self.condition_editor_state.status_is_error = true;
-            return;
-        }
-
-        match self.reload_condition_editor(resolved_path.clone()) {
-            Ok(()) => {
-                self.condition_editor_state.pending_path_sync = None;
-                self.condition_editor_state.status_message = Some(format!(
-                    "分析設定の変更に合わせて条件 JSON を再読込しました: {}",
-                    resolved_path.display()
-                ));
-                self.condition_editor_state.status_is_error = false;
-            }
-            Err(error) => {
-                self.condition_editor_state.pending_path_sync = Some(resolved_path);
-                self.condition_editor_state.status_message = Some(error);
-                self.condition_editor_state.status_is_error = true;
-            }
-        }
+        save_condition_document_for_state(&mut self.state, &mut self.ui_state)
     }
 
     fn start_analysis_job(&mut self) -> Result<(), String> {
-        if self.analysis_runtime_state.current_job.is_some() {
-            return Err("分析ジョブは既に実行中です".to_string());
-        }
-
-        let runtime = self
-            .analysis_runtime_state
-            .runtime
-            .clone()
-            .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
-
-        cleanup_job_directories(&runtime.jobs_root)?;
-
-        let (job_id, receiver) = spawn_analysis_job(AnalysisJobRequest {
-            db_path: self.db_viewer_state.db_path.clone(),
-            runtime,
-        });
-
-        self.analysis_runtime_state.last_warnings.clear();
-        self.analysis_runtime_state.warning_window_open = false;
-        self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-        self.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis { job_id };
-        Ok(())
+        start_analysis(&mut self.state, &mut self.ui_state, &mut self.job_manager)
     }
 
     fn start_export_job(&mut self, output_csv_path: PathBuf) -> Result<(), String> {
-        if self.analysis_runtime_state.current_job.is_some() {
-            return Err("分析ジョブは既に実行中です".to_string());
-        }
-
-        let runtime = self
-            .analysis_runtime_state
-            .runtime
-            .clone()
-            .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
-        let export_context = self
-            .analysis_runtime_state
-            .last_export_context
-            .clone()
-            .ok_or_else(|| "保存対象の分析結果がありません".to_string())?;
-
-        let (job_id, receiver) = spawn_export_job(AnalysisExportRequest {
-            db_path: export_context.db_path,
-            filter_config_path: export_context.filter_config_path,
-            annotation_csv_path: export_context.annotation_csv_path,
+        start_export(
+            &mut self.state,
+            &mut self.ui_state,
+            &mut self.job_manager,
             output_csv_path,
-            runtime,
-        });
-
-        self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-        self.analysis_runtime_state.status = AnalysisJobStatus::RunningExport { job_id };
-        Ok(())
+        )
     }
 
     fn poll_analysis_job(&mut self, ctx: &egui::Context) {
-        let Some(running_job) = self.analysis_runtime_state.current_job.as_ref() else {
-            return;
-        };
-
-        match running_job.receiver.try_recv() {
-            Ok(AnalysisJobEvent::AnalysisCompleted(result)) => {
-                self.analysis_runtime_state.current_job = None;
-                match result {
-                    Ok(success) => self.handle_analysis_success(success),
-                    Err(failure) => self.handle_analysis_failure(failure),
-                }
-                ctx.request_repaint();
-            }
-            Ok(AnalysisJobEvent::ExportCompleted(result)) => {
-                self.analysis_runtime_state.current_job = None;
-                match result {
-                    Ok(success) => self.handle_export_success(success),
-                    Err(failure) => self.handle_analysis_failure(failure),
-                }
-                ctx.request_repaint();
-            }
-            Err(TryRecvError::Empty) => {
+        match poll_analysis_jobs(&mut self.state, &mut self.ui_state, &mut self.job_manager) {
+            PollAnalysisJobResult::Idle => {}
+            PollAnalysisJobResult::Pending => {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
-            Err(TryRecvError::Disconnected) => {
-                self.analysis_runtime_state.current_job = None;
-                self.analysis_runtime_state.status = AnalysisJobStatus::Failed {
-                    summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
-                };
+            PollAnalysisJobResult::Updated { error_message } => {
+                if let Some(error_message) = error_message {
+                    self.error_message = Some(error_message);
+                }
                 ctx.request_repaint();
             }
         }
-    }
-
-    fn handle_analysis_success(&mut self, success: AnalysisJobSuccess) {
-        let warnings = success.meta.warning_messages.clone();
-        let warning_count = warnings.len();
-        let source_label = format!("分析結果: {}", success.meta.job_id);
-        self.replace_records(success.records, source_label);
-        let mut summary = format!(
-            "{}{}抽出 / {:.2} 秒",
-            success.meta.selected_unit_count(),
-            success.meta.analysis_unit.count_label(),
-            success.meta.duration_seconds
-        );
-        if warning_count > 0 {
-            summary.push_str(&format!(" / 警告 {} 件", warning_count));
-        }
-        self.analysis_runtime_state.last_warnings = warnings;
-        self.analysis_runtime_state.warning_window_open = false;
-        let annotation_csv_path = self
-            .analysis_runtime_state
-            .runtime
-            .as_ref()
-            .map(|runtime| runtime.annotation_csv_path.clone())
-            .or_else(|| self.resolved_annotation_csv_path().ok())
-            .unwrap_or_default();
-        self.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
-            db_path: PathBuf::from(&success.meta.db_path),
-            filter_config_path: PathBuf::from(&success.meta.filter_config_path),
-            annotation_csv_path,
-        });
-        self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
-    }
-
-    fn handle_export_success(&mut self, success: AnalysisExportSuccess) {
-        self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded {
-            summary: format!("CSV 保存完了: {}", success.output_csv_path.display()),
-        };
-        self.error_message = Some(format!(
-            "CSV を保存しました。\n\n保存先:\n{}",
-            success.output_csv_path.display()
-        ));
-    }
-
-    fn handle_analysis_failure(&mut self, failure: AnalysisJobFailure) {
-        let warnings = failure
-            .meta
-            .as_ref()
-            .map(|meta| meta.warning_messages.clone())
-            .unwrap_or_default();
-        let summary = failure.message.clone();
-        self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary };
-        self.analysis_runtime_state.last_warnings = warnings;
-        self.analysis_runtime_state.warning_window_open = false;
-
-        let mut error_message = failure.message;
-        if !failure.stderr.is_empty() {
-            error_message.push_str("\n\nstderr:\n");
-            error_message.push_str(&failure.stderr);
-        }
-        if let Some(meta) = failure.meta {
-            if !meta.error_summary.trim().is_empty() {
-                error_message.push_str("\n\nmeta.errorSummary:\n");
-                error_message.push_str(&meta.error_summary);
-            }
-        }
-        self.error_message = Some(error_message);
     }
 
     fn warning_headline(&self, warning: &AnalysisWarningMessage) -> String {
@@ -1237,14 +420,14 @@ impl App {
     }
 
     fn draw_warning_details_window(&mut self, ctx: &egui::Context) {
-        if !self.analysis_runtime_state.warning_window_open {
+        if !self.ui_state.warning_details_window_open {
             return;
         }
 
-        let mut window_open = self.analysis_runtime_state.warning_window_open;
+        let mut window_open = self.ui_state.warning_details_window_open;
         egui::Window::new(format!(
             "警告詳細 ({})",
-            self.analysis_runtime_state.last_warnings.len()
+            self.state.analysis_runtime_state.last_warnings.len()
         ))
         .open(&mut window_open)
         .resizable(true)
@@ -1254,8 +437,12 @@ impl App {
                 .max_height(480.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for (idx, warning) in
-                        self.analysis_runtime_state.last_warnings.iter().enumerate()
+                    for (idx, warning) in self
+                        .state
+                        .analysis_runtime_state
+                        .last_warnings
+                        .iter()
+                        .enumerate()
                     {
                         ui.group(|ui| {
                             ui.label(
@@ -1270,17 +457,17 @@ impl App {
                                 ui.add(egui::Label::new(line).wrap_mode(TextWrapMode::Wrap));
                             }
                         });
-                        if idx + 1 < self.analysis_runtime_state.last_warnings.len() {
+                        if idx + 1 < self.state.analysis_runtime_state.last_warnings.len() {
                             ui.add_space(6.0);
                         }
                     }
                 });
         });
-        self.analysis_runtime_state.warning_window_open = window_open;
+        self.ui_state.warning_details_window_open = window_open;
     }
 
     fn guard_root_close_with_dirty_editor(&mut self, ctx: &egui::Context) {
-        if !self.condition_editor_state.is_dirty {
+        if !self.state.condition_editor_state.is_dirty {
             return;
         }
         let close_requested = ctx.input(|input| input.viewport().close_requested());
@@ -1293,7 +480,7 @@ impl App {
             "condition editor に未保存の変更があるため、アプリ終了を中止しました。保存または破棄してから閉じてください。"
                 .to_string(),
         );
-        if self.condition_editor_state.window_open {
+        if self.ui_state.condition_editor.window_open {
             self.focus_condition_editor_viewport(ctx);
         }
     }
@@ -1323,7 +510,7 @@ impl eframe::App for App {
             self.draw_toolbar(ui);
         });
 
-        let consumed_tree_scroll = self.pending_tree_scroll;
+        let consumed_tree_scroll = self.ui_state.pending_tree_scroll;
         let mut clicked_row = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             clicked_row = self.draw_body(ui, consumed_tree_scroll);
@@ -1334,16 +521,16 @@ impl eframe::App for App {
         self.draw_condition_editor_window(ctx);
 
         if let Some(row_index) = clicked_row {
-            if self.apply_selection_change(SelectionChange::new(
-                Some(row_index),
-                ScrollBehavior::KeepVisible,
-            )) {
+            if self.state.apply_selection_change(
+                &mut self.ui_state,
+                SelectionChange::new(Some(row_index), ScrollBehavior::KeepVisible),
+            ) {
                 ctx.request_repaint();
             }
         }
 
-        if self.pending_tree_scroll == consumed_tree_scroll {
-            self.pending_tree_scroll = None;
+        if self.ui_state.pending_tree_scroll == consumed_tree_scroll {
+            self.ui_state.pending_tree_scroll = None;
         }
     }
 }
@@ -1352,60 +539,14 @@ impl App {
     fn draw_db_viewer_button(&mut self, ui: &mut Ui, enabled: bool) {
         let response = ui.add_enabled(enabled, egui::Button::new("DB参照"));
         if response.clicked() {
-            if let Err(error) = self.open_db_viewer_for_selected_record() {
+            if let Err(error) = open_db_viewer_for_selected_record(&mut self.state) {
                 self.error_message = Some(error);
             }
         }
     }
 
-    fn open_db_viewer_for_selected_record(&mut self) -> Result<(), String> {
-        self.prepare_db_viewer_state()?;
-        self.load_db_viewer_context();
-        Ok(())
-    }
-
-    fn load_db_viewer_context(&mut self) {
-        let Some(paragraph_id) = self.db_viewer_state.source_paragraph_id else {
-            self.db_viewer_state.context = None;
-            self.db_viewer_state.error_message =
-                Some("参照元 paragraph_id が未設定です".to_string());
-            self.db_viewer_state.is_open = true;
-            return;
-        };
-
-        match fetch_paragraph_context(&self.db_viewer_state.db_path, paragraph_id) {
-            Ok(context) => {
-                self.db_viewer_state.context = Some(context);
-                self.db_viewer_state.error_message = None;
-                self.db_viewer_state.is_open = true;
-            }
-            Err(error) => {
-                self.db_viewer_state.context = None;
-                self.db_viewer_state.error_message = Some(error);
-                self.db_viewer_state.is_open = true;
-            }
-        }
-    }
-
-    fn load_db_viewer_context_for_location(&mut self, document_id: i64, paragraph_no: i64) {
-        match fetch_paragraph_context_by_location(
-            &self.db_viewer_state.db_path,
-            document_id,
-            paragraph_no,
-        ) {
-            Ok(context) => {
-                self.db_viewer_state.context = Some(context);
-                self.db_viewer_state.error_message = None;
-            }
-            Err(error) => {
-                self.db_viewer_state.context = None;
-                self.db_viewer_state.error_message = Some(error);
-            }
-        }
-    }
-
     fn previous_db_viewer_location(&self) -> Option<(i64, i64)> {
-        let context = self.db_viewer_state.context.as_ref()?;
+        let context = self.state.db_viewer_state.context.as_ref()?;
         let previous_paragraph_no = context
             .paragraphs
             .iter()
@@ -1417,7 +558,7 @@ impl App {
     }
 
     fn next_db_viewer_location(&self) -> Option<(i64, i64)> {
-        let context = self.db_viewer_state.context.as_ref()?;
+        let context = self.state.db_viewer_state.context.as_ref()?;
         let next_paragraph_no = context
             .paragraphs
             .iter()
@@ -1429,11 +570,11 @@ impl App {
     }
 
     fn draw_db_viewer_window(&mut self, ctx: &egui::Context) {
-        if !self.db_viewer_state.is_open {
+        if !self.state.db_viewer_state.is_open {
             return;
         }
 
-        let snapshot = self.db_viewer_state.clone();
+        let snapshot = self.state.db_viewer_state.clone();
         let previous_location = self.previous_db_viewer_location();
         let next_location = self.next_db_viewer_location();
         let mut requested_location = None;
@@ -1484,12 +625,12 @@ impl App {
         });
 
         if close_requested {
-            self.db_viewer_state.is_open = false;
+            self.state.db_viewer_state.is_open = false;
             return;
         }
 
         if let Some((document_id, paragraph_no)) = requested_location {
-            self.load_db_viewer_context_for_location(document_id, paragraph_no);
+            load_db_viewer_context_for_location(&mut self.state, document_id, paragraph_no);
             ctx.request_repaint();
         }
     }
@@ -1498,7 +639,7 @@ impl App {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label("表示元:");
-                let path_str = self.records_source_label.clone();
+                let path_str = self.state.records_source_label.clone();
                 ui.add(
                     ime_safe_singleline(&mut path_str.as_str())
                         .desired_width(600.0)
@@ -1517,43 +658,47 @@ impl App {
 
                 ui.separator();
                 let selected_position = self
+                    .state
                     .selected_row
                     .map(|idx| idx + 1)
                     .map(|position| position.to_string())
                     .unwrap_or_else(|| "-".to_string());
                 ui.label(format!(
                     "総件数: {} 件  抽出後: {} 件  選択: {} / {}",
-                    self.all_records.len(),
-                    self.filtered_indices.len(),
+                    self.state.all_records.len(),
+                    self.state.filtered_indices.len(),
                     selected_position,
-                    self.filtered_indices.len()
+                    self.state.filtered_indices.len()
                 ));
             });
 
             ui.horizontal_wrapped(|ui| {
-                let can_start = self.analysis_runtime_state.can_start();
-                let can_export = self.analysis_runtime_state.can_export();
-                let settings_enabled = self.analysis_runtime_state.current_job.is_none();
+                let can_start = self.state.analysis_runtime_state.can_start();
+                let can_export = self.state.analysis_runtime_state.can_export();
+                let settings_enabled = !self.job_manager.has_running_job();
                 let python_label = self
+                    .state
                     .analysis_runtime_state
                     .runtime
                     .as_ref()
                     .map(|runtime| runtime.python_label.clone())
                     .unwrap_or_else(|| "-".to_string());
                 let filter_config_label = self
+                    .state
                     .analysis_runtime_state
                     .runtime
                     .as_ref()
                     .map(|runtime| runtime.filter_config_path.display().to_string())
                     .unwrap_or_else(|| "-".to_string());
                 let annotation_label = self
+                    .state
                     .resolved_annotation_csv_path()
                     .map(|path| path.display().to_string())
                     .unwrap_or_else(|_| "-".to_string());
-                let db_label = self.db_viewer_state.db_path.display().to_string();
+                let db_label = self.state.db_viewer_state.db_path.display().to_string();
 
                 if matches!(
-                    self.analysis_runtime_state.status,
+                    self.state.analysis_runtime_state.status,
                     AnalysisJobStatus::RunningAnalysis { .. }
                         | AnalysisJobStatus::RunningExport { .. }
                 ) {
@@ -1588,7 +733,7 @@ impl App {
                     .add_enabled(settings_enabled, egui::Button::new("分析設定"))
                     .clicked()
                 {
-                    self.analysis_request_state.settings_window_open = true;
+                    self.ui_state.analysis_settings_window_open = true;
                 }
 
                 if ui
@@ -1607,67 +752,74 @@ impl App {
                 if can_export {
                     ui.label("保存対象は直近分析結果の全件です");
                 }
-                if self.analysis_runtime_state.has_warning_details()
+                if self.state.analysis_runtime_state.has_warning_details()
                     && ui.button("警告詳細").clicked()
                 {
-                    self.analysis_runtime_state.warning_window_open = true;
+                    self.ui_state.warning_details_window_open = true;
                 }
 
-                let status_text = self.analysis_runtime_state.status_text();
-                let status_color = analysis_status_color(ui, &self.analysis_runtime_state.status);
+                let status_text = self.state.analysis_runtime_state.status_text();
+                let status_color =
+                    analysis_status_color(ui, &self.state.analysis_runtime_state.status);
                 ui.label(RichText::new(status_text).color(status_color));
             });
         });
     }
 
     fn draw_analysis_settings_window(&mut self, ctx: &egui::Context) {
-        if !self.analysis_request_state.settings_window_open {
+        if !self.ui_state.analysis_settings_window_open {
             return;
         }
 
-        let mut window_open = self.analysis_request_state.settings_window_open;
+        let mut window_open = self.ui_state.analysis_settings_window_open;
         let mut selected_python_path = None;
         let mut selected_filter_config_path = None;
         let mut selected_annotation_csv_path = None;
         let mut clear_python_override = false;
         let mut clear_filter_config_override = false;
         let mut clear_annotation_csv_override = false;
-        let settings_enabled = self.analysis_runtime_state.current_job.is_none();
+        let settings_enabled = !self.job_manager.has_running_job();
         let python_override_label = self
+            .state
             .analysis_request_state
             .python_path_override
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "自動解決".to_string());
         let filter_override_label = self
+            .state
             .analysis_request_state
             .filter_config_path_override
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "既定値 (asset/cooccurrence-conditions.json)".to_string());
         let annotation_override_label = self
+            .state
             .analysis_request_state
             .annotation_csv_path_override
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "既定値 (asset/manual-annotations.csv)".to_string());
         let resolved_python_label = self
+            .state
             .analysis_runtime_state
             .runtime
             .as_ref()
             .map(|runtime| runtime.python_label.clone())
             .unwrap_or_else(|| "-".to_string());
         let resolved_filter_label = self
+            .state
             .analysis_runtime_state
             .runtime
             .as_ref()
             .map(|runtime| runtime.filter_config_path.display().to_string())
             .unwrap_or_else(|| "-".to_string());
         let resolved_annotation_label = self
+            .state
             .resolved_annotation_csv_path()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|error| format!("解決失敗: {error}"));
-        let status_text = self.analysis_runtime_state.status_text();
+        let status_text = self.state.analysis_runtime_state.status_text();
 
         egui::Window::new("分析設定")
             .open(&mut window_open)
@@ -1737,36 +889,37 @@ impl App {
                 }
             });
 
-        self.analysis_request_state.settings_window_open = window_open;
+        self.ui_state.analysis_settings_window_open = window_open;
 
-        let mut runtime_changed = false;
-        if let Some(path) = selected_python_path {
-            self.analysis_request_state.python_path_override = Some(path);
-            runtime_changed = true;
-        }
-        if clear_python_override {
-            self.analysis_request_state.python_path_override = None;
-            runtime_changed = true;
-        }
-        if let Some(path) = selected_filter_config_path {
-            self.analysis_request_state.filter_config_path_override = Some(path);
-            runtime_changed = true;
-        }
-        if clear_filter_config_override {
-            self.analysis_request_state.filter_config_path_override = None;
-            runtime_changed = true;
-        }
-        if let Some(path) = selected_annotation_csv_path {
-            self.analysis_request_state.annotation_csv_path_override = Some(path);
-            runtime_changed = true;
-        }
-        if clear_annotation_csv_override {
-            self.analysis_request_state.annotation_csv_path_override = None;
-            runtime_changed = true;
-        }
+        let runtime_changed = apply_analysis_settings_update(
+            &mut self.state,
+            &mut self.ui_state,
+            AnalysisSettingsUpdate {
+                python_path: match (selected_python_path, clear_python_override) {
+                    (Some(path), _) => OptionalPathUpdate::Set(path),
+                    (None, true) => OptionalPathUpdate::Clear,
+                    (None, false) => OptionalPathUpdate::Unchanged,
+                },
+                filter_config_path: match (
+                    selected_filter_config_path,
+                    clear_filter_config_override,
+                ) {
+                    (Some(path), _) => OptionalPathUpdate::Set(path),
+                    (None, true) => OptionalPathUpdate::Clear,
+                    (None, false) => OptionalPathUpdate::Unchanged,
+                },
+                annotation_csv_path: match (
+                    selected_annotation_csv_path,
+                    clear_annotation_csv_override,
+                ) {
+                    (Some(path), _) => OptionalPathUpdate::Set(path),
+                    (None, true) => OptionalPathUpdate::Clear,
+                    (None, false) => OptionalPathUpdate::Unchanged,
+                },
+            },
+        );
 
         if runtime_changed {
-            self.refresh_analysis_runtime();
             ctx.request_repaint();
         }
     }
@@ -1787,7 +940,7 @@ impl App {
                     let list_response = render_condition_editor_list_panel(
                         ui,
                         can_modify,
-                        self.condition_editor_state.document.as_ref(),
+                        self.state.condition_editor_state.document.as_ref(),
                         selection_draft.requested_selection,
                     );
                     self.apply_condition_editor_list_response(
@@ -1849,7 +1002,7 @@ impl App {
         selection_draft: &mut ConditionEditorSelectionDraft,
         command_draft: &mut ConditionEditorCommandDraft,
     ) -> bool {
-        let Some(document) = self.condition_editor_state.document.as_mut() else {
+        let Some(document) = self.state.condition_editor_state.document.as_mut() else {
             ui.label(RichText::new("条件 JSON 未読込").italics());
             return false;
         };
@@ -1894,16 +1047,21 @@ impl App {
     }
 
     fn condition_editor_status_message(&self) -> Option<(&str, bool)> {
-        self.condition_editor_state
+        self.state
+            .condition_editor_state
             .status_message
             .as_deref()
-            .map(|message| (message, self.condition_editor_state.status_is_error))
+            .map(|message| (message, self.state.condition_editor_state.status_is_error))
     }
 
     fn condition_editor_save_enabled(&self, can_modify: bool, resolved_path_ok: bool) -> bool {
         can_modify
-            && self.condition_editor_state.document.is_some()
-            && self.condition_editor_state.pending_path_sync.is_none()
+            && self.state.condition_editor_state.document.is_some()
+            && self
+                .state
+                .condition_editor_state
+                .pending_path_sync
+                .is_none()
             && resolved_path_ok
     }
 
@@ -1941,9 +1099,14 @@ impl App {
                     can_modify,
                     loaded_path_label,
                     resolved_path_label,
-                    self.condition_editor_state.pending_path_sync.as_deref(),
+                    self.state
+                        .condition_editor_state
+                        .pending_path_sync
+                        .as_deref(),
                     self.condition_editor_status_message(),
-                    self.condition_editor_state.projected_legacy_condition_count,
+                    self.state
+                        .condition_editor_state
+                        .projected_legacy_condition_count,
                 );
                 ui.separator();
                 self.draw_condition_editor_body_panel(
@@ -1957,7 +1120,7 @@ impl App {
                     ui,
                     self.condition_editor_save_enabled(can_modify, resolved_path_ok),
                     can_modify && resolved_path_ok,
-                    self.condition_editor_state.is_dirty,
+                    self.state.condition_editor_state.is_dirty,
                 );
                 self.apply_condition_editor_footer_response(command_draft, footer_response);
             });
@@ -1989,9 +1152,14 @@ impl App {
                     can_modify,
                     loaded_path_label,
                     resolved_path_label,
-                    self.condition_editor_state.pending_path_sync.as_deref(),
+                    self.state
+                        .condition_editor_state
+                        .pending_path_sync
+                        .as_deref(),
                     self.condition_editor_status_message(),
-                    self.condition_editor_state.projected_legacy_condition_count,
+                    self.state
+                        .condition_editor_state
+                        .projected_legacy_condition_count,
                 );
             });
 
@@ -2006,7 +1174,7 @@ impl App {
                     ui,
                     self.condition_editor_save_enabled(can_modify, resolved_path_ok),
                     can_modify && resolved_path_ok,
-                    self.condition_editor_state.is_dirty,
+                    self.state.condition_editor_state.is_dirty,
                 );
                 self.apply_condition_editor_footer_response(command_draft, footer_response);
             });
@@ -2032,11 +1200,11 @@ impl App {
             return;
         }
 
-        if self.condition_editor_state.is_dirty {
-            self.condition_editor_state.confirm_action =
+        if self.state.condition_editor_state.is_dirty {
+            self.ui_state.condition_editor.confirm_action =
                 Some(ConditionEditorConfirmAction::CloseWindow);
         } else {
-            self.condition_editor_state.window_open = false;
+            self.ui_state.condition_editor.window_open = false;
         }
     }
 
@@ -2099,15 +1267,15 @@ impl App {
         }
 
         let mut new_index = None;
-        if let Some(document) = self.condition_editor_state.document.as_mut() {
+        if let Some(document) = self.state.condition_editor_state.document.as_mut() {
             document
                 .cooccurrence_conditions
                 .push(build_default_condition_item());
             new_index = Some(document.cooccurrence_conditions.len().saturating_sub(1));
         }
         if let Some(index) = new_index {
-            self.condition_editor_state.selected_index = Some(index);
-            self.condition_editor_state.selected_group_index = Some(0);
+            self.state.condition_editor_state.selected_index = Some(index);
+            self.state.condition_editor_state.selected_group_index = Some(0);
             self.mark_condition_editor_dirty();
         }
     }
@@ -2117,23 +1285,23 @@ impl App {
             return;
         };
 
-        if let Some(document) = self.condition_editor_state.document.as_mut() {
+        if let Some(document) = self.state.condition_editor_state.document.as_mut() {
             if delete_index < document.cooccurrence_conditions.len() {
                 document.cooccurrence_conditions.remove(delete_index);
-                self.condition_editor_state.selected_index = clamp_condition_index(
+                self.state.condition_editor_state.selected_index = clamp_condition_index(
                     Some(delete_index),
                     document.cooccurrence_conditions.len(),
                 );
-                self.condition_editor_state.selected_group_index =
+                self.state.condition_editor_state.selected_group_index =
                     clamp_condition_group_selection_for_document(
                         document,
-                        self.condition_editor_state.selected_index,
+                        self.state.condition_editor_state.selected_index,
                         Some(0),
                     );
                 self.mark_condition_editor_dirty();
-                self.condition_editor_state.status_message =
+                self.state.condition_editor_state.status_message =
                     Some("condition を削除しました。".to_string());
-                self.condition_editor_state.status_is_error = false;
+                self.state.condition_editor_state.status_is_error = false;
             }
         }
     }
@@ -2165,25 +1333,26 @@ impl App {
 
         match response {
             ConditionEditorModalResponse::Continue => {
-                if let Some(confirm_action) = self.condition_editor_state.confirm_action.clone() {
+                if let Some(confirm_action) = self.ui_state.condition_editor.confirm_action.clone()
+                {
                     match confirm_action {
                         ConditionEditorConfirmAction::CloseWindow => {
-                            self.condition_editor_state.window_open = false;
-                            self.condition_editor_state.confirm_action = None;
+                            self.ui_state.condition_editor.window_open = false;
+                            self.ui_state.condition_editor.confirm_action = None;
                             ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
                         }
                         ConditionEditorConfirmAction::ReloadPath(path) => {
                             if let Err(error) = self.reload_condition_editor(path) {
-                                self.condition_editor_state.status_message = Some(error);
-                                self.condition_editor_state.status_is_error = true;
+                                self.state.condition_editor_state.status_message = Some(error);
+                                self.state.condition_editor_state.status_is_error = true;
                             }
-                            self.condition_editor_state.confirm_action = None;
+                            self.ui_state.condition_editor.confirm_action = None;
                         }
                     }
                 }
             }
             ConditionEditorModalResponse::Cancel => {
-                self.condition_editor_state.confirm_action = None;
+                self.ui_state.condition_editor.confirm_action = None;
             }
         }
     }
@@ -2217,7 +1386,7 @@ impl App {
     }
 
     fn draw_condition_editor_window(&mut self, ctx: &egui::Context) {
-        if !self.condition_editor_state.window_open {
+        if !self.ui_state.condition_editor.window_open {
             return;
         }
 
@@ -2233,7 +1402,7 @@ impl App {
         ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
             command_draft.close_requested =
                 viewport_ctx.input(|input| input.viewport().close_requested());
-            if command_draft.close_requested && self.condition_editor_state.is_dirty {
+            if command_draft.close_requested && self.state.condition_editor_state.is_dirty {
                 viewport_ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }
 
@@ -2277,8 +1446,8 @@ impl App {
             command_draft,
             &window_inputs.resolved_path_result,
         ) {
-            self.condition_editor_state.status_message = Some(error);
-            self.condition_editor_state.status_is_error = true;
+            self.state.condition_editor_state.status_message = Some(error);
+            self.state.condition_editor_state.status_is_error = true;
         }
     }
 
@@ -2290,10 +1459,11 @@ impl App {
         let mut clicked_row = None;
         let available_width = ui.available_width().max(1.0);
         let record_list_panel_width_range = self.record_list_panel_width_range(available_width);
-        let default_list_panel_width = (available_width * self.record_list_panel_ratio).clamp(
-            *record_list_panel_width_range.start(),
-            *record_list_panel_width_range.end(),
-        );
+        let default_list_panel_width = (available_width * self.ui_state.record_list_panel_ratio)
+            .clamp(
+                *record_list_panel_width_range.start(),
+                *record_list_panel_width_range.end(),
+            );
 
         let list_panel_response = egui::SidePanel::left("record_list_panel")
             .resizable(true)
@@ -2306,7 +1476,7 @@ impl App {
                 clicked_row = self.draw_tree(ui, tree_scroll_request);
             });
 
-        self.record_list_panel_ratio =
+        self.ui_state.record_list_panel_ratio =
             (list_panel_response.response.rect.width() / available_width).clamp(
                 RECORD_LIST_PANEL_MIN_WIDTH / available_width,
                 RECORD_LIST_PANEL_MAX_RATIO,
@@ -2328,19 +1498,25 @@ impl App {
 
     fn draw_filters(&mut self, ui: &mut Ui) {
         let active_count: usize = self
+            .state
             .selected_filter_values
             .values()
             .map(BTreeSet::len)
             .sum();
         let options = self
+            .state
             .filter_options
-            .get(&self.active_filter_column)
+            .get(&self.state.active_filter_column)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let selected_values = self.selected_filter_values.get(&self.active_filter_column);
+        let selected_values = self
+            .state
+            .selected_filter_values
+            .get(&self.state.active_filter_column);
         let candidate_query = self
+            .state
             .filter_candidate_queries
-            .get(&self.active_filter_column)
+            .get(&self.state.active_filter_column)
             .map(String::as_str)
             .unwrap_or("");
         let normalized_query = normalize_filter_candidate_search_text(candidate_query);
@@ -2359,6 +1535,7 @@ impl App {
             }
         }
         let active_values: Vec<(FilterColumn, String)> = self
+            .state
             .selected_filter_values
             .iter()
             .flat_map(|(column, values)| {
@@ -2371,7 +1548,7 @@ impl App {
             .collect();
         let response = render_filter_panel(
             ui,
-            self.active_filter_column,
+            self.state.active_filter_column,
             active_count,
             &matching_options,
             &selected_non_matching_options,
@@ -2381,29 +1558,37 @@ impl App {
             !options.is_empty(),
         );
 
-        let response_column = self.active_filter_column;
+        let response_column = self.state.active_filter_column;
         if let Some(updated_query) = response.updated_query {
             if updated_query.is_empty() {
-                self.filter_candidate_queries.remove(&response_column);
+                self.state.filter_candidate_queries.remove(&response_column);
             } else {
-                self.filter_candidate_queries
+                self.state
+                    .filter_candidate_queries
                     .insert(response_column, updated_query);
             }
         }
         if let Some(selected_column) = response.selected_column {
-            self.active_filter_column = selected_column;
+            self.state.active_filter_column = selected_column;
         }
         if response.clear_column_clicked {
-            self.clear_filters_for_column(self.active_filter_column);
+            self.state
+                .clear_filters_for_column(&mut self.ui_state, self.state.active_filter_column);
         }
         if response.clear_all_clicked {
-            self.clear_all_filters();
+            self.state.clear_all_filters(&mut self.ui_state);
         }
         for (value, selected) in response.toggled_options {
-            self.toggle_filter_value(self.active_filter_column, &value, selected);
+            self.state.toggle_filter_value(
+                &mut self.ui_state,
+                self.state.active_filter_column,
+                &value,
+                selected,
+            );
         }
         for (column, value) in response.removed_active_values {
-            self.toggle_filter_value(column, &value, false);
+            self.state
+                .toggle_filter_value(&mut self.ui_state, column, &value, false);
         }
     }
 
@@ -2412,8 +1597,8 @@ impl App {
         ui: &mut Ui,
         tree_scroll_request: Option<TreeScrollRequest>,
     ) -> Option<usize> {
-        let filtered_indices = &self.filtered_indices;
-        let selected_row = self.selected_row;
+        let filtered_indices = &self.state.filtered_indices;
+        let selected_row = self.state.selected_row;
         let mut clicked_row = None;
         let selected_fill = Color32::from_rgb(70, 130, 180);
         let mut table = TableBuilder::new(ui)
@@ -2442,7 +1627,7 @@ impl App {
             .body(|body| {
                 body.rows(22.0, filtered_indices.len(), |mut row| {
                     let i = row.index();
-                    let record = &self.all_records[filtered_indices[i]];
+                    let record = &self.state.all_records[filtered_indices[i]];
                     let is_selected = selected_row == Some(i);
 
                     let mut row_clicked = false;
@@ -2487,7 +1672,7 @@ impl App {
     }
 
     fn draw_detail(&mut self, ui: &mut Ui) {
-        if let Some(record) = self.selected_record().cloned() {
+        if let Some(record) = self.state.selected_record().cloned() {
             self.draw_db_viewer_button(ui, record.supports_db_viewer());
             if !record.supports_db_viewer() {
                 ui.label("sentence 行では DB viewer は無効です。");
@@ -2496,10 +1681,10 @@ impl App {
             self.draw_record_summary(ui, &record);
             ui.separator();
 
-            let detail_job = build_record_text_layout_job(ui, &self.get_segments());
+            let detail_job = build_record_text_layout_job(ui, &self.state.get_segments());
 
             if record.supports_manual_annotation() {
-                if self.annotation_panel_expanded {
+                if self.ui_state.annotation_panel_expanded {
                     egui::TopBottomPanel::bottom("annotation_editor_panel_expanded")
                         .resizable(false)
                         .default_height(230.0)
@@ -2641,30 +1826,32 @@ impl App {
     fn draw_annotation_editor_collapsed_bar(&mut self, ui: &mut Ui, record: &AnalysisRecord) {
         let annotation_supported = record.supports_manual_annotation();
 
-        let response = ui.horizontal(|ui| {
-            if annotation_supported {
-                ui.label(RichText::new("▶").strong());
+        let response = ui
+            .horizontal(|ui| {
+                if annotation_supported {
+                    ui.label(RichText::new("▶").strong());
 
-                let count_str = if record.manual_annotation_count == "0"
-                    || record.manual_annotation_count.is_empty()
-                {
-                    "なし".to_string()
+                    let count_str = if record.manual_annotation_count == "0"
+                        || record.manual_annotation_count.is_empty()
+                    {
+                        "なし".to_string()
+                    } else {
+                        format!("{}件", record.manual_annotation_count)
+                    };
+
+                    ui.label(RichText::new(format!("annotation 追記 ({})", count_str)).strong());
                 } else {
-                    format!("{}件", record.manual_annotation_count)
-                };
-
-                ui.label(RichText::new(format!("annotation 追記 ({})", count_str)).strong());
-            } else {
-                ui.label(RichText::new("▶").color(ui.visuals().weak_text_color()));
-                ui.label(
-                    RichText::new("sentence 行では manual annotation editor は無効です。")
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
-        }).response;
+                    ui.label(RichText::new("▶").color(ui.visuals().weak_text_color()));
+                    ui.label(
+                        RichText::new("sentence 行では manual annotation editor は無効です。")
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                }
+            })
+            .response;
 
         if annotation_supported && response.interact(egui::Sense::click()).clicked() {
-            self.annotation_panel_expanded = true;
+            self.ui_state.annotation_panel_expanded = true;
         }
     }
 
@@ -2676,19 +1863,22 @@ impl App {
             record.manual_annotation_pairs_text.clone()
         };
         let annotation_path_label = self
+            .state
             .resolved_annotation_csv_path()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|error| format!("解決失敗: {error}"));
-        let annotation_save_enabled = self.annotation_save_enabled();
+        let annotation_save_enabled = self.state.annotation_save_enabled();
 
         ui.group(|ui| {
-            let title_response = ui.horizontal(|ui| {
-                ui.label(RichText::new("▼").strong());
-                ui.label(RichText::new("annotation 追記").strong());
-            }).response;
+            let title_response = ui
+                .horizontal(|ui| {
+                    ui.label(RichText::new("▼").strong());
+                    ui.label(RichText::new("annotation 追記").strong());
+                })
+                .response;
 
             if title_response.interact(egui::Sense::click()).clicked() {
-                self.annotation_panel_expanded = false;
+                self.ui_state.annotation_panel_expanded = false;
             }
             ui.label(format!("保存先: {annotation_path_label}"));
             if !annotation_supported {
@@ -2717,32 +1907,32 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("namespace");
                     ui.add(ime_safe_singleline(
-                        &mut self.annotation_editor_state.namespace_input,
+                        &mut self.state.annotation_editor_state.namespace_input,
                     ));
                     ui.label("key");
                     ui.add(ime_safe_singleline(
-                        &mut self.annotation_editor_state.key_input,
+                        &mut self.state.annotation_editor_state.key_input,
                     ));
                 });
                 ui.horizontal(|ui| {
                     ui.label("tagged_by");
                     ui.add(ime_safe_singleline(
-                        &mut self.annotation_editor_state.tagged_by_input,
+                        &mut self.state.annotation_editor_state.tagged_by_input,
                     ));
                     ui.label("confidence");
                     ui.add(ime_safe_singleline(
-                        &mut self.annotation_editor_state.confidence_input,
+                        &mut self.state.annotation_editor_state.confidence_input,
                     ));
                 });
                 ui.label(RichText::new("改行は Shift+Enter").italics());
                 ui.label("value");
                 ui.add(
-                    ime_safe_multiline(&mut self.annotation_editor_state.value_input)
+                    ime_safe_multiline(&mut self.state.annotation_editor_state.value_input)
                         .desired_rows(2),
                 );
                 ui.label("note");
                 ui.add(
-                    ime_safe_multiline(&mut self.annotation_editor_state.note_input)
+                    ime_safe_multiline(&mut self.state.annotation_editor_state.note_input)
                         .desired_rows(2),
                 );
             });
@@ -2755,8 +1945,8 @@ impl App {
                     self.save_annotation_for_selected_record();
                 }
                 if ui.button("入力クリア").clicked() {
-                    self.clear_annotation_editor_inputs();
-                    self.clear_annotation_editor_status();
+                    self.state.clear_annotation_editor_inputs();
+                    self.state.clear_annotation_editor_status();
                 }
                 if !annotation_supported {
                     ui.label("sentence annotation 対応までは paragraph 専用です。");
@@ -2765,9 +1955,9 @@ impl App {
                 }
             });
 
-            if let Some(status_message) = &self.annotation_editor_state.status_message {
+            if let Some(status_message) = &self.state.annotation_editor_state.status_message {
                 ui.colored_label(
-                    editor_status_color(self.annotation_editor_state.status_is_error),
+                    editor_status_color(self.state.annotation_editor_state.status_is_error),
                     status_message,
                 );
             }
