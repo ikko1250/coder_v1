@@ -1,6 +1,7 @@
 use crate::filter::display_filter_value;
 use crate::model::{FilterColumn, FilterOption};
-use egui::{RichText, ScrollArea, Ui};
+use crate::ui_helpers::ime_safe_singleline;
+use egui::{Key, RichText, ScrollArea, Ui};
 use std::collections::BTreeSet;
 
 const FILTER_OPTION_COUNT_WIDTH: f32 = 56.0;
@@ -12,6 +13,7 @@ pub(crate) struct FilterPanelResponse {
     pub(crate) selected_column: Option<FilterColumn>,
     pub(crate) clear_column_clicked: bool,
     pub(crate) clear_all_clicked: bool,
+    pub(crate) updated_query: Option<String>,
     pub(crate) toggled_options: Vec<(String, bool)>,
     pub(crate) removed_active_values: Vec<(FilterColumn, String)>,
 }
@@ -20,9 +22,12 @@ pub(crate) fn draw_filter_panel(
     ui: &mut Ui,
     active_column: FilterColumn,
     active_count: usize,
-    options: &[FilterOption],
+    matching_options: &[FilterOption],
+    selected_non_matching_options: &[FilterOption],
     selected_values: Option<&BTreeSet<String>>,
     active_values: &[(FilterColumn, String)],
+    candidate_query: &str,
+    has_any_options: bool,
 ) -> FilterPanelResponse {
     let mut response = FilterPanelResponse::default();
     let mut selected_column = active_column;
@@ -38,8 +43,16 @@ pub(crate) fn draw_filter_panel(
                 &mut selected_column,
                 &mut response,
             );
+            draw_candidate_query_input(ui, candidate_query, &mut response);
 
-            draw_fixed_column_filter_options(ui, options, selected_values, &mut response);
+            draw_fixed_column_filter_options(
+                ui,
+                matching_options,
+                selected_non_matching_options,
+                selected_values,
+                has_any_options,
+                &mut response,
+            );
             draw_active_filter_values(ui, active_values, &mut response);
         });
 
@@ -79,17 +92,38 @@ fn draw_filter_header(
     });
 }
 
+fn draw_candidate_query_input(
+    ui: &mut Ui,
+    candidate_query: &str,
+    response: &mut FilterPanelResponse,
+) {
+    let mut query = candidate_query.to_string();
+    let text_edit_response = ui.add(ime_safe_singleline(&mut query).hint_text("候補を検索"));
+
+    if text_edit_response.changed() {
+        response.updated_query = Some(query.clone());
+    }
+
+    let escape_pressed =
+        text_edit_response.has_focus() && ui.input(|input| input.key_pressed(Key::Escape));
+    if escape_pressed && !query.is_empty() {
+        response.updated_query = Some(String::new());
+    }
+}
+
 fn draw_fixed_column_filter_options(
     ui: &mut Ui,
-    options: &[FilterOption],
+    matching_options: &[FilterOption],
+    selected_non_matching_options: &[FilterOption],
     selected_values: Option<&BTreeSet<String>>,
+    has_any_options: bool,
     response: &mut FilterPanelResponse,
 ) {
     ScrollArea::vertical()
         .id_salt("filter_options_scroll")
         .max_height(180.0)
         .show(ui, |ui| {
-            if options.is_empty() {
+            if !has_any_options {
                 ui.label(RichText::new("候補なし").italics());
                 return;
             }
@@ -106,26 +140,63 @@ fn draw_fixed_column_filter_options(
             // Tighter vertical spacing for filter options
             ui.spacing_mut().item_spacing.y = 4.0;
 
-            for row_options in options.chunks(column_count) {
-                ui.horizontal(|ui| {
-                    for option in row_options {
-                        let is_selected =
-                            selected_values.is_some_and(|values| values.contains(&option.value));
-                        if let Some(next_checked) =
-                            draw_filter_option_item(ui, option, is_selected, item_width)
-                        {
-                            response
-                                .toggled_options
-                                .push((option.value.clone(), next_checked));
-                        }
-                    }
+            if matching_options.is_empty() {
+                ui.label(RichText::new("一致候補なし").italics());
+            } else {
+                draw_filter_option_grid(
+                    ui,
+                    matching_options,
+                    selected_values,
+                    item_width,
+                    column_count,
+                    response,
+                );
+            }
 
-                    for _ in row_options.len()..column_count {
-                        ui.allocate_space(egui::vec2(item_width, 0.0));
-                    }
-                });
+            if !selected_non_matching_options.is_empty() {
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(RichText::new("選択中").strong());
+                draw_filter_option_grid(
+                    ui,
+                    selected_non_matching_options,
+                    selected_values,
+                    item_width,
+                    column_count,
+                    response,
+                );
             }
         });
+}
+
+fn draw_filter_option_grid(
+    ui: &mut Ui,
+    options: &[FilterOption],
+    selected_values: Option<&BTreeSet<String>>,
+    item_width: f32,
+    column_count: usize,
+    response: &mut FilterPanelResponse,
+) {
+    for row_options in options.chunks(column_count) {
+        ui.horizontal(|ui| {
+            for option in row_options {
+                let is_selected =
+                    selected_values.is_some_and(|values| values.contains(&option.value));
+                if let Some(next_checked) =
+                    draw_filter_option_item(ui, option, is_selected, item_width)
+                {
+                    response
+                        .toggled_options
+                        .push((option.value.clone(), next_checked));
+                }
+            }
+
+            for _ in row_options.len()..column_count {
+                ui.allocate_space(egui::vec2(item_width, 0.0));
+            }
+        });
+    }
 }
 
 fn filter_option_column_count(available_width: f32) -> usize {
@@ -167,32 +238,36 @@ fn draw_filter_option_item(
                     ui.set_width(item_width);
 
                     // We need to vertically center everything manually since ui.add_sized can be weird
-                    let checkbox_response = ui.allocate_ui_with_layout(
-                        egui::vec2(FILTER_OPTION_CHECKBOX_WIDTH, layout_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| ui.add(egui::Checkbox::without_text(&mut checked)),
-                    ).inner;
+                    let checkbox_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(FILTER_OPTION_CHECKBOX_WIDTH, layout_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.add(egui::Checkbox::without_text(&mut checked)),
+                        )
+                        .inner;
                     if checkbox_response.changed() {
                         changed = true;
                     }
 
-                    let label_response = ui.allocate_ui_with_layout(
-                        egui::vec2(label_width, layout_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            // Using add_sized ensures the clickable area fills the width,
-                            // while left-to-right alignment automatically aligns the text to the left.
-                            let r = ui.add_sized(
-                                [label_width, layout_height],
-                                egui::Label::new(label_text.as_str())
-                                    .truncate()
-                                    .selectable(false)
-                                    .halign(egui::Align::LEFT)
-                                    .sense(egui::Sense::click()),
-                            );
-                            r
-                        },
-                    ).inner;
+                    let label_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(label_width, layout_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                // Using add_sized ensures the clickable area fills the width,
+                                // while left-to-right alignment automatically aligns the text to the left.
+                                let r = ui.add_sized(
+                                    [label_width, layout_height],
+                                    egui::Label::new(label_text.as_str())
+                                        .truncate()
+                                        .selectable(false)
+                                        .halign(egui::Align::LEFT)
+                                        .sense(egui::Sense::click()),
+                                );
+                                r
+                            },
+                        )
+                        .inner;
                     if label_response.clicked() {
                         checked = !checked;
                         changed = true;
@@ -230,8 +305,7 @@ fn draw_active_filter_values(
     ui.horizontal_wrapped(|ui| {
         ui.label("適用中:");
         for (column, value) in active_values {
-            let button_label =
-                format!("{}: {} ×", column.label(), display_filter_value(value));
+            let button_label = format!("{}: {} ×", column.label(), display_filter_value(value));
             if ui.small_button(button_label).clicked() {
                 response
                     .removed_active_values

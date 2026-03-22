@@ -23,7 +23,7 @@ use crate::db::{
     fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
 };
 use crate::db_viewer_view::render_db_viewer_contents;
-use crate::filter::build_filter_options;
+use crate::filter::{build_filter_options, normalize_filter_candidate_search_text};
 use crate::filter_panel_view::draw_filter_panel as render_filter_panel;
 use crate::manual_annotation_store::{
     append_manual_annotation_namespaces_text, append_manual_annotation_pairs_text,
@@ -322,6 +322,7 @@ pub(crate) struct App {
     filtered_indices: Vec<usize>,
     filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
     selected_filter_values: HashMap<FilterColumn, BTreeSet<String>>,
+    filter_candidate_queries: HashMap<FilterColumn, String>,
     active_filter_column: FilterColumn,
     selected_row: Option<usize>,
     pending_tree_scroll: Option<TreeScrollRequest>,
@@ -345,6 +346,7 @@ impl App {
             filtered_indices: Vec::new(),
             filter_options: HashMap::new(),
             selected_filter_values: HashMap::new(),
+            filter_candidate_queries: HashMap::new(),
             active_filter_column: FilterColumn::MatchedCategories,
             selected_row: None,
             pending_tree_scroll: None,
@@ -379,6 +381,7 @@ impl App {
         self.db_viewer_state.reset_loaded_state();
         self.filter_options = build_filter_options(&self.all_records);
         self.selected_filter_values.clear();
+        self.filter_candidate_queries.clear();
         self.filtered_indices = (0..self.all_records.len()).collect();
         self.cached_segments = None;
         self.apply_selection_change(SelectionChange::first_filtered_row(
@@ -2333,6 +2336,26 @@ impl App {
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let selected_values = self.selected_filter_values.get(&self.active_filter_column);
+        let candidate_query = self
+            .filter_candidate_queries
+            .get(&self.active_filter_column)
+            .map(String::as_str)
+            .unwrap_or("");
+        let normalized_query = normalize_filter_candidate_search_text(candidate_query);
+        let mut matching_options = Vec::new();
+        let mut selected_non_matching_options = Vec::new();
+        for option in options {
+            let is_selected = selected_values.is_some_and(|values| values.contains(&option.value));
+            let matches_query = normalized_query.is_empty()
+                || normalize_filter_candidate_search_text(&option.value)
+                    .contains(&normalized_query);
+
+            if matches_query {
+                matching_options.push(option.clone());
+            } else if is_selected {
+                selected_non_matching_options.push(option.clone());
+            }
+        }
         let active_values: Vec<(FilterColumn, String)> = self
             .selected_filter_values
             .iter()
@@ -2348,11 +2371,23 @@ impl App {
             ui,
             self.active_filter_column,
             active_count,
-            options,
+            &matching_options,
+            &selected_non_matching_options,
             selected_values,
             &active_values,
+            candidate_query,
+            !options.is_empty(),
         );
 
+        let response_column = self.active_filter_column;
+        if let Some(updated_query) = response.updated_query {
+            if updated_query.is_empty() {
+                self.filter_candidate_queries.remove(&response_column);
+            } else {
+                self.filter_candidate_queries
+                    .insert(response_column, updated_query);
+            }
+        }
         if let Some(selected_column) = response.selected_column {
             self.active_filter_column = selected_column;
         }

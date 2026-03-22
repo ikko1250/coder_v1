@@ -174,6 +174,10 @@ pub(crate) fn display_filter_value(value: &str) -> String {
     }
 }
 
+pub(crate) fn normalize_filter_candidate_search_text(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
 fn filter_column_spec(column: FilterColumn) -> &'static FilterColumnSpec {
     FILTER_COLUMN_SPECS
         .iter()

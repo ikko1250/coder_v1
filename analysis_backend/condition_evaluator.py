@@ -399,7 +399,7 @@ def _build_form_group_explanation_lines(
             if form_group.anchor_form:
                 line_parts.append(f"anchor={form_group.anchor_form}")
             if form_group.effective_max_token_distance is not None:
-                line_parts.append(f"window<=+{int(form_group.effective_max_token_distance)}")
+                line_parts.append(f"window±{int(form_group.effective_max_token_distance)}")
             if form_group.exclude_forms_any:
                 line_parts.append(f"exclude_any=[{', '.join(form_group.exclude_forms_any)}]")
         explanation_lines.append(" ".join(line_parts))
@@ -992,11 +992,13 @@ def _build_positive_group_unit_match_with_window_df(
         if form_group.match_logic == "and":
             anchor_form = form_group.anchor_form or ""
             anchor_positions = positions_by_form.get(anchor_form, [])
+            max_td = int(form_group.effective_max_token_distance or 0)
             for anchor_position in anchor_positions:
-                window_end = anchor_position + int(form_group.effective_max_token_distance or 0)
+                window_start = max(0, anchor_position - max_td)
+                window_end = anchor_position + max_td
                 other_forms_match = all(
                     any(
-                        anchor_position <= position <= window_end
+                        window_start <= position <= window_end
                         for position in positions_by_form.get(form, [])
                     )
                     for form in form_group.forms
@@ -1004,7 +1006,7 @@ def _build_positive_group_unit_match_with_window_df(
                 )
                 if not other_forms_match:
                     continue
-                if any(anchor_position <= position <= window_end for position in exclude_positions):
+                if any(window_start <= position <= window_end for position in exclude_positions):
                     continue
                 matched_row = {
                     "paragraph_id": paragraph_id,
@@ -1015,16 +1017,18 @@ def _build_positive_group_unit_match_with_window_df(
                 }
                 break
         else:
+            max_td = int(form_group.effective_max_token_distance or 0)
             for form in form_group.forms:
                 for anchor_position in positions_by_form.get(form, []):
-                    window_end = anchor_position + int(form_group.effective_max_token_distance or 0)
-                    if any(anchor_position <= position <= window_end for position in exclude_positions):
+                    window_start = max(0, anchor_position - max_td)
+                    window_end = anchor_position + max_td
+                    if any(window_start <= position <= window_end for position in exclude_positions):
                         continue
                     matched_form_count = sum(
                         1
                         for candidate_form in form_group.forms
                         if any(
-                            anchor_position <= position <= window_end
+                            window_start <= position <= window_end
                             for position in positions_by_form.get(candidate_form, [])
                         )
                     )

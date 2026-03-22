@@ -5,7 +5,7 @@ use rusqlite::{Connection, OpenFlags, Row};
 use std::env;
 use std::path::{Path, PathBuf};
 
-const DEFAULT_DB_RELATIVE_PATH: &str = "asset/ordinance_analysis4.db";
+const DEFAULT_DB_RELATIVE_PATH: &str = "asset/ordinance_analysis5.db";
 pub(crate) const DEFAULT_CONTEXT_RADIUS: i64 = 2;
 
 pub(crate) fn resolve_default_db_path() -> PathBuf {

@@ -1,62 +1,110 @@
 {
-    "condition_match_logic": "any",
-    "max_reconstructed_paragraphs": 10000,
-    "cooccurrence_conditions": [
+  "condition_match_logic": "any",
+  "analysis_unit": "paragraph",
+  "max_reconstructed_paragraphs": 10000,
+  "cooccurrence_conditions": [
+    {
+      "condition_id": "table",
+      "categories": [
+        "表(抑制区域)"
+      ],
+      "overall_search_scope": "sentence",
+      "form_groups": [
         {
-            "condition_id": "suppress_area",
-            "categories": ["概念:抑制区域"],
-            "forms": ["抑制", "区域"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
         },
         {
-            "condition_id": "suppress_district",
-            "categories": ["概念:抑制区域"],
-            "forms": ["抑制", "地区"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
-        },
-        {
-            "condition_id": "restrict_area",
-            "categories": ["概念:抑制区域"],
-            "forms": ["制限", "区域"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
-        },
-        {
-            "condition_id": "restrict_district",
-            "categories": ["概念:抑制区域"],
-            "forms": ["制限", "地区"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
-        },
-        {
-            "condition_id": "preserve_area",
-            "categories": ["概念:抑制区域"],
-            "forms": ["保全", "区域"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
-        },
-        {
-            "condition_id": "preserve_district",
-            "categories": ["概念:抑制区域_保全"],
-            "forms": ["保全", "地区"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
-        },
-        {
-            "condition_id": "potential_lv1",
-            "categories": ["概念:抑制区域_保全"],
-            "forms": ["保全", "地区"],
-            "form_match_logic": "all",
-            "max_token_distance": 5,
-            "search_scope": "sentence"
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
         }
-    ]
+      ]
+    },
+    {
+      "condition_id": "table2",
+      "categories": [
+        "表(区域の名称)"
+      ],
+      "overall_search_scope": "sentence",
+      "form_groups": [
+        {
+          "forms": [
+            "|",
+            "区域",
+            "名称"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 5
+        },
+        {
+          "forms": [
+            "|",
+            "地区",
+            "名称"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "combine_logic": "or",
+          "max_token_distance": 5
+        }
+      ]
+    },
+    {
+      "condition_id": "2",
+      "categories": [
+        "表(区域名称+抑制区域)"
+      ],
+      "overall_search_scope": "paragraph",
+      "form_match_logic": "all",
+      "search_scope": "paragraph",
+      "annotation_filters": [
+        {
+          "namespace": "zoning",
+          "key": "zone_strength",
+          "value": "抑制区域",
+          "operator": "eq"
+        }
+      ],
+      "required_categories_all": [
+        "表(区域の名称)"
+      ]
+    },
+    {
+      "condition_id": "area_lv1",
+      "categories": [
+        "抑制区域"
+      ],
+      "overall_search_scope": "paragraph",
+      "form_groups": [
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "max_token_distance": 2
+        },
+        {
+          "forms": [
+            "抑制",
+            "地区"
+          ],
+          "match_logic": "and",
+          "combine_logic": "or"
+        }
+      ]
+    }
+  ]
 }
