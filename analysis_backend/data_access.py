@@ -8,6 +8,7 @@ import polars as pl
 from .condition_model import DataAccessIssue
 from .condition_model import DataAccessResult
 from .frame_schema import PARAGRAPH_METADATA_SCHEMA
+from .frame_schema import SENTENCE_METADATA_SCHEMA
 from .frame_schema import empty_df
 
 
@@ -197,4 +198,99 @@ def read_paragraph_document_metadata_result(
 def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) -> pl.DataFrame:
     return _unwrap_data_access_result(
         read_paragraph_document_metadata_result(db_path=db_path, paragraph_ids=paragraph_ids)
+    )
+
+
+def read_sentence_document_metadata_result(
+    db_path: Path,
+    sentence_ids: list[int],
+) -> DataAccessResult:
+    if not sentence_ids:
+        return DataAccessResult(
+            data_frame=empty_df(SENTENCE_METADATA_SCHEMA),
+            issues=[],
+        )
+
+    rows: list[tuple[int, int, int, str | None, str | None, int | None, int | None, str | None, int]] = []
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            sentence_columns = _read_table_columns(conn, "analysis_sentences")
+            paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
+            sentence_no_in_document_select = (
+                "COALESCE(CAST(s.sentence_no_in_document AS INTEGER), 0) AS sentence_no_in_document"
+                if "sentence_no_in_document" in sentence_columns
+                else "0 AS sentence_no_in_document"
+            )
+            sentence_text_select = (
+                "COALESCE(s.sentence_text, '') AS sentence_text"
+                if "sentence_text" in sentence_columns
+                else "'' AS sentence_text"
+            )
+            table_flag_select = (
+                "COALESCE(CAST(p.is_table_paragraph AS INTEGER), 0) AS is_table_paragraph"
+                if "is_table_paragraph" in paragraph_columns
+                else "0 AS is_table_paragraph"
+            )
+            for start_idx in range(0, len(sentence_ids), PARAGRAPH_METADATA_CHUNK_SIZE):
+                chunk_ids = sentence_ids[start_idx:start_idx + PARAGRAPH_METADATA_CHUNK_SIZE]
+                placeholders = ",".join("?" for _ in chunk_ids)
+                query = f"""
+                    SELECT
+                        s.sentence_id,
+                        s.paragraph_id,
+                        p.document_id,
+                        d.municipality_name,
+                        d.doc_type,
+                        COALESCE(CAST(s.sentence_no_in_paragraph AS INTEGER), 0) AS sentence_no_in_paragraph,
+                        {sentence_no_in_document_select},
+                        {sentence_text_select},
+                        {table_flag_select}
+                    FROM analysis_sentences AS s
+                    JOIN analysis_paragraphs AS p
+                      ON p.paragraph_id = s.paragraph_id
+                    JOIN analysis_documents AS d
+                      ON d.document_id = p.document_id
+                    WHERE s.sentence_id IN ({placeholders})
+                """
+                rows.extend(conn.execute(query, tuple(chunk_ids)).fetchall())
+    except sqlite3.Error as exc:
+        return DataAccessResult(
+            data_frame=None,
+            issues=[
+                _build_data_access_issue(
+                    code="sqlite_metadata_read_failed",
+                    message=f"SQLite metadata read failed: {db_path} ({exc})",
+                    query_name="sentence_document_metadata",
+                    db_path=db_path,
+                )
+            ],
+        )
+
+    if not rows:
+        return DataAccessResult(
+            data_frame=empty_df(SENTENCE_METADATA_SCHEMA),
+            issues=[],
+        )
+
+    return DataAccessResult(
+        data_frame=(
+            pl.DataFrame(rows, schema=list(SENTENCE_METADATA_SCHEMA.keys()), orient="row")
+            .with_columns([
+                pl.col("sentence_id").cast(pl.Int64),
+                pl.col("paragraph_id").cast(pl.Int64),
+                pl.col("document_id").cast(pl.Int64),
+                pl.col("sentence_no_in_paragraph").cast(pl.Int64),
+                pl.col("sentence_no_in_document").cast(pl.Int64),
+                pl.col("sentence_text").cast(pl.String).fill_null(""),
+                pl.col("is_table_paragraph").cast(pl.Int64),
+            ])
+            .sort(["paragraph_id", "sentence_no_in_paragraph", "sentence_id"])
+        ),
+        issues=[],
+    )
+
+
+def read_sentence_document_metadata(db_path: Path, sentence_ids: list[int]) -> pl.DataFrame:
+    return _unwrap_data_access_result(
+        read_sentence_document_metadata_result(db_path=db_path, sentence_ids=sentence_ids)
     )

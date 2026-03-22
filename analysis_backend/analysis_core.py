@@ -18,16 +18,21 @@ from .data_access import read_analysis_tokens as _read_analysis_tokens_impl
 from .data_access import read_analysis_tokens_result as _read_analysis_tokens_result_impl
 from .data_access import read_paragraph_document_metadata as _read_paragraph_document_metadata_impl
 from .data_access import read_paragraph_document_metadata_result as _read_paragraph_document_metadata_result_impl
+from .data_access import read_sentence_document_metadata as _read_sentence_document_metadata_impl
+from .data_access import read_sentence_document_metadata_result as _read_sentence_document_metadata_result_impl
 from .distance_matcher import build_condition_hit_result as _build_condition_hit_result_impl
 from .export_formatter import build_reconstructed_paragraphs_export_df as _build_reconstructed_paragraphs_export_df_impl
+from .export_formatter import build_reconstructed_sentences_export_df as _build_reconstructed_sentences_export_df_impl
 from .export_formatter import enrich_reconstructed_paragraphs_df as _enrich_reconstructed_paragraphs_df_impl
 from .export_formatter import enrich_reconstructed_paragraphs_result as _enrich_reconstructed_paragraphs_result_impl
+from .export_formatter import enrich_reconstructed_sentences_result as _enrich_reconstructed_sentences_result_impl
 from .filter_config import load_filter_config as _load_filter_config_impl
 from .filter_config import load_filter_config_result as _load_filter_config_result_impl
 from .frame_schema import CONDITION_HIT_SCHEMA
 from .frame_schema import POSITIONED_TOKEN_SCHEMA
 from .frame_schema import empty_df
 from .rendering import build_rendered_paragraphs_df as _build_rendered_paragraphs_df_impl
+from .rendering import build_rendered_sentences_df as _build_rendered_sentences_df_impl
 from .rendering import build_token_annotations_df as _build_token_annotations_df_impl
 from .rendering import render_tagged_token as _render_tagged_token_impl
 from .token_position import build_tokens_with_position_df as _build_tokens_with_position_df_impl
@@ -36,7 +41,9 @@ __all__ = [
     "build_condition_hit_tokens_df",
     "build_condition_hit_result",
     "build_reconstructed_paragraphs_export_df",
+    "build_reconstructed_sentences_export_df",
     "build_rendered_paragraphs_df",
+    "build_rendered_sentences_df",
     "build_token_annotations_df",
     "build_tokens_with_position_df",
     "enrich_reconstructed_paragraphs_df",
@@ -49,6 +56,8 @@ __all__ = [
     "read_analysis_tokens_result",
     "read_paragraph_document_metadata",
     "read_paragraph_document_metadata_result",
+    "read_sentence_document_metadata",
+    "read_sentence_document_metadata_result",
     "reconstruct_paragraphs_by_ids",
     "reconstruct_sentences_by_ids",
     "select_target_ids_by_cooccurrence_conditions",
@@ -104,17 +113,35 @@ def read_paragraph_document_metadata_result(
     )
 
 
+def read_sentence_document_metadata(db_path: Path, sentence_ids: list[int]) -> pl.DataFrame:
+    return _read_sentence_document_metadata_impl(db_path=db_path, sentence_ids=sentence_ids)
+
+
+def read_sentence_document_metadata_result(
+    db_path: Path,
+    sentence_ids: list[int],
+) -> DataAccessResult:
+    return _read_sentence_document_metadata_result_impl(
+        db_path=db_path,
+        sentence_ids=sentence_ids,
+    )
+
+
 def build_tokens_with_position_df(
     tokens_df: pl.DataFrame,
     sentences_df: pl.DataFrame,
     paragraph_ids: list[int] | None = None,
+    sentence_ids: list[int] | None = None,
     target_forms: list[str] | None = None,
+    exclude_table_paragraphs: bool = False,
 ) -> pl.DataFrame:
     return _build_tokens_with_position_df_impl(
         tokens_df=tokens_df,
         sentences_df=sentences_df,
         paragraph_ids=paragraph_ids,
+        sentence_ids=sentence_ids,
         target_forms=target_forms,
+        exclude_table_paragraphs=exclude_table_paragraphs,
     )
 
 
@@ -224,6 +251,18 @@ def build_rendered_paragraphs_df(
     )
 
 
+def build_rendered_sentences_df(
+    tokens_with_position_df: pl.DataFrame,
+    token_annotations_df: pl.DataFrame,
+    sentence_match_summary_df: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    return _build_rendered_sentences_df_impl(
+        tokens_with_position_df=tokens_with_position_df,
+        token_annotations_df=token_annotations_df,
+        sentence_match_summary_df=sentence_match_summary_df,
+    )
+
+
 def enrich_reconstructed_paragraphs_result(
     db_path: Path,
     reconstructed_paragraphs_base_df: pl.DataFrame,
@@ -243,6 +282,10 @@ def select_target_ids_by_cooccurrence_conditions(
     condition_match_logic: str = "any",
     max_paragraph_ids: int = 100,
     normalized_paragraph_annotations_df: pl.DataFrame | None = None,
+    analysis_unit: str = "paragraph",
+    distance_matching_mode: DistanceMatchingMode = "auto-approx",
+    distance_match_combination_cap: int = 10000,
+    distance_match_strict_safety_limit: int = 1000000,
 ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, list[int], list[int]]:
     # Legacy facade: keep returning the historical 5-item tuple for existing callers.
     normalized_conditions = _normalize_cooccurrence_conditions_impl(cooccurrence_conditions)
@@ -253,6 +296,10 @@ def select_target_ids_by_cooccurrence_conditions(
         condition_match_logic=condition_match_logic,
         max_paragraph_ids=max_paragraph_ids,
         normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
+        analysis_unit=analysis_unit,
+        distance_matching_mode=distance_matching_mode,
+        distance_match_combination_cap=distance_match_combination_cap,
+        distance_match_strict_safety_limit=distance_match_strict_safety_limit,
     )
     return (
         selection_result.candidate_tokens_df,
@@ -378,4 +425,22 @@ def build_reconstructed_paragraphs_export_df(
 ) -> pl.DataFrame:
     return _build_reconstructed_paragraphs_export_df_impl(
         reconstructed_paragraphs_df=reconstructed_paragraphs_df
+    )
+
+
+def enrich_reconstructed_sentences_result(
+    db_path: Path,
+    reconstructed_sentences_base_df: pl.DataFrame,
+) -> DataAccessResult:
+    return _enrich_reconstructed_sentences_result_impl(
+        db_path=db_path,
+        reconstructed_sentences_base_df=reconstructed_sentences_base_df,
+    )
+
+
+def build_reconstructed_sentences_export_df(
+    reconstructed_sentences_df: pl.DataFrame,
+) -> pl.DataFrame:
+    return _build_reconstructed_sentences_export_df_impl(
+        reconstructed_sentences_df=reconstructed_sentences_df,
     )

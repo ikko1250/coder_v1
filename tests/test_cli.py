@@ -302,6 +302,28 @@ def build_filter_config(filter_config_path: Path) -> None:
     )
 
 
+def build_sentence_unit_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "analysis_unit": "sentence",
+        "condition_match_logic": "any",
+        "max_reconstructed_paragraphs": 10,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "suppress_area_sentence",
+                "categories": ["概念:抑制区域"],
+                "forms": ["抑制", "区域"],
+                "form_match_logic": "all",
+                "max_token_distance": 5,
+                "search_scope": "sentence",
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def build_warning_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "unexpected",
@@ -821,6 +843,113 @@ class CliContractTests(unittest.TestCase):
             self.assertIn("\n", rows[0]["paragraph_text_tagged"])
             self.assertIn("[[HIT ", rows[0]["paragraph_text_tagged"])
             self.assertEqual(rows[0]["paragraph_text_highlight_html"].count("\n"), 1)
+
+    def test_run_analysis_job_writes_sentence_csv_and_meta_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_test_db(db_path)
+            build_sentence_unit_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="sentence-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="csv",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            meta_path = output_dir / "meta.json"
+            csv_path = output_dir / "result-sentences.csv"
+            self.assertTrue(meta_path.exists())
+            self.assertTrue(csv_path.exists())
+
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "succeeded")
+            self.assertEqual(meta["analysisUnit"], "sentence")
+            self.assertEqual(meta["selectedParagraphCount"], 1)
+            self.assertEqual(meta["selectedSentenceCount"], 1)
+            self.assertEqual(meta["outputCsvPath"], str(csv_path))
+
+            with csv_path.open(encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(
+                list(rows[0].keys()),
+                [
+                    "sentence_id",
+                    "paragraph_id",
+                    "document_id",
+                    "municipality_name",
+                    "ordinance_or_rule",
+                    "doc_type",
+                    "sentence_no_in_paragraph",
+                    "sentence_no_in_document",
+                    "sentence_text",
+                    "sentence_text_tagged",
+                    "sentence_text_highlight_html",
+                    "matched_condition_ids_text",
+                    "matched_categories_text",
+                    "match_group_ids_text",
+                    "match_group_count",
+                    "annotated_token_count",
+                ],
+            )
+            self.assertEqual(rows[0]["sentence_id"], "11")
+            self.assertEqual(rows[0]["paragraph_id"], "1")
+            self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area_sentence")
+            self.assertIn("[[HIT ", rows[0]["sentence_text_tagged"])
+
+    def test_run_analysis_job_keeps_table_paragraph_sentences_in_sentence_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_table_paragraph_test_db(db_path)
+            build_sentence_unit_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="sentence-table-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="csv",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            csv_path = output_dir / "result-sentences.csv"
+            with csv_path.open(encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["sentence_id"], "11")
+            self.assertEqual(rows[0]["sentence_text"], "抑制区域")
+            self.assertIn("[[HIT ", rows[0]["sentence_text_tagged"])
 
     def test_run_analysis_job_surfaces_matching_warnings_in_meta_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
