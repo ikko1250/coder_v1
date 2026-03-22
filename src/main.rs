@@ -7,6 +7,7 @@ mod app_services;
 mod app_state;
 mod app_ui_state;
 mod condition_editor;
+mod condition_editor_controller;
 mod condition_editor_view;
 mod csv_loader;
 mod db;

@@ -4,10 +4,7 @@ use crate::analysis_runner::{
     AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure,
     AnalysisJobRequest, AnalysisJobSuccess,
 };
-use crate::app_state::{
-    AnalysisExportContext, AnalysisJobStatus, AnalysisRuntimeState, AppState,
-    ConditionEditorConfirmAction,
-};
+use crate::app_state::{AnalysisExportContext, AnalysisJobStatus, AnalysisRuntimeState, AppState};
 use crate::app_ui_state::AppUiState;
 use crate::condition_editor::{load_condition_document, save_condition_document_atomic};
 use crate::csv_loader::load_records;
@@ -256,19 +253,6 @@ pub(crate) fn load_condition_editor_from_path(
     state.condition_editor_state.is_dirty = false;
     ui_state.condition_editor.confirm_action = None;
     Ok(())
-}
-
-pub(crate) fn request_condition_editor_reload(
-    state: &mut AppState,
-    ui_state: &mut AppUiState,
-    path: PathBuf,
-) -> Result<(), String> {
-    if state.condition_editor_state.is_dirty {
-        ui_state.condition_editor.confirm_action =
-            Some(ConditionEditorConfirmAction::ReloadPath(path));
-        return Ok(());
-    }
-    load_condition_editor_from_path(state, ui_state, path, "条件 JSON を再読込しました。")
 }
 
 pub(crate) fn save_condition_editor_document(
