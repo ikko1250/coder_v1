@@ -330,6 +330,7 @@ pub(crate) struct App {
     annotation_editor_state: AnnotationEditorState,
     condition_editor_state: ConditionEditorState,
     record_list_panel_ratio: f32,
+    annotation_panel_expanded: bool,
 }
 
 impl App {
@@ -353,6 +354,7 @@ impl App {
             annotation_editor_state: AnnotationEditorState::default(),
             condition_editor_state: ConditionEditorState::default(),
             record_list_panel_ratio: RECORD_LIST_PANEL_DEFAULT_RATIO,
+            annotation_panel_expanded: false,
         };
         app.try_cleanup_analysis_jobs();
         if let Some(csv_path) = initial_csv_path {
@@ -2461,13 +2463,31 @@ impl App {
 
             let detail_job = build_record_text_layout_job(ui, &self.get_segments());
 
-            egui::TopBottomPanel::bottom("annotation_editor_panel")
-                .resizable(false)
-                .default_height(230.0)
-                .min_height(200.0)
-                .show_inside(ui, |ui| {
-                    self.draw_annotation_editor_panel(ui, &record);
-                });
+            if record.supports_manual_annotation() {
+                if self.annotation_panel_expanded {
+                    egui::TopBottomPanel::bottom("annotation_editor_panel_expanded")
+                        .resizable(false)
+                        .default_height(230.0)
+                        .min_height(200.0)
+                        .show_inside(ui, |ui| {
+                            self.draw_annotation_editor_panel(ui, &record);
+                        });
+                } else {
+                    egui::TopBottomPanel::bottom("annotation_editor_panel_collapsed")
+                        .resizable(false)
+                        .min_height(0.0)
+                        .show_inside(ui, |ui| {
+                            self.draw_annotation_editor_collapsed_bar(ui, &record);
+                        });
+                }
+            } else {
+                egui::TopBottomPanel::bottom("annotation_editor_panel_collapsed")
+                    .resizable(false)
+                    .min_height(0.0)
+                    .show_inside(ui, |ui| {
+                        self.draw_annotation_editor_collapsed_bar(ui, &record);
+                    });
+            }
 
             egui::CentralPanel::default().show_inside(ui, |ui| {
                 self.draw_record_text_panel(ui, &record, detail_job);
@@ -2583,6 +2603,36 @@ impl App {
             });
     }
 
+    fn draw_annotation_editor_collapsed_bar(&mut self, ui: &mut Ui, record: &AnalysisRecord) {
+        let annotation_supported = record.supports_manual_annotation();
+
+        let response = ui.horizontal(|ui| {
+            if annotation_supported {
+                ui.label(RichText::new("▶").strong());
+
+                let count_str = if record.manual_annotation_count == "0"
+                    || record.manual_annotation_count.is_empty()
+                {
+                    "なし".to_string()
+                } else {
+                    format!("{}件", record.manual_annotation_count)
+                };
+
+                ui.label(RichText::new(format!("annotation 追記 ({})", count_str)).strong());
+            } else {
+                ui.label(RichText::new("▶").color(ui.visuals().weak_text_color()));
+                ui.label(
+                    RichText::new("sentence 行では manual annotation editor は無効です。")
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+        }).response;
+
+        if annotation_supported && response.interact(egui::Sense::click()).clicked() {
+            self.annotation_panel_expanded = true;
+        }
+    }
+
     fn draw_annotation_editor_panel(&mut self, ui: &mut Ui, record: &AnalysisRecord) {
         let annotation_supported = record.supports_manual_annotation();
         let annotation_summary = if record.manual_annotation_pairs_text.trim().is_empty() {
@@ -2597,7 +2647,14 @@ impl App {
         let annotation_save_enabled = self.annotation_save_enabled();
 
         ui.group(|ui| {
-            ui.label(RichText::new("annotation 追記").strong());
+            let title_response = ui.horizontal(|ui| {
+                ui.label(RichText::new("▼").strong());
+                ui.label(RichText::new("annotation 追記").strong());
+            }).response;
+
+            if title_response.interact(egui::Sense::click()).clicked() {
+                self.annotation_panel_expanded = false;
+            }
             ui.label(format!("保存先: {annotation_path_label}"));
             if !annotation_supported {
                 ui.label("sentence 行では manual annotation editor は無効です。");
@@ -2621,7 +2678,7 @@ impl App {
                 });
 
             ui.add_space(6.0);
-            ui.add_enabled_ui(annotation_supported, |ui| {
+            ui.add_enabled_ui(annotation_save_enabled, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("namespace");
                     ui.add(ime_safe_singleline(

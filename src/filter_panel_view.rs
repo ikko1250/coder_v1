@@ -167,32 +167,36 @@ fn draw_filter_option_item(
                     ui.set_width(item_width);
 
                     // We need to vertically center everything manually since ui.add_sized can be weird
-                    let checkbox_response = ui.allocate_ui_with_layout(
-                        egui::vec2(FILTER_OPTION_CHECKBOX_WIDTH, layout_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| ui.add(egui::Checkbox::without_text(&mut checked)),
-                    ).inner;
+                    let checkbox_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(FILTER_OPTION_CHECKBOX_WIDTH, layout_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.add(egui::Checkbox::without_text(&mut checked)),
+                        )
+                        .inner;
                     if checkbox_response.changed() {
                         changed = true;
                     }
 
-                    let label_response = ui.allocate_ui_with_layout(
-                        egui::vec2(label_width, layout_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            // Using add_sized ensures the clickable area fills the width,
-                            // while left-to-right alignment automatically aligns the text to the left.
-                            let r = ui.add_sized(
-                                [label_width, layout_height],
-                                egui::Label::new(label_text.as_str())
-                                    .truncate()
-                                    .selectable(false)
-                                    .halign(egui::Align::LEFT)
-                                    .sense(egui::Sense::click()),
-                            );
-                            r
-                        },
-                    ).inner;
+                    let label_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(label_width, layout_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                // Using add_sized ensures the clickable area fills the width,
+                                // while left-to-right alignment automatically aligns the text to the left.
+                                let r = ui.add_sized(
+                                    [label_width, layout_height],
+                                    egui::Label::new(label_text.as_str())
+                                        .truncate()
+                                        .selectable(false)
+                                        .halign(egui::Align::LEFT)
+                                        .sense(egui::Sense::click()),
+                                );
+                                r
+                            },
+                        )
+                        .inner;
                     if label_response.clicked() {
                         checked = !checked;
                         changed = true;
@@ -230,8 +234,7 @@ fn draw_active_filter_values(
     ui.horizontal_wrapped(|ui| {
         ui.label("適用中:");
         for (column, value) in active_values {
-            let button_label =
-                format!("{}: {} ×", column.label(), display_filter_value(value));
+            let button_label = format!("{}: {} ×", column.label(), display_filter_value(value));
             if ui.small_button(button_label).clicked() {
                 response
                     .removed_active_values

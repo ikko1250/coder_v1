@@ -2,14 +2,14 @@
 
 mod analysis_runner;
 mod app;
+mod condition_editor;
+mod condition_editor_view;
 mod csv_loader;
 mod db;
 mod db_viewer_view;
 mod filter;
 mod filter_panel_view;
 mod font;
-mod condition_editor;
-mod condition_editor_view;
 mod manual_annotation_store;
 mod model;
 mod tagged_text;

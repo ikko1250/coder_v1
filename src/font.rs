@@ -28,8 +28,12 @@ pub(crate) fn configure_japanese_font(ctx: &egui::Context) -> Result<Option<Path
         return Ok(None);
     };
 
-    let font_bytes = fs::read(&font_path)
-        .map_err(|e| format!("日本語フォントを読み込めませんでした ({}): {e}", font_path.display()))?;
+    let font_bytes = fs::read(&font_path).map_err(|e| {
+        format!(
+            "日本語フォントを読み込めませんでした ({}): {e}",
+            font_path.display()
+        )
+    })?;
 
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
