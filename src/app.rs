@@ -11,6 +11,7 @@ use crate::condition_editor::{
 use crate::condition_editor_view::{
     draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
     draw_condition_editor_footer_panel as render_condition_editor_footer_panel,
+    draw_condition_editor_global_settings as render_condition_editor_global_settings,
     draw_condition_editor_header_panel as render_condition_editor_header_panel,
     draw_condition_editor_list_panel as render_condition_editor_list_panel,
     draw_condition_editor_selected_condition as render_condition_editor_selected_condition,
@@ -1859,13 +1860,15 @@ impl App {
             selection_draft.requested_group_selection,
         );
 
+        changed |= render_condition_editor_global_settings(ui, document);
+
         let Some(selected_index) = selection_draft.requested_selection else {
             ui.label(RichText::new("condition を選択してください").italics());
-            return false;
+            return changed;
         };
         let Some(condition) = document.cooccurrence_conditions.get_mut(selected_index) else {
             ui.label(RichText::new("condition を選択してください").italics());
-            return false;
+            return changed;
         };
 
         let detail_response = render_condition_editor_selected_condition(
