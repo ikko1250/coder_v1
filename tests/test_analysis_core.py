@@ -1052,8 +1052,11 @@ class AnalysisCoreContractTests(unittest.TestCase):
         hit_df = hit_result.condition_hit_tokens_df.sort(
             ["paragraph_id", "sentence_id", "token_no"]
         )
-        self.assertEqual(hit_df.get_column("paragraph_id").to_list(), [1, 1])
-        self.assertEqual(hit_df.get_column("normalized_form").to_list(), ["抑制", "区域"])
+        self.assertEqual(hit_df.get_column("paragraph_id").to_list(), [1, 1, 2, 2])
+        self.assertEqual(
+            hit_df.get_column("normalized_form").to_list(),
+            ["抑制", "区域", "区域", "抑制"],
+        )
 
     def test_build_rendered_paragraphs_df_highlights_advanced_form_groups(self) -> None:
         tokens_with_position_df = pl.DataFrame(
@@ -1605,7 +1608,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertFalse(eval_rows[1]["token_is_match"])
         self.assertFalse(eval_rows[1]["is_match"])
 
-    def test_select_target_ids_by_conditions_result_supports_anchor_window_forward_only(self) -> None:
+    def test_select_target_ids_by_conditions_result_supports_anchor_window_symmetric(self) -> None:
         tokens_df = pl.DataFrame(
             {
                 "paragraph_id": [1, 1, 2, 2],
@@ -1652,10 +1655,12 @@ class AnalysisCoreContractTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(result.target_paragraph_ids, [1])
+        self.assertEqual(result.target_paragraph_ids, [1, 2])
         eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
         self.assertTrue(eval_rows[0]["token_is_match"])
-        self.assertFalse(eval_rows[1]["token_is_match"])
+        self.assertTrue(eval_rows[0]["is_match"])
+        self.assertTrue(eval_rows[1]["token_is_match"])
+        self.assertTrue(eval_rows[1]["is_match"])
 
     def test_select_target_ids_by_conditions_result_supports_exclude_forms_within_window(self) -> None:
         tokens_df = pl.DataFrame(
@@ -1708,6 +1713,55 @@ class AnalysisCoreContractTests(unittest.TestCase):
         eval_rows = result.condition_eval_df.sort("paragraph_id").to_dicts()
         self.assertTrue(eval_rows[0]["token_is_match"])
         self.assertFalse(eval_rows[1]["token_is_match"])
+
+    def test_select_target_ids_by_conditions_result_exclude_forms_any_backward_from_anchor(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1],
+                "sentence_id": [11, 11, 11],
+                "token_no": [0, 1, 2],
+                "normalized_form": ["禁止", "抑制", "区域"],
+                "surface": ["禁止", "抑制", "区域"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11],
+                "paragraph_id": [1],
+                "sentence_no_in_paragraph": [1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="exclude_backward",
+                    categories=["複合条件"],
+                    category_text="複合条件",
+                    forms=["抑制", "区域"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=2,
+                    effective_max_token_distance=2,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["抑制", "区域"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="sentence",
+                            requested_max_token_distance=2,
+                            effective_max_token_distance=2,
+                            anchor_form="抑制",
+                            exclude_forms_any=["禁止"],
+                        )
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [])
 
     def test_select_target_ids_by_conditions_result_supports_exclude_forms_without_distance(self) -> None:
         tokens_df = pl.DataFrame(

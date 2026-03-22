@@ -648,6 +648,7 @@ def _build_positive_group_candidates(
             anchor_rows = positions_by_form.get(anchor_form, [])
             for anchor_row in anchor_rows:
                 anchor_position = int(anchor_row[position_column])
+                window_start = max(0, anchor_position - max_token_distance)
                 window_end = anchor_position + max_token_distance
                 selected_rows = [anchor_row]
                 is_valid = True
@@ -657,7 +658,7 @@ def _build_positive_group_candidates(
                     matching_rows = [
                         row
                         for row in positions_by_form.get(form, [])
-                        if anchor_position <= int(row[position_column]) <= window_end
+                        if window_start <= int(row[position_column]) <= window_end
                     ]
                     if not matching_rows:
                         is_valid = False
@@ -667,7 +668,7 @@ def _build_positive_group_candidates(
                     continue
                 if exclude_forms_any:
                     has_excluded = any(
-                        anchor_position <= int(excluded_row[position_column]) <= window_end
+                        window_start <= int(excluded_row[position_column]) <= window_end
                         for exclude_form in exclude_forms_any
                         for excluded_row in positions_by_form.get(exclude_form, [])
                     )
@@ -677,7 +678,7 @@ def _build_positive_group_candidates(
                     row
                     for row in relevant_rows
                     if str(row["normalized_form"]) in forms
-                    and anchor_position <= int(row[position_column]) <= window_end
+                    and window_start <= int(row[position_column]) <= window_end
                 ]
                 return [
                     _build_candidate(
@@ -693,10 +694,11 @@ def _build_positive_group_candidates(
         for form in forms:
             for anchor_row in positions_by_form.get(form, []):
                 anchor_position = int(anchor_row[position_column])
+                window_start = max(0, anchor_position - max_token_distance)
                 window_end = anchor_position + max_token_distance
                 if exclude_forms_any:
                     has_excluded = any(
-                        anchor_position <= int(excluded_row[position_column]) <= window_end
+                        window_start <= int(excluded_row[position_column]) <= window_end
                         for exclude_form in exclude_forms_any
                         for excluded_row in positions_by_form.get(exclude_form, [])
                     )
@@ -706,7 +708,7 @@ def _build_positive_group_candidates(
                     row
                     for row in relevant_rows
                     if str(row["normalized_form"]) in forms
-                    and anchor_position <= int(row[position_column]) <= window_end
+                    and window_start <= int(row[position_column]) <= window_end
                 ]
                 if not window_rows:
                     continue
