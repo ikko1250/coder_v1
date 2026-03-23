@@ -214,3 +214,4 @@
 | 2026-03-23 | P1-07: `app_lifecycle.rs` に `run_update_prelude`（ポーリング・キーボード・終了ガード） |
 | 2026-03-23 | P1-08: `all_records` / `filtered_indices` / `selected_row` 変更パスを `docs/p1-08-record-selection-mutation-paths.md` に一覧化 |
 | 2026-03-23 | P1-09: `cached_segments` 等の無効化・更新を `docs/p1-09-cache-invalidation-paths.md` に一覧化 |
+| 2026-03-23 | P1-10: 副作用の境界を `docs/p1-10-side-effect-boundaries.md` に整理（コア候補 / ホスト必須） |

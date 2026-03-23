@@ -6,6 +6,8 @@
 //! [`docs/p1-08-record-selection-mutation-paths.md`](../docs/p1-08-record-selection-mutation-paths.md) に記載する。
 //! **`cached_segments` 等のキャッシュ無効化・更新**は P1-09 として
 //! [`docs/p1-09-cache-invalidation-paths.md`](../docs/p1-09-cache-invalidation-paths.md) に記載する。
+//! **副作用の境界（コア候補 / ホスト必須）**は P1-10 として
+//! [`docs/p1-10-side-effect-boundaries.md`](../docs/p1-10-side-effect-boundaries.md) に記載する。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
