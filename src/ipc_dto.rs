@@ -4,12 +4,31 @@
 
 use serde::{Deserialize, Serialize};
 
+/// P4-03: 現行 IPC 契約バージョン（初期固定値）。
+pub(crate) const IPC_API_VERSION: &str = "2026-03-23";
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ApiEnvelope<T> {
     pub(crate) api_version: String,
     pub(crate) payload: T,
+}
+
+#[allow(dead_code)]
+impl<T> ApiEnvelope<T> {
+    /// 現行 API バージョン付きの envelope を作る。
+    pub(crate) fn new(payload: T) -> Self {
+        Self {
+            api_version: IPC_API_VERSION.to_string(),
+            payload,
+        }
+    }
+
+    /// 現行実装で受理できる API バージョンか。
+    pub(crate) fn is_supported_api_version(&self) -> bool {
+        self.api_version == IPC_API_VERSION
+    }
 }
 
 #[allow(dead_code)]
@@ -87,12 +106,14 @@ pub(crate) struct IpcErrorDto {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisOutcomeDto, ApiEnvelope, IpcCommand, IpcErrorDto, IpcEvent};
+    use super::{
+        AnalysisOutcomeDto, ApiEnvelope, IpcCommand, IpcErrorDto, IpcEvent, IPC_API_VERSION,
+    };
 
     #[test]
     fn ipc_command_round_trip_json() {
         let command = ApiEnvelope {
-            api_version: "2026-03-23".to_string(),
+            api_version: IPC_API_VERSION.to_string(),
             payload: IpcCommand::RunAnalysis {
                 overrides: super::AnalysisOverridesDto {
                     python_path: Some("C:/Python312/python.exe".to_string()),
@@ -109,7 +130,7 @@ mod tests {
     #[test]
     fn ipc_event_round_trip_json() {
         let event = ApiEnvelope {
-            api_version: "2026-03-23".to_string(),
+            api_version: IPC_API_VERSION.to_string(),
             payload: IpcEvent::AnalysisFinished {
                 job_id: "job-123".to_string(),
                 outcome: AnalysisOutcomeDto::Succeeded,
@@ -123,7 +144,7 @@ mod tests {
     #[test]
     fn ipc_error_event_serialization_omits_job_id_when_none() {
         let event = ApiEnvelope {
-            api_version: "2026-03-23".to_string(),
+            api_version: IPC_API_VERSION.to_string(),
             payload: IpcEvent::Error {
                 error: IpcErrorDto {
                     code: "csv_not_found".to_string(),
@@ -143,7 +164,7 @@ mod tests {
     #[test]
     fn ipc_error_event_serialization_keeps_job_id_when_present() {
         let event = ApiEnvelope {
-            api_version: "2026-03-23".to_string(),
+            api_version: IPC_API_VERSION.to_string(),
             payload: IpcEvent::Error {
                 error: IpcErrorDto {
                     code: "analysis_failed".to_string(),
@@ -156,5 +177,34 @@ mod tests {
         assert!(json.contains("\"jobId\":\"job-999\""));
         let parsed: ApiEnvelope<IpcEvent> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn api_envelope_new_sets_current_api_version() {
+        let envelope = ApiEnvelope::new(IpcCommand::SelectRow { index: 3 });
+        assert_eq!(envelope.api_version, IPC_API_VERSION);
+    }
+
+    #[test]
+    fn api_version_support_check_works() {
+        let supported = ApiEnvelope {
+            api_version: IPC_API_VERSION.to_string(),
+            payload: IpcEvent::AnalysisProgress {
+                job_id: "job-1".to_string(),
+                phase: "running".to_string(),
+                message: None,
+            },
+        };
+        assert!(supported.is_supported_api_version());
+
+        let unsupported = ApiEnvelope {
+            api_version: "2026-03-24".to_string(),
+            payload: IpcEvent::AnalysisProgress {
+                job_id: "job-1".to_string(),
+                phase: "running".to_string(),
+                message: None,
+            },
+        };
+        assert!(!unsupported.is_supported_api_version());
     }
 }
