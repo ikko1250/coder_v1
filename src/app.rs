@@ -27,6 +27,7 @@
 //! **ジョブ受信→`apply_event` パイプラインの一本化**は P3-03 として [`docs/p3-03-update-event-pipeline.md`](../docs/p3-03-update-event-pipeline.md)。
 //! **ホスト起動設定（フォント／ウィンドウタイトル）の集約**は P3-04 として [`docs/p3-04-host-startup-config.md`](../docs/p3-04-host-startup-config.md)。
 //! **ログ出力インタフェースの導入**は P3-05 として [`docs/p3-05-app-logger-interface.md`](../docs/p3-05-app-logger-interface.md)。
+//! **IPC DTO（Command/Event）の serde 定義**は P4-01 として [`docs/p4-01-ipc-dto.md`](../docs/p4-01-ipc-dto.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。

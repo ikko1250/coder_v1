@@ -14,6 +14,7 @@ mod filter;
 mod filter_panel_view;
 mod file_dialog_host;
 mod font;
+mod ipc_dto;
 mod manual_annotation_store;
 mod model;
 mod tagged_text;
