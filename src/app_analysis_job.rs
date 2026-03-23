@@ -136,7 +136,7 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) {
     let warnings = success.meta.warning_messages.clone();
     let warning_count = warnings.len();
     let source_label = format!("分析結果: {}", success.meta.job_id);
-    let _ = app.apply_core_message(ViewerCoreMessage::ReplaceRecords {
+    let _ = app.apply_event(ViewerCoreMessage::ReplaceRecords {
         records: success.records,
         source_label,
     });

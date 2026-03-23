@@ -123,26 +123,43 @@ fn draw_filters(app: &mut App, ui: &mut Ui) {
         app.core.active_filter_column = selected_column;
     }
     if response.clear_column_clicked {
-        let _ = app.apply_core_message(ViewerCoreMessage::FilterClearColumn(
-            app.core.active_filter_column,
-        ));
+        if app
+            .apply_event(ViewerCoreMessage::FilterClearColumn(
+                app.core.active_filter_column,
+            ))
+            .needs_repaint
+        {
+            ui.ctx().request_repaint();
+        }
     }
     if response.clear_all_clicked {
-        let _ = app.apply_core_message(ViewerCoreMessage::FilterClearAll);
+        if app.apply_event(ViewerCoreMessage::FilterClearAll).needs_repaint {
+            ui.ctx().request_repaint();
+        }
     }
     for (value, selected) in response.toggled_options {
-        let _ = app.apply_core_message(ViewerCoreMessage::FilterToggle {
-            column: app.core.active_filter_column,
-            value,
-            selected,
-        });
+        if app
+            .apply_event(ViewerCoreMessage::FilterToggle {
+                column: app.core.active_filter_column,
+                value,
+                selected,
+            })
+            .needs_repaint
+        {
+            ui.ctx().request_repaint();
+        }
     }
     for (column, value) in response.removed_active_values {
-        let _ = app.apply_core_message(ViewerCoreMessage::FilterToggle {
-            column,
-            value,
-            selected: false,
-        });
+        if app
+            .apply_event(ViewerCoreMessage::FilterToggle {
+                column,
+                value,
+                selected: false,
+            })
+            .needs_repaint
+        {
+            ui.ctx().request_repaint();
+        }
     }
 }
 

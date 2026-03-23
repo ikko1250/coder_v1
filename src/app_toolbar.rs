@@ -24,7 +24,11 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
                     .add_filter("All files", &["*"])
                     .pick_file()
                 {
-                    app.load_csv(path);
+                    if let Some(out) = app.load_csv(path) {
+                        if out.needs_repaint {
+                            ui.ctx().request_repaint();
+                        }
+                    }
                 }
             }
 

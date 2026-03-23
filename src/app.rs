@@ -14,6 +14,7 @@
 //! 説明は [`docs/p2-01-viewer-core.md`](../docs/p2-01-viewer-core.md)。
 //! **一覧・フィルタ・選択のドメイン状態の集約**は P2-02 として [`docs/p2-02-viewer-core-domain-state.md`](../docs/p2-02-viewer-core-domain-state.md)。
 //! **コア更新の列挙型（`ViewerCoreMessage`）**は P2-03 として [`docs/p2-03-viewer-core-message.md`](../docs/p2-03-viewer-core-message.md)。
+//! **`apply_event` → `CoreOutput`（`needs_repaint`）**は P2-04 として [`docs/p2-04-core-output.md`](../docs/p2-04-core-output.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -62,7 +63,9 @@ use crate::manual_annotation_store::{
 };
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, TextSegment};
 use crate::tagged_text::parse_tagged_text;
-use crate::viewer_core::{clamp_selected_row, ViewerCoreMessage, ViewerCoreState};
+use crate::viewer_core::{
+    clamp_selected_row, CoreOutput, ViewerCoreEvent, ViewerCoreMessage, ViewerCoreState,
+};
 use eframe::egui;
 use egui::Ui;
 use egui_extras::Column;
@@ -312,29 +315,32 @@ impl App {
         };
         app.try_cleanup_analysis_jobs();
         if let Some(csv_path) = initial_csv_path {
-            app.load_csv(csv_path);
+            let _ = app.load_csv(csv_path);
         }
         app
     }
 
-    fn load_csv(&mut self, path: PathBuf) {
+    /// CSV 読込成功時は [`CoreOutput`] を返す（失敗時は `None`）。ホストが `needs_repaint` に応じて `request_repaint` できる。
+    fn load_csv(&mut self, path: PathBuf) -> Option<CoreOutput> {
         match load_records(&path) {
             Ok(records) => {
-                let _ = self.apply_core_message(ViewerCoreMessage::ReplaceRecords {
+                let out = self.apply_event(ViewerCoreMessage::ReplaceRecords {
                     records,
                     source_label: path.display().to_string(),
                 });
                 self.analysis_runtime_state.last_export_context = None;
+                Some(out)
             }
             Err(e) => {
                 self.error_message = Some(e);
+                None
             }
         }
     }
 
-    /// P2-03: 一覧・フィルタ・選択の **型付き**更新。戻り値は「再描画を促す状態変化があったか」（ホストが `request_repaint` する際の目安）。
-    pub(crate) fn apply_core_message(&mut self, message: ViewerCoreMessage) -> bool {
-        match message {
+    /// P2-04: 一覧・フィルタ・選択の **型付き**更新。[`crate::viewer_core::CoreOutput`] の `needs_repaint` で再描画要否を返す（設計 §5.5）。
+    pub(crate) fn apply_event(&mut self, event: ViewerCoreEvent) -> CoreOutput {
+        let needs_repaint = match event {
             ViewerCoreMessage::ReplaceRecords {
                 records,
                 source_label,
@@ -354,7 +360,8 @@ impl App {
             } => self.toggle_filter_value(column, &value, selected),
             ViewerCoreMessage::FilterClearColumn(column) => self.clear_filters_for_column(column),
             ViewerCoreMessage::FilterClearAll => self.clear_all_filters(),
-        }
+        };
+        CoreOutput { needs_repaint }
     }
 
     fn replace_records(&mut self, records: Vec<AnalysisRecord>, source_label: String) {
@@ -724,9 +731,12 @@ impl eframe::App for App {
         self.draw_condition_editor_window(ctx);
 
         if let Some(row_index) = clicked_row {
-            if self.apply_core_message(ViewerCoreMessage::SelectionSetFilteredRow {
-                filtered_index: row_index,
-            }) {
+            if self
+                .apply_event(ViewerCoreMessage::SelectionSetFilteredRow {
+                    filtered_index: row_index,
+                })
+                .needs_repaint
+            {
                 ctx.request_repaint();
             }
         }

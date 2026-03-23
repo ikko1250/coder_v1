@@ -5,9 +5,20 @@
 //! - **P2-01**: 足場のみ。
 //! - **P2-02**: レコード・フィルタ・選択の状態を本構造体へ集約。
 //! - **P2-03**: [`ViewerCoreMessage`] でユーザー操作・ジョブ完了に伴うコア更新を型で表現。
+//! - **P2-04**: `App::apply_event` の戻り値 [`CoreOutput`] に `needs_repaint`（設計 §5.5）。
 
 use crate::model::{AnalysisRecord, FilterColumn, FilterOption};
 use std::collections::{BTreeSet, HashMap};
+
+/// コア更新後にホスト（egui）へ伝える **副作用ヒント**（再描画など）。`egui` 非依存。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CoreOutput {
+    /// 論理状態が変化し、当該フレームまたは直後に再描画するとよい場合に `true`。
+    pub needs_repaint: bool,
+}
+
+/// P2-04: [`ViewerCoreMessage`] と同じ型。`apply_event` の引数名に合わせたエイリアス。
+pub type ViewerCoreEvent = ViewerCoreMessage;
 
 /// 一覧・フィルタ・選択まわりの **意図**（UI・ホストからコアへ）。
 ///
@@ -74,7 +85,7 @@ pub(crate) fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usiz
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_selected_row, ViewerCoreMessage, ViewerCoreState};
+    use super::{clamp_selected_row, CoreOutput, ViewerCoreMessage, ViewerCoreState};
     use crate::model::FilterColumn;
 
     #[test]
@@ -82,6 +93,11 @@ mod tests {
         let core = ViewerCoreState::default();
         assert!(core.all_records.is_empty());
         assert_eq!(clamp_selected_row(Some(5), 3), Some(2));
+    }
+
+    #[test]
+    fn core_output_default_is_no_repaint() {
+        assert!(!CoreOutput::default().needs_repaint);
     }
 
     #[test]

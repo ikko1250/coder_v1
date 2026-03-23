@@ -33,8 +33,18 @@ fn handle_keyboard_navigation(app: &mut App, ctx: &egui::Context) {
     });
 
     if down_pressed {
-        let _ = app.apply_core_message(ViewerCoreMessage::SelectionMoveDown);
+        if app
+            .apply_event(ViewerCoreMessage::SelectionMoveDown)
+            .needs_repaint
+        {
+            ctx.request_repaint();
+        }
     } else if up_pressed {
-        let _ = app.apply_core_message(ViewerCoreMessage::SelectionMoveUp);
+        if app
+            .apply_event(ViewerCoreMessage::SelectionMoveUp)
+            .needs_repaint
+        {
+            ctx.request_repaint();
+        }
     }
 }
