@@ -155,7 +155,7 @@
 
 | メソッド | 備考 |
 |----------|------|
-| `draw_toolbar` | ファイルダイアログ・分析ボタン等。肥大化しているためサブ関数への分割は P1-02 以降でも可 |
+| `draw_toolbar` | **P1-02 済**: `src/app_toolbar.rs`（`app` の子モジュール）に実装。`impl App` は `app_toolbar::draw_toolbar` に委譲。 |
 
 ### J. `app_analysis_settings` — 分析設定オーバーレイ
 
@@ -215,3 +215,4 @@
 | 日付 | 内容 |
 |------|------|
 | 2026-03-23 | P1-01 初版（`feature/p1-01-app-impl-inventory`） |
+| 2026-03-23 | P1-02: `draw_toolbar` を `src/app_toolbar.rs` へ切り出し（子モジュール `#[path]`） |

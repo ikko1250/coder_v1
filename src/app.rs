@@ -2,6 +2,12 @@
 //!
 //! **`impl App` の機能別メソッド一覧と切り出し候補モジュール**は P1-01 として
 //! [`docs/p1-01-app-impl-inventory.md`](../docs/p1-01-app-impl-inventory.md) に記載する。
+//!
+//! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
+
+#[path = "app_toolbar.rs"]
+mod app_toolbar;
+
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, resolve_annotation_csv_path,
     resolve_filter_config_path, spawn_analysis_job, spawn_export_job, AnalysisExportRequest,
@@ -1499,129 +1505,7 @@ impl App {
     }
 
     fn draw_toolbar(&mut self, ui: &mut Ui) {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label("表示元:");
-                let path_str = self.records_source_label.clone();
-                ui.add(
-                    ime_safe_singleline(&mut path_str.as_str())
-                        .desired_width(600.0)
-                        .interactive(false),
-                );
-
-                if ui.button("CSVを開く").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("CSV files", &["csv"])
-                        .add_filter("All files", &["*"])
-                        .pick_file()
-                    {
-                        self.load_csv(path);
-                    }
-                }
-
-                ui.separator();
-                let selected_position = self
-                    .selected_row
-                    .map(|idx| idx + 1)
-                    .map(|position| position.to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                ui.label(format!(
-                    "総件数: {} 件  抽出後: {} 件  選択: {} / {}",
-                    self.all_records.len(),
-                    self.filtered_indices.len(),
-                    selected_position,
-                    self.filtered_indices.len()
-                ));
-            });
-
-            ui.horizontal_wrapped(|ui| {
-                let can_start = self.analysis_runtime_state.can_start();
-                let can_export = self.analysis_runtime_state.can_export();
-                let settings_enabled = self.analysis_runtime_state.current_job.is_none();
-                let python_label = self
-                    .analysis_runtime_state
-                    .runtime
-                    .as_ref()
-                    .map(|runtime| runtime.python_label.clone())
-                    .unwrap_or_else(|| "-".to_string());
-                let filter_config_label = self
-                    .analysis_runtime_state
-                    .runtime
-                    .as_ref()
-                    .map(|runtime| runtime.filter_config_path.display().to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                let annotation_label = self
-                    .resolved_annotation_csv_path()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|_| "-".to_string());
-                let db_label = self.db_viewer_state.db_path.display().to_string();
-
-                if matches!(
-                    self.analysis_runtime_state.status,
-                    AnalysisJobStatus::RunningAnalysis { .. }
-                        | AnalysisJobStatus::RunningExport { .. }
-                ) {
-                    ui.add(egui::Spinner::new());
-                }
-
-                if ui
-                    .add_enabled(can_start, egui::Button::new("分析実行"))
-                    .clicked()
-                {
-                    if let Err(error) = self.start_analysis_job() {
-                        self.error_message = Some(error);
-                    }
-                }
-
-                if ui
-                    .add_enabled(can_export, egui::Button::new("CSV保存(全件)"))
-                    .clicked()
-                {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("CSV files", &["csv"])
-                        .set_file_name("analysis-result.csv")
-                        .save_file()
-                    {
-                        if let Err(error) = self.start_export_job(path) {
-                            self.error_message = Some(error);
-                        }
-                    }
-                }
-
-                if ui
-                    .add_enabled(settings_enabled, egui::Button::new("分析設定"))
-                    .clicked()
-                {
-                    self.analysis_request_state.settings_window_open = true;
-                }
-
-                if ui
-                    .add_enabled(settings_enabled, egui::Button::new("条件編集"))
-                    .clicked()
-                {
-                    if let Err(error) = self.open_condition_editor(ui.ctx()) {
-                        self.error_message = Some(error);
-                    }
-                }
-
-                ui.label(format!("DB: {db_label}"));
-                ui.label(format!("条件: {filter_config_label}"));
-                ui.label(format!("Annotation: {annotation_label}"));
-                ui.label(format!("Python: {python_label}"));
-                if can_export {
-                    ui.label("保存対象は直近分析結果の全件です");
-                }
-                if self.analysis_runtime_state.has_warning_details()
-                    && ui.button("警告詳細").clicked()
-                {
-                    self.analysis_runtime_state.warning_window_open = true;
-                }
-
-                let status_text = self.analysis_runtime_state.status_text();
-                let status_color = analysis_status_color(ui, &self.analysis_runtime_state.status);
-                ui.label(RichText::new(status_text).color(status_color));
-            });
-        });
+        app_toolbar::draw_toolbar(self, ui);
     }
 
     fn draw_analysis_settings_window(&mut self, ctx: &egui::Context) {
@@ -2645,27 +2529,29 @@ impl App {
     fn draw_annotation_editor_collapsed_bar(&mut self, ui: &mut Ui, record: &AnalysisRecord) {
         let annotation_supported = record.supports_manual_annotation();
 
-        let response = ui.horizontal(|ui| {
-            if annotation_supported {
-                ui.label(RichText::new("▶").strong());
+        let response = ui
+            .horizontal(|ui| {
+                if annotation_supported {
+                    ui.label(RichText::new("▶").strong());
 
-                let count_str = if record.manual_annotation_count == "0"
-                    || record.manual_annotation_count.is_empty()
-                {
-                    "なし".to_string()
+                    let count_str = if record.manual_annotation_count == "0"
+                        || record.manual_annotation_count.is_empty()
+                    {
+                        "なし".to_string()
+                    } else {
+                        format!("{}件", record.manual_annotation_count)
+                    };
+
+                    ui.label(RichText::new(format!("annotation 追記 ({})", count_str)).strong());
                 } else {
-                    format!("{}件", record.manual_annotation_count)
-                };
-
-                ui.label(RichText::new(format!("annotation 追記 ({})", count_str)).strong());
-            } else {
-                ui.label(RichText::new("▶").color(ui.visuals().weak_text_color()));
-                ui.label(
-                    RichText::new("sentence 行では manual annotation editor は無効です。")
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
-        }).response;
+                    ui.label(RichText::new("▶").color(ui.visuals().weak_text_color()));
+                    ui.label(
+                        RichText::new("sentence 行では manual annotation editor は無効です。")
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                }
+            })
+            .response;
 
         if annotation_supported && response.interact(egui::Sense::click()).clicked() {
             self.annotation_panel_expanded = true;
@@ -2686,10 +2572,12 @@ impl App {
         let annotation_save_enabled = self.annotation_save_enabled();
 
         ui.group(|ui| {
-            let title_response = ui.horizontal(|ui| {
-                ui.label(RichText::new("▼").strong());
-                ui.label(RichText::new("annotation 追記").strong());
-            }).response;
+            let title_response = ui
+                .horizontal(|ui| {
+                    ui.label(RichText::new("▼").strong());
+                    ui.label(RichText::new("annotation 追記").strong());
+                })
+                .response;
 
             if title_response.interact(egui::Sense::click()).clicked() {
                 self.annotation_panel_expanded = false;
@@ -2804,17 +2692,6 @@ fn build_record_text_layout_job(ui: &Ui, segments: &[TextSegment]) -> LayoutJob 
     }
 
     job
-}
-
-fn analysis_status_color(ui: &Ui, status: &AnalysisJobStatus) -> Color32 {
-    match status {
-        AnalysisJobStatus::Idle => ui.visuals().text_color(),
-        AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. } => {
-            Color32::from_rgb(70, 130, 180)
-        }
-        AnalysisJobStatus::Succeeded { .. } => Color32::from_rgb(70, 130, 70),
-        AnalysisJobStatus::Failed { .. } => Color32::from_rgb(200, 64, 64),
-    }
 }
 
 fn editor_status_color(is_error: bool) -> Color32 {
