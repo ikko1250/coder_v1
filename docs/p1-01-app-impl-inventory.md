@@ -166,16 +166,10 @@
 
 | メソッド | 備考 |
 |----------|------|
-| `draw_body` | レイアウトの心臓部 |
-| `record_list_panel_width_range` | |
+| `draw_body` | **P1-03 済**: `src/app_main_layout.rs`。`impl App` は委譲のみ。 |
+| `record_list_panel_width_range` 〜 `draw_annotation_editor_panel` | 同上。`build_record_text_layout_job` / `editor_status_color` も同ファイルへ移動。 |
 | `draw_filters` | `filter_panel_view` 呼び出し |
-| `draw_tree` | レコード一覧テーブル |
-| `draw_detail` | |
-| `draw_record_summary` | |
-| `draw_record_text_panel` | |
-| `draw_form_group_explanations_panel` | |
-| `draw_annotation_editor_collapsed_bar` | |
-| `draw_annotation_editor_panel` | |
+| `draw_tree` | `TREE_COLUMN_SPECS` は親 `app.rs` の定数を参照 |
 
 ---
 
@@ -183,9 +177,9 @@
 
 以下は **`impl App` 外**のヘルパであり、切り出し時は `app_ui_helpers.rs` や既存 `ui_helpers` との整理対象になる。
 
-- `build_record_text_layout_job`
-- `analysis_status_color`, `editor_status_color`
-- `draw_analysis_path_override_row`
+- `build_record_text_layout_job`（→ `app_main_layout.rs`）
+- `analysis_status_color`（`app_toolbar.rs`）、`editor_status_color`（`app_main_layout.rs`）
+- `draw_analysis_path_override_row`（→ `app_analysis_settings.rs`）
 - `build_tree_*_column` / `tree_*_value` 系
 - `clamp_condition_index` 等（条件エディタ用の自由関数）
 
@@ -204,3 +198,4 @@
 | 2026-03-23 | P1-02: `draw_toolbar` を `src/app_toolbar.rs` へ切り出し（子モジュール `#[path]`） |
 | 2026-03-23 | DB Viewer 系を `src/app_db_viewer.rs` へ切り出し（`app` 子モジュール） |
 | 2026-03-23 | 分析設定を `app_analysis_settings.rs`、分析ジョブ・警告・終了ガードを `app_analysis_job.rs` へ切り出し |
+| 2026-03-23 | P1-03: 中央ペインを `app_main_layout.rs` へ切り出し（`TreeScrollRequest` を `pub(super)`） |
