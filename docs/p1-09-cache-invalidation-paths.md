@@ -19,8 +19,9 @@
 | `replace_records` | `app.rs` | CSV／分析結果でレコード配列を差し替え |
 | `apply_selection_change`（選択が変わったときのみ） | `app.rs` | `selection_changed` が true のとき |
 | `apply_filters` | `app.rs` | フィルタ再計算（一覧の行集合が変わるため） |
+| `apply_saved_annotation_to_selected_record` | `app.rs` | 手動アノテーションを選択行に反映した直後（レコード内容更新に合わせ詳細ペインの整合を取る） |
 
-**間接経路**: `load_csv` → `replace_records`；分析成功 `handle_analysis_success` → `replace_records`；フィルタ UI → `apply_filters` / `clear_*` / `toggle_filter_value` → `apply_filters`；キーボード・クリック → `apply_selection_change`。
+**間接経路**: `load_csv` → `replace_records`；分析成功 `handle_analysis_success` → `replace_records`；フィルタ UI → `apply_filters` / `clear_*` / `toggle_filter_value` → `apply_filters`；キーボード・クリック → `apply_selection_change`；注釈保存成功 → `apply_saved_annotation_to_selected_record`（`save_annotation_for_selected_record` 経由）。
 
 ### 1.3 更新（ヒット時は再パースしない／ミス時は再計算して格納）
 
@@ -34,9 +35,9 @@
 |------|----------|
 | 詳細ペインのレイアウト | `app_main_layout.rs`（`app.get_segments()`） |
 
-### 1.5 注意（インプレース更新）
+### 1.5 インプレース更新（手動アノテーション）
 
-同一 `row_no` のまま `AnalysisRecord` のフィールドだけ更新する経路（例: 手動アノテーション保存）は **`cached_segments` をクリアしていない**。表示に使う文字列（`primary_text` / `primary_text_tagged`）が変わる場合は、別途無効化が必要になる可能性がある（P2 以降の不変条件設計で扱う想定）。
+同一 `row_no` のまま `AnalysisRecord` を更新する **`apply_saved_annotation_to_selected_record`** では、**`filter_options` 再構築に加え `cached_segments = None`** を行う（P1 レビュー後の追補）。本文タグ付き文字列が注釈と無関係でも、ツリー側の表示整合のためキャッシュを捨てる。
 
 ---
 
@@ -69,3 +70,4 @@
 | 日付 | 内容 |
 |------|------|
 | 2026-03-23 | P1-09 初版 |
+| 2026-03-23 | 注釈保存経路で `cached_segments` を無効化する旨を追記（`apply_saved_annotation_to_selected_record`） |

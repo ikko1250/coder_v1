@@ -536,6 +536,7 @@ impl App {
                 );
         }
         self.filter_options = build_filter_options(&self.all_records);
+        self.cached_segments = None;
         Ok(())
     }
 

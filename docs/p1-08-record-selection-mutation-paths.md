@@ -39,7 +39,7 @@
 
 | 経路 | 実装 | 内容 |
 |------|------|------|
-| 手動アノテーション保存 | `app.rs` `apply_saved_annotation_to_selected_record` | `selected_record_mut()` → `all_records.get_mut(record_idx)` で注釈フィールド等を更新。 |
+| 手動アノテーション保存 | `app.rs` `apply_saved_annotation_to_selected_record` | `selected_record_mut()` → `all_records.get_mut(record_idx)` で注釈フィールド等を更新。あわせて `filter_options` 再構築と **`cached_segments` クリア**（詳細は [`p1-09-cache-invalidation-paths.md`](p1-09-cache-invalidation-paths.md)）。 |
 
 ※ この経路では **`filtered_indices` / `selected_row` は変更しない**（同一行のまま）。
 
@@ -107,3 +107,4 @@
 | 日付 | 内容 |
 |------|------|
 | 2026-03-23 | P1-08 初版（grep ベースの一覧） |
+| 2026-03-23 | 注釈保存経路の `cached_segments` 無効化を追記（P1 レビュー後の整合） |
