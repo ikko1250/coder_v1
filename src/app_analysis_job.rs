@@ -8,7 +8,7 @@ use crate::analysis_runner::{
     spawn_export_job, AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent,
     AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisWarningMessage,
 };
-use crate::viewer_core::ViewerCoreMessage;
+use crate::viewer_core::{ViewerCoreCloseInput, ViewerCoreMessage};
 use eframe::egui::{self, RichText, ScrollArea};
 use egui::TextWrapMode;
 use std::path::PathBuf;
@@ -383,7 +383,10 @@ pub(super) fn draw_warning_details_window(app: &mut App, ctx: &egui::Context) {
 }
 
 pub(super) fn guard_root_close_with_dirty_editor(app: &mut App, ctx: &egui::Context) {
-    if !app.condition_editor_state.is_dirty {
+    let input = ViewerCoreCloseInput {
+        condition_editor_dirty: app.condition_editor_state.is_dirty,
+    };
+    if app.core.can_close(&input).is_ok() {
         return;
     }
     let close_requested = ctx.input(|input| input.viewport().close_requested());

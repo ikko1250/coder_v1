@@ -7,6 +7,7 @@
 //! - **P2-03**: [`ViewerCoreMessage`] でユーザー操作・ジョブ完了に伴うコア更新を型で表現。
 //! - **P2-04**: `App::apply_event` の戻り値 [`CoreOutput`] に `needs_repaint`（設計 §5.5）。
 //! - **P2-05**: `expected_job_id` で非同期ジョブの **有効 ID** を保持し、完了イベントの検証に使う（設計 §5.3）。
+//! - **P2-06**: `can_close` / `CloseBlockReason`（設計 §5.4）。
 
 use crate::model::{AnalysisRecord, FilterColumn, FilterOption};
 use std::collections::{BTreeSet, HashMap};
@@ -20,6 +21,18 @@ pub struct CoreOutput {
 
 /// P2-04: [`ViewerCoreMessage`] と同じ型。`apply_event` の引数名に合わせたエイリアス。
 pub type ViewerCoreEvent = ViewerCoreMessage;
+
+/// 終了をブロックする理由（ホストは `egui` のキャンセル等で対応する）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CloseBlockReason {
+    UnsavedConditionEditor,
+}
+
+/// ホストが収集して [`ViewerCoreState::can_close`] に渡す、終了判定に必要な入力（egui 非依存）。
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ViewerCoreCloseInput {
+    pub(crate) condition_editor_dirty: bool,
+}
 
 /// 一覧・フィルタ・選択まわりの **意図**（UI・ホストからコアへ）。
 ///
@@ -95,6 +108,15 @@ impl ViewerCoreState {
     pub(crate) fn accept_failure_without_meta_job_id(&self) -> bool {
         self.expected_job_id.is_some()
     }
+
+    /// アプリ終了がドメイン上許容されるか。ブロック時は [`CloseBlockReason`] を返す（§5.4）。
+    #[allow(clippy::unused_self)]
+    pub(crate) fn can_close(&self, input: &ViewerCoreCloseInput) -> Result<(), CloseBlockReason> {
+        if input.condition_editor_dirty {
+            return Err(CloseBlockReason::UnsavedConditionEditor);
+        }
+        Ok(())
+    }
 }
 
 /// フィルタ後の行インデックスを `filtered_len` の範囲にクランプする。
@@ -108,7 +130,10 @@ pub(crate) fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usiz
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_selected_row, CoreOutput, ViewerCoreMessage, ViewerCoreState};
+    use super::{
+        clamp_selected_row, CloseBlockReason, CoreOutput, ViewerCoreCloseInput, ViewerCoreMessage,
+        ViewerCoreState,
+    };
     use crate::model::FilterColumn;
 
     #[test]
@@ -139,6 +164,27 @@ mod tests {
         core.set_expected_job_id("x".into());
         core.clear_expected_job_id();
         assert!(!core.job_id_matches_expected("x"));
+    }
+
+    #[test]
+    fn can_close_when_condition_editor_clean() {
+        let core = ViewerCoreState::default();
+        let input = ViewerCoreCloseInput {
+            condition_editor_dirty: false,
+        };
+        assert!(core.can_close(&input).is_ok());
+    }
+
+    #[test]
+    fn cannot_close_when_condition_editor_dirty() {
+        let core = ViewerCoreState::default();
+        let input = ViewerCoreCloseInput {
+            condition_editor_dirty: true,
+        };
+        assert_eq!(
+            core.can_close(&input),
+            Err(CloseBlockReason::UnsavedConditionEditor)
+        );
     }
 
     #[test]

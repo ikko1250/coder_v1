@@ -16,6 +16,7 @@
 //! **コア更新の列挙型（`ViewerCoreMessage`）**は P2-03 として [`docs/p2-03-viewer-core-message.md`](../docs/p2-03-viewer-core-message.md)。
 //! **`apply_event` → `CoreOutput`（`needs_repaint`）**は P2-04 として [`docs/p2-04-core-output.md`](../docs/p2-04-core-output.md)。
 //! **ジョブ ID と `ViewerCoreState::expected_job_id`** は P2-05 として [`docs/p2-05-job-id-validation.md`](../docs/p2-05-job-id-validation.md)。
+//! **`can_close` / `CloseBlockReason`** は P2-06 として [`docs/p2-06-can-close.md`](../docs/p2-06-can-close.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
