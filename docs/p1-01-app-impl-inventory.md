@@ -88,6 +88,8 @@
 
 ### H. `app_condition_editor` — 条件 JSON エディタ（状態・コマンド・描画）
 
+**P1-06 済**: `src/app_condition_editor.rs`。`ConditionEditorState` / `ConditionEditorConfirmAction` は当該ファイルに集約。`impl App` が外部から呼ぶのは `focus_condition_editor_viewport` / `open_condition_editor` / `sync_condition_editor_with_runtime_path` / `draw_condition_editor_window` のみ（いずれも委譲）。`clamp_condition_index` 等のヘルパは当ファイル内の非公開関数。
+
 第 1 ブロック・第 2 ブロックにまたがるメソッドが多い。
 
 **状態・パス同期**
@@ -187,7 +189,7 @@
 - `analysis_status_color`（`app_toolbar.rs`）、`editor_status_color`（`app_main_layout.rs`）
 - `draw_analysis_path_override_row`（→ `app_analysis_settings.rs`）
 - `build_tree_*_column` / `tree_*_value` 系
-- `clamp_condition_index` 等（条件エディタ用の自由関数）
+- `clamp_condition_index` 等（条件エディタ用）→ **`app_condition_editor.rs` 内**（P1-06）
 
 ---
 
@@ -206,3 +208,4 @@
 | 2026-03-23 | 分析設定を `app_analysis_settings.rs`、分析ジョブ・警告・終了ガードを `app_analysis_job.rs` へ切り出し |
 | 2026-03-23 | P1-03: 中央ペインを `app_main_layout.rs` へ切り出し（`TreeScrollRequest` を `pub(super)`） |
 | 2026-03-23 | P1-04 完了: エラーダイアログを `app_error_dialog.rs` へ（分析設定・警告は先行済み） |
+| 2026-03-23 | P1-06: 条件エディタを `app_condition_editor.rs` へ集約（`impl App` は委譲のみ） |

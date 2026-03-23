@@ -9,6 +9,7 @@
 //! 分析ジョブ・警告一覧は [`app_analysis_job`](app_analysis_job)（`src/app_analysis_job.rs`）。
 //! 中央ペイン（フィルタ・一覧・詳細）は [`app_main_layout`](app_main_layout)（`src/app_main_layout.rs`）。
 //! エラーダイアログは [`app_error_dialog`](app_error_dialog)（`src/app_error_dialog.rs`）。
+//! 条件 JSON エディタは [`app_condition_editor`](app_condition_editor)（`src/app_condition_editor.rs`）。
 
 #[path = "app_toolbar.rs"]
 mod app_toolbar;
@@ -28,23 +29,12 @@ mod app_main_layout;
 #[path = "app_error_dialog.rs"]
 mod app_error_dialog;
 
+#[path = "app_condition_editor.rs"]
+mod app_condition_editor;
+
 use crate::analysis_runner::{
     build_runtime_config, resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig,
     AnalysisRuntimeOverrides, AnalysisWarningMessage,
-};
-use crate::condition_editor::{
-    build_default_condition_item, load_condition_document, save_condition_document_atomic,
-    FilterConfigDocument,
-};
-use crate::condition_editor_view::{
-    draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
-    draw_condition_editor_footer_panel as render_condition_editor_footer_panel,
-    draw_condition_editor_global_settings as render_condition_editor_global_settings,
-    draw_condition_editor_header_panel as render_condition_editor_header_panel,
-    draw_condition_editor_list_panel as render_condition_editor_list_panel,
-    draw_condition_editor_selected_condition as render_condition_editor_selected_condition,
-    ConditionEditorDetailResponse, ConditionEditorFooterResponse, ConditionEditorListResponse,
-    ConfirmOverlayResponse,
 };
 use crate::csv_loader::load_records;
 use crate::db::resolve_default_db_path;
@@ -57,8 +47,8 @@ use crate::manual_annotation_store::{
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
 use crate::tagged_text::parse_tagged_text;
 use eframe::egui;
-use egui::{Color32, RichText, ScrollArea, Ui};
-use egui_extras::{Column, Size, StripBuilder};
+use egui::Ui;
+use egui_extras::Column;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -129,7 +119,6 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
     },
 ];
 
-const CONDITION_EDITOR_VIEWPORT_ID: &str = "condition_editor_viewport";
 const RECORD_LIST_PANEL_MIN_WIDTH: f32 = 360.0;
 const RECORD_LIST_PANEL_DEFAULT_RATIO: f32 = 0.33;
 const RECORD_LIST_PANEL_MAX_RATIO: f32 = 0.85;
@@ -237,59 +226,6 @@ struct AnnotationEditorState {
     status_is_error: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ConditionEditorConfirmAction {
-    CloseWindow,
-    ReloadPath(PathBuf),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConditionEditorModalResponse {
-    Continue,
-    Cancel,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ConditionEditorSelectionDraft {
-    requested_selection: Option<usize>,
-    requested_group_selection: Option<usize>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ConditionEditorCommandDraft {
-    should_save: bool,
-    should_reload: bool,
-    should_add_condition: bool,
-    should_delete_condition: Option<usize>,
-    close_requested: bool,
-    modal_response: Option<ConditionEditorModalResponse>,
-}
-
-#[derive(Clone, Debug)]
-struct ConditionEditorWindowInputs {
-    can_modify: bool,
-    resolved_path_result: Result<PathBuf, String>,
-    resolved_path_label: String,
-    loaded_path_label: String,
-    current_confirm_action: Option<ConditionEditorConfirmAction>,
-    panel_fill: Color32,
-}
-
-#[derive(Clone, Debug, Default)]
-struct ConditionEditorState {
-    window_open: bool,
-    loaded_path: Option<PathBuf>,
-    pending_path_sync: Option<PathBuf>,
-    document: Option<FilterConfigDocument>,
-    selected_index: Option<usize>,
-    selected_group_index: Option<usize>,
-    projected_legacy_condition_count: usize,
-    status_message: Option<String>,
-    status_is_error: bool,
-    is_dirty: bool,
-    confirm_action: Option<ConditionEditorConfirmAction>,
-}
-
 impl SelectionChange {
     fn new(selected_row: Option<usize>, scroll_behavior: ScrollBehavior) -> Self {
         Self {
@@ -348,7 +284,7 @@ pub(crate) struct App {
     pub(crate) error_message: Option<String>,
     cached_segments: Option<(usize, Vec<TextSegment>)>,
     annotation_editor_state: AnnotationEditorState,
-    condition_editor_state: ConditionEditorState,
+    condition_editor_state: app_condition_editor::ConditionEditorState,
     record_list_panel_ratio: f32,
     annotation_panel_expanded: bool,
 }
@@ -373,7 +309,7 @@ impl App {
             error_message: None,
             cached_segments: None,
             annotation_editor_state: AnnotationEditorState::default(),
-            condition_editor_state: ConditionEditorState::default(),
+            condition_editor_state: app_condition_editor::ConditionEditorState::default(),
             record_list_panel_ratio: RECORD_LIST_PANEL_DEFAULT_RATIO,
             annotation_panel_expanded: false,
         };
@@ -736,209 +672,15 @@ impl App {
     }
 
     fn focus_condition_editor_viewport(&self, ctx: &egui::Context) {
-        let viewport_id = egui::ViewportId::from_hash_of(CONDITION_EDITOR_VIEWPORT_ID);
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
+        app_condition_editor::focus_condition_editor_viewport(self, ctx);
     }
 
     fn open_condition_editor(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        if self.condition_editor_state.window_open {
-            self.condition_editor_state.status_message =
-                Some("condition editor は既に開いています。".to_string());
-            self.condition_editor_state.status_is_error = false;
-            self.focus_condition_editor_viewport(ctx);
-            return Ok(());
-        }
-        let path = app_analysis_job::resolved_filter_config_path(self)?;
-        self.load_condition_editor_from_path(path, "条件 JSON を読み込みました。")
-    }
-
-    fn load_condition_editor_from_path(
-        &mut self,
-        path: PathBuf,
-        status_message: &str,
-    ) -> Result<(), String> {
-        let (document, load_info) = load_condition_document(&path)?;
-        let projected_count = load_info.projected_legacy_condition_count;
-        let mut final_status_message = status_message.to_string();
-        if projected_count > 0 {
-            final_status_message.push_str(&format!(
-                " legacy 条件 {} 件を group editor 用に投影しました。",
-                projected_count
-            ));
-        }
-        self.condition_editor_state.window_open = true;
-        self.condition_editor_state.loaded_path = Some(path);
-        self.condition_editor_state.pending_path_sync = None;
-        self.condition_editor_state.document = Some(document);
-        self.condition_editor_state.selected_index = self.clamp_condition_editor_selection(Some(0));
-        self.condition_editor_state.selected_group_index = self
-            .clamp_condition_editor_group_selection(
-                Some(0),
-                self.condition_editor_state.selected_index,
-            );
-        self.condition_editor_state.projected_legacy_condition_count = projected_count;
-        self.condition_editor_state.status_message = Some(final_status_message);
-        self.condition_editor_state.status_is_error = false;
-        self.condition_editor_state.is_dirty = false;
-        self.condition_editor_state.confirm_action = None;
-        Ok(())
-    }
-
-    fn clamp_condition_editor_selection(&self, selected_index: Option<usize>) -> Option<usize> {
-        let Some(document) = self.condition_editor_state.document.as_ref() else {
-            return None;
-        };
-        match (selected_index, document.cooccurrence_conditions.len()) {
-            (_, 0) => None,
-            (Some(index), len) => Some(index.min(len - 1)),
-            (None, len) => Some(len - 1),
-        }
-    }
-
-    fn clamp_condition_editor_group_selection(
-        &self,
-        selected_group_index: Option<usize>,
-        condition_index: Option<usize>,
-    ) -> Option<usize> {
-        let Some(document) = self.condition_editor_state.document.as_ref() else {
-            return None;
-        };
-        let Some(condition_index) = condition_index else {
-            return None;
-        };
-        let Some(condition) = document.cooccurrence_conditions.get(condition_index) else {
-            return None;
-        };
-        match (selected_group_index, condition.form_groups.len()) {
-            (_, 0) => None,
-            (Some(index), len) => Some(index.min(len - 1)),
-            (None, len) => Some(len - 1),
-        }
-    }
-
-    fn mark_condition_editor_dirty(&mut self) {
-        self.condition_editor_state.is_dirty = true;
-        self.condition_editor_state.status_message = Some("未保存の変更があります。".to_string());
-        self.condition_editor_state.status_is_error = false;
-    }
-
-    fn condition_editor_selection_draft(&self) -> ConditionEditorSelectionDraft {
-        ConditionEditorSelectionDraft {
-            requested_selection: self.condition_editor_state.selected_index,
-            requested_group_selection: self.condition_editor_state.selected_group_index,
-        }
-    }
-
-    fn condition_editor_window_inputs(&self, ctx: &egui::Context) -> ConditionEditorWindowInputs {
-        let resolved_path_result = app_analysis_job::resolved_filter_config_path(self);
-        let resolved_path_label = resolved_path_result
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|error| format!("解決失敗: {error}"));
-        let loaded_path_label = self
-            .condition_editor_state
-            .loaded_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "-".to_string());
-
-        ConditionEditorWindowInputs {
-            can_modify: self.analysis_runtime_state.current_job.is_none(),
-            resolved_path_result,
-            resolved_path_label,
-            loaded_path_label,
-            current_confirm_action: self.condition_editor_state.confirm_action.clone(),
-            panel_fill: ctx.style().visuals.panel_fill,
-        }
-    }
-
-    fn apply_condition_editor_selection_draft(
-        &mut self,
-        selection_draft: ConditionEditorSelectionDraft,
-    ) {
-        self.condition_editor_state.selected_index =
-            self.clamp_condition_editor_selection(selection_draft.requested_selection);
-        self.condition_editor_state.selected_group_index = self
-            .clamp_condition_editor_group_selection(
-                selection_draft.requested_group_selection,
-                self.condition_editor_state.selected_index,
-            );
-    }
-
-    fn reload_condition_editor(&mut self, path: PathBuf) -> Result<(), String> {
-        self.load_condition_editor_from_path(path, "条件 JSON を再読込しました。")
-    }
-
-    fn request_condition_editor_reload(&mut self, path: PathBuf) -> Result<(), String> {
-        if self.condition_editor_state.is_dirty {
-            self.condition_editor_state.confirm_action =
-                Some(ConditionEditorConfirmAction::ReloadPath(path));
-            return Ok(());
-        }
-        self.reload_condition_editor(path)
-    }
-
-    fn save_condition_editor_document(&mut self) -> Result<(), String> {
-        let path = self
-            .condition_editor_state
-            .loaded_path
-            .clone()
-            .ok_or_else(|| "保存先の条件 JSON パスが未設定です".to_string())?;
-        let document = self
-            .condition_editor_state
-            .document
-            .as_ref()
-            .ok_or_else(|| "保存対象の条件 JSON が読み込まれていません".to_string())?;
-        save_condition_document_atomic(&path, document)?;
-        self.load_condition_editor_from_path(path.clone(), "条件 JSON を保存しました。")?;
-        self.condition_editor_state.status_message =
-            Some(format!("条件 JSON を保存しました: {}", path.display()));
-        self.condition_editor_state.status_is_error = false;
-        Ok(())
+        app_condition_editor::open_condition_editor(self, ctx)
     }
 
     fn sync_condition_editor_with_runtime_path(&mut self) {
-        if !self.condition_editor_state.window_open {
-            return;
-        }
-
-        let Ok(resolved_path) = app_analysis_job::resolved_filter_config_path(self) else {
-            return;
-        };
-        let Some(loaded_path) = self.condition_editor_state.loaded_path.clone() else {
-            return;
-        };
-        if resolved_path == loaded_path {
-            self.condition_editor_state.pending_path_sync = None;
-            return;
-        }
-
-        if self.condition_editor_state.is_dirty {
-            self.condition_editor_state.pending_path_sync = Some(resolved_path.clone());
-            self.condition_editor_state.status_message = Some(format!(
-                "分析設定で条件 JSON の解決先が変更されました。再読込が必要です: {}",
-                resolved_path.display()
-            ));
-            self.condition_editor_state.status_is_error = true;
-            return;
-        }
-
-        match self.reload_condition_editor(resolved_path.clone()) {
-            Ok(()) => {
-                self.condition_editor_state.pending_path_sync = None;
-                self.condition_editor_state.status_message = Some(format!(
-                    "分析設定の変更に合わせて条件 JSON を再読込しました: {}",
-                    resolved_path.display()
-                ));
-                self.condition_editor_state.status_is_error = false;
-            }
-            Err(error) => {
-                self.condition_editor_state.pending_path_sync = Some(resolved_path);
-                self.condition_editor_state.status_message = Some(error);
-                self.condition_editor_state.status_is_error = true;
-            }
-        }
+        app_condition_editor::sync_condition_editor_with_runtime_path(self);
     }
 
     fn start_analysis_job(&mut self) -> Result<(), String> {
@@ -1018,515 +760,8 @@ impl App {
         app_analysis_settings::draw_analysis_settings_window(self, ctx);
     }
 
-    fn draw_condition_editor_body_panel(
-        &mut self,
-        ui: &mut Ui,
-        can_modify: bool,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) {
-        let panel_fill = ui.style().visuals.panel_fill;
-        StripBuilder::new(ui)
-            .size(Size::exact(340.0))
-            .size(Size::remainder())
-            .horizontal(|mut strip| {
-                strip.cell(|ui| {
-                    let list_response = render_condition_editor_list_panel(
-                        ui,
-                        can_modify,
-                        self.condition_editor_state.document.as_ref(),
-                        selection_draft.requested_selection,
-                    );
-                    self.apply_condition_editor_list_response(
-                        selection_draft,
-                        command_draft,
-                        list_response,
-                    );
-                });
-
-                strip.cell(|ui| {
-                    self.draw_condition_editor_detail_panel(
-                        ui,
-                        panel_fill,
-                        can_modify,
-                        selection_draft,
-                        command_draft,
-                    );
-                });
-            });
-    }
-
-    fn draw_condition_editor_detail_panel(
-        &mut self,
-        ui: &mut Ui,
-        panel_fill: Color32,
-        can_modify: bool,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) {
-        egui::Frame::default()
-            .fill(panel_fill)
-            .inner_margin(egui::Margin {
-                left: 24,
-                right: 24,
-                top: 10,
-                bottom: 10,
-            })
-            .show(ui, |ui| {
-                ScrollArea::vertical()
-                    .id_salt("condition_editor_detail_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if self.draw_condition_editor_detail_contents(
-                            ui,
-                            can_modify,
-                            selection_draft,
-                            command_draft,
-                        ) {
-                            self.mark_condition_editor_dirty();
-                        }
-                    });
-            });
-    }
-
-    fn draw_condition_editor_detail_contents(
-        &mut self,
-        ui: &mut Ui,
-        can_modify: bool,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) -> bool {
-        let Some(document) = self.condition_editor_state.document.as_mut() else {
-            ui.label(RichText::new("条件 JSON 未読込").italics());
-            return false;
-        };
-
-        let mut changed = false;
-        selection_draft.requested_selection = clamp_condition_index(
-            selection_draft.requested_selection,
-            document.cooccurrence_conditions.len(),
-        );
-        selection_draft.requested_group_selection = clamp_condition_group_selection_for_document(
-            document,
-            selection_draft.requested_selection,
-            selection_draft.requested_group_selection,
-        );
-
-        changed |= render_condition_editor_global_settings(ui, document);
-
-        let Some(selected_index) = selection_draft.requested_selection else {
-            ui.label(RichText::new("condition を選択してください").italics());
-            return changed;
-        };
-        let Some(condition) = document.cooccurrence_conditions.get_mut(selected_index) else {
-            ui.label(RichText::new("condition を選択してください").italics());
-            return changed;
-        };
-
-        let detail_response = render_condition_editor_selected_condition(
-            ui,
-            can_modify,
-            selection_draft.requested_group_selection,
-            condition,
-        );
-        self.apply_condition_editor_detail_response(
-            selected_index,
-            selection_draft,
-            command_draft,
-            detail_response,
-        );
-        changed |= detail_response.changed;
-
-        changed
-    }
-
-    fn condition_editor_status_message(&self) -> Option<(&str, bool)> {
-        self.condition_editor_state
-            .status_message
-            .as_deref()
-            .map(|message| (message, self.condition_editor_state.status_is_error))
-    }
-
-    fn condition_editor_save_enabled(&self, can_modify: bool, resolved_path_ok: bool) -> bool {
-        can_modify
-            && self.condition_editor_state.document.is_some()
-            && self.condition_editor_state.pending_path_sync.is_none()
-            && resolved_path_ok
-    }
-
-    fn condition_editor_confirm_message(confirm_action: &ConditionEditorConfirmAction) -> String {
-        match confirm_action {
-            ConditionEditorConfirmAction::CloseWindow => {
-                "未保存の変更があります。condition editor を閉じますか。".to_string()
-            }
-            ConditionEditorConfirmAction::ReloadPath(path) => format!(
-                "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
-                path.display()
-            ),
-        }
-    }
-
-    fn draw_condition_editor_embedded_window(
-        &mut self,
-        viewport_ctx: &egui::Context,
-        can_modify: bool,
-        loaded_path_label: &str,
-        resolved_path_label: &str,
-        resolved_path_ok: bool,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) {
-        let mut fallback_open = true;
-        egui::Window::new("条件編集")
-            .open(&mut fallback_open)
-            .default_width(1120.0)
-            .default_height(760.0)
-            .resizable(true)
-            .show(viewport_ctx, |ui| {
-                render_condition_editor_header_panel(
-                    ui,
-                    can_modify,
-                    loaded_path_label,
-                    resolved_path_label,
-                    self.condition_editor_state.pending_path_sync.as_deref(),
-                    self.condition_editor_status_message(),
-                    self.condition_editor_state.projected_legacy_condition_count,
-                );
-                ui.separator();
-                self.draw_condition_editor_body_panel(
-                    ui,
-                    can_modify,
-                    selection_draft,
-                    command_draft,
-                );
-                ui.separator();
-                let footer_response = render_condition_editor_footer_panel(
-                    ui,
-                    self.condition_editor_save_enabled(can_modify, resolved_path_ok),
-                    can_modify && resolved_path_ok,
-                    self.condition_editor_state.is_dirty,
-                );
-                self.apply_condition_editor_footer_response(command_draft, footer_response);
-            });
-        if !fallback_open {
-            command_draft.close_requested = true;
-        }
-    }
-
-    fn draw_condition_editor_viewport_panels(
-        &mut self,
-        viewport_ctx: &egui::Context,
-        can_modify: bool,
-        loaded_path_label: &str,
-        resolved_path_label: &str,
-        resolved_path_ok: bool,
-        panel_fill: Color32,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-    ) {
-        egui::TopBottomPanel::top("condition_editor_viewport_header")
-            .frame(
-                egui::Frame::default()
-                    .fill(panel_fill)
-                    .inner_margin(egui::Margin::same(10)),
-            )
-            .show(viewport_ctx, |ui| {
-                render_condition_editor_header_panel(
-                    ui,
-                    can_modify,
-                    loaded_path_label,
-                    resolved_path_label,
-                    self.condition_editor_state.pending_path_sync.as_deref(),
-                    self.condition_editor_status_message(),
-                    self.condition_editor_state.projected_legacy_condition_count,
-                );
-            });
-
-        egui::TopBottomPanel::bottom("condition_editor_viewport_footer")
-            .frame(
-                egui::Frame::default()
-                    .fill(panel_fill)
-                    .inner_margin(egui::Margin::same(10)),
-            )
-            .show(viewport_ctx, |ui| {
-                let footer_response = render_condition_editor_footer_panel(
-                    ui,
-                    self.condition_editor_save_enabled(can_modify, resolved_path_ok),
-                    can_modify && resolved_path_ok,
-                    self.condition_editor_state.is_dirty,
-                );
-                self.apply_condition_editor_footer_response(command_draft, footer_response);
-            });
-
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::default()
-                    .fill(panel_fill)
-                    .inner_margin(egui::Margin::same(10)),
-            )
-            .show(viewport_ctx, |ui| {
-                self.draw_condition_editor_body_panel(
-                    ui,
-                    can_modify,
-                    selection_draft,
-                    command_draft,
-                );
-            });
-    }
-
-    fn apply_condition_editor_close_request(&mut self, close_requested: bool) {
-        if !close_requested {
-            return;
-        }
-
-        if self.condition_editor_state.is_dirty {
-            self.condition_editor_state.confirm_action =
-                Some(ConditionEditorConfirmAction::CloseWindow);
-        } else {
-            self.condition_editor_state.window_open = false;
-        }
-    }
-
-    fn apply_condition_editor_footer_response(
-        &self,
-        command_draft: &mut ConditionEditorCommandDraft,
-        footer_response: ConditionEditorFooterResponse,
-    ) {
-        if footer_response.save_clicked {
-            command_draft.should_save = true;
-        }
-        if footer_response.reload_clicked {
-            command_draft.should_reload = true;
-        }
-    }
-
-    fn apply_condition_editor_confirm_overlay_response(
-        &self,
-        command_draft: &mut ConditionEditorCommandDraft,
-        response: Option<ConfirmOverlayResponse>,
-    ) {
-        command_draft.modal_response = match response {
-            Some(ConfirmOverlayResponse::Continue) => Some(ConditionEditorModalResponse::Continue),
-            Some(ConfirmOverlayResponse::Cancel) => Some(ConditionEditorModalResponse::Cancel),
-            None => command_draft.modal_response,
-        };
-    }
-
-    fn apply_condition_editor_list_response(
-        &self,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-        list_response: ConditionEditorListResponse,
-    ) {
-        if list_response.add_clicked {
-            command_draft.should_add_condition = true;
-        }
-        if let Some(selected_index) = list_response.selected_index {
-            selection_draft.requested_selection = Some(selected_index);
-            selection_draft.requested_group_selection = list_response.selected_group_index;
-        }
-    }
-
-    fn apply_condition_editor_detail_response(
-        &self,
-        selected_index: usize,
-        selection_draft: &mut ConditionEditorSelectionDraft,
-        command_draft: &mut ConditionEditorCommandDraft,
-        detail_response: ConditionEditorDetailResponse,
-    ) {
-        if detail_response.delete_clicked {
-            command_draft.should_delete_condition = Some(selected_index);
-        }
-        selection_draft.requested_group_selection = detail_response.requested_group_selection;
-    }
-
-    fn apply_condition_editor_add_request(&mut self, should_add_condition: bool) {
-        if !should_add_condition {
-            return;
-        }
-
-        let mut new_index = None;
-        if let Some(document) = self.condition_editor_state.document.as_mut() {
-            document
-                .cooccurrence_conditions
-                .push(build_default_condition_item());
-            new_index = Some(document.cooccurrence_conditions.len().saturating_sub(1));
-        }
-        if let Some(index) = new_index {
-            self.condition_editor_state.selected_index = Some(index);
-            self.condition_editor_state.selected_group_index = Some(0);
-            self.mark_condition_editor_dirty();
-        }
-    }
-
-    fn apply_condition_editor_delete_request(&mut self, delete_index: Option<usize>) {
-        let Some(delete_index) = delete_index else {
-            return;
-        };
-
-        if let Some(document) = self.condition_editor_state.document.as_mut() {
-            if delete_index < document.cooccurrence_conditions.len() {
-                document.cooccurrence_conditions.remove(delete_index);
-                self.condition_editor_state.selected_index = clamp_condition_index(
-                    Some(delete_index),
-                    document.cooccurrence_conditions.len(),
-                );
-                self.condition_editor_state.selected_group_index =
-                    clamp_condition_group_selection_for_document(
-                        document,
-                        self.condition_editor_state.selected_index,
-                        Some(0),
-                    );
-                self.mark_condition_editor_dirty();
-                self.condition_editor_state.status_message =
-                    Some("condition を削除しました。".to_string());
-                self.condition_editor_state.status_is_error = false;
-            }
-        }
-    }
-
-    fn apply_condition_editor_reload_request(
-        &mut self,
-        should_reload: bool,
-        resolved_path_result: &Result<PathBuf, String>,
-    ) -> Option<String> {
-        if !should_reload {
-            return None;
-        }
-
-        match resolved_path_result {
-            Ok(path) => self.request_condition_editor_reload(path.clone()).err(),
-            Err(error) => Some(error.clone()),
-        }
-    }
-
-    fn apply_condition_editor_modal_response(
-        &mut self,
-        ctx: &egui::Context,
-        viewport_id: egui::ViewportId,
-        modal_response: Option<ConditionEditorModalResponse>,
-    ) {
-        let Some(response) = modal_response else {
-            return;
-        };
-
-        match response {
-            ConditionEditorModalResponse::Continue => {
-                if let Some(confirm_action) = self.condition_editor_state.confirm_action.clone() {
-                    match confirm_action {
-                        ConditionEditorConfirmAction::CloseWindow => {
-                            self.condition_editor_state.window_open = false;
-                            self.condition_editor_state.confirm_action = None;
-                            ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
-                        }
-                        ConditionEditorConfirmAction::ReloadPath(path) => {
-                            if let Err(error) = self.reload_condition_editor(path) {
-                                self.condition_editor_state.status_message = Some(error);
-                                self.condition_editor_state.status_is_error = true;
-                            }
-                            self.condition_editor_state.confirm_action = None;
-                        }
-                    }
-                }
-            }
-            ConditionEditorModalResponse::Cancel => {
-                self.condition_editor_state.confirm_action = None;
-            }
-        }
-    }
-
-    fn apply_condition_editor_command_draft(
-        &mut self,
-        ctx: &egui::Context,
-        viewport_id: egui::ViewportId,
-        selection_draft: ConditionEditorSelectionDraft,
-        command_draft: ConditionEditorCommandDraft,
-        resolved_path_result: &Result<PathBuf, String>,
-    ) -> Option<String> {
-        self.apply_condition_editor_selection_draft(selection_draft);
-        self.apply_condition_editor_close_request(command_draft.close_requested);
-        self.apply_condition_editor_add_request(command_draft.should_add_condition);
-        self.apply_condition_editor_delete_request(command_draft.should_delete_condition);
-
-        let mut save_error = None;
-        if command_draft.should_save {
-            if let Err(error) = self.save_condition_editor_document() {
-                save_error = Some(error);
-            }
-        }
-        let reload_error = self.apply_condition_editor_reload_request(
-            command_draft.should_reload,
-            resolved_path_result,
-        );
-        self.apply_condition_editor_modal_response(ctx, viewport_id, command_draft.modal_response);
-
-        save_error.or(reload_error)
-    }
-
     fn draw_condition_editor_window(&mut self, ctx: &egui::Context) {
-        if !self.condition_editor_state.window_open {
-            return;
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of(CONDITION_EDITOR_VIEWPORT_ID);
-        let builder = egui::ViewportBuilder::default()
-            .with_title("条件編集")
-            .with_inner_size([1120.0, 760.0])
-            .with_resizable(true);
-        let window_inputs = self.condition_editor_window_inputs(ctx);
-        let mut selection_draft = self.condition_editor_selection_draft();
-        let mut command_draft = ConditionEditorCommandDraft::default();
-
-        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
-            command_draft.close_requested =
-                viewport_ctx.input(|input| input.viewport().close_requested());
-            if command_draft.close_requested && self.condition_editor_state.is_dirty {
-                viewport_ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            }
-
-            match class {
-                egui::ViewportClass::Embedded => {
-                    self.draw_condition_editor_embedded_window(
-                        viewport_ctx,
-                        window_inputs.can_modify,
-                        &window_inputs.loaded_path_label,
-                        &window_inputs.resolved_path_label,
-                        window_inputs.resolved_path_result.is_ok(),
-                        &mut selection_draft,
-                        &mut command_draft,
-                    );
-                }
-                _ => {
-                    self.draw_condition_editor_viewport_panels(
-                        viewport_ctx,
-                        window_inputs.can_modify,
-                        &window_inputs.loaded_path_label,
-                        &window_inputs.resolved_path_label,
-                        window_inputs.resolved_path_result.is_ok(),
-                        window_inputs.panel_fill,
-                        &mut selection_draft,
-                        &mut command_draft,
-                    );
-                }
-            }
-
-            if let Some(confirm_action) = window_inputs.current_confirm_action.as_ref() {
-                let message = Self::condition_editor_confirm_message(confirm_action);
-                let response = render_condition_editor_confirm_overlay(viewport_ctx, &message);
-                self.apply_condition_editor_confirm_overlay_response(&mut command_draft, response);
-            }
-        });
-
-        if let Some(error) = self.apply_condition_editor_command_draft(
-            ctx,
-            viewport_id,
-            selection_draft,
-            command_draft,
-            &window_inputs.resolved_path_result,
-        ) {
-            self.condition_editor_state.status_message = Some(error);
-            self.condition_editor_state.status_is_error = true;
-        }
+        app_condition_editor::draw_condition_editor_window(self, ctx);
     }
 
     fn draw_body(
@@ -1564,28 +799,6 @@ fn build_tree_annotation_column() -> Column {
 
 fn build_tree_annotated_token_count_column() -> Column {
     Column::initial(92.0).at_least(72.0).clip(true)
-}
-
-fn clamp_condition_index(selected_index: Option<usize>, len: usize) -> Option<usize> {
-    match (selected_index, len) {
-        (_, 0) => None,
-        (Some(index), _) => Some(index.min(len - 1)),
-        (None, _) => Some(0),
-    }
-}
-
-fn clamp_condition_group_selection_for_document(
-    document: &FilterConfigDocument,
-    condition_index: Option<usize>,
-    selected_group_index: Option<usize>,
-) -> Option<usize> {
-    let Some(condition_index) = condition_index else {
-        return None;
-    };
-    let Some(condition) = document.cooccurrence_conditions.get(condition_index) else {
-        return None;
-    };
-    clamp_condition_index(selected_group_index, condition.form_groups.len())
 }
 
 fn tree_row_no_value(record: &AnalysisRecord) -> String {
