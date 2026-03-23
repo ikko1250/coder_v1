@@ -30,6 +30,7 @@
 //! **IPC DTO（Command/Event）の serde 定義**は P4-01 として [`docs/p4-01-ipc-dto.md`](../docs/p4-01-ipc-dto.md)。
 //! **IPC エラー DTO（`code + message + job_id?`）**は P4-02 として [`docs/p4-02-ipc-error-shape.md`](../docs/p4-02-ipc-error-shape.md)。
 //! **`api_version` 運用方針と互換判定**は P4-03 として [`docs/p4-03-api-version-policy.md`](../docs/p4-03-api-version-policy.md)。
+//! **Tauri 未導入時の DTO 自己検証 CLI** は P4-04 として [`docs/p4-04-ipc-dto-self-check-cli.md`](../docs/p4-04-ipc-dto-self-check-cli.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。

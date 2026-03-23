@@ -104,6 +104,48 @@ pub(crate) struct IpcErrorDto {
     pub(crate) job_id: Option<String>,
 }
 
+#[allow(dead_code)]
+pub(crate) fn run_ipc_dto_self_check() -> Result<String, String> {
+    let command = ApiEnvelope::new(IpcCommand::RunAnalysis {
+        overrides: AnalysisOverridesDto {
+            python_path: Some("C:/Python312/python.exe".to_string()),
+            filter_config_path: Some("asset/cooccurrence-conditions.json".to_string()),
+            annotation_csv_path: None,
+        },
+    });
+    let event = ApiEnvelope::new(IpcEvent::Error {
+        error: IpcErrorDto {
+            code: "analysis_failed".to_string(),
+            message: "analysis subprocess exited with code 1".to_string(),
+            job_id: Some("job-999".to_string()),
+        },
+    });
+
+    let command_json = serde_json::to_string_pretty(&command)
+        .map_err(|error| format!("command serialize failed: {error}"))?;
+    let event_json = serde_json::to_string_pretty(&event)
+        .map_err(|error| format!("event serialize failed: {error}"))?;
+
+    let decoded_command: ApiEnvelope<IpcCommand> = serde_json::from_str(&command_json)
+        .map_err(|error| format!("command deserialize failed: {error}"))?;
+    let decoded_event: ApiEnvelope<IpcEvent> =
+        serde_json::from_str(&event_json).map_err(|error| format!("event deserialize failed: {error}"))?;
+
+    if decoded_command != command {
+        return Err("command round-trip mismatch".to_string());
+    }
+    if decoded_event != event {
+        return Err("event round-trip mismatch".to_string());
+    }
+    if !decoded_command.is_supported_api_version() || !decoded_event.is_supported_api_version() {
+        return Err("unsupported apiVersion detected".to_string());
+    }
+
+    Ok(format!(
+        "IPC DTO self-check passed.\n\n[command]\n{command_json}\n\n[event]\n{event_json}\n"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -206,5 +248,11 @@ mod tests {
             },
         };
         assert!(!unsupported.is_supported_api_version());
+    }
+
+    #[test]
+    fn ipc_dto_self_check_succeeds() {
+        let output = super::run_ipc_dto_self_check().unwrap();
+        assert!(output.contains("IPC DTO self-check passed."));
     }
 }
