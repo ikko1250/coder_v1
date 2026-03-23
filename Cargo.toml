@@ -3,6 +3,10 @@ name = "csv_highlight_viewer"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [".", "src-tauri"]
+resolver = "2"
+
 [[bin]]
 name = "csv_highlight_viewer"
 path = "src/main.rs"
