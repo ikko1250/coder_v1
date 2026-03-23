@@ -4,9 +4,9 @@ use super::{
     AnalysisExportContext, AnalysisJobStatus, AnalysisRuntimeState, App, RunningAnalysisJob,
 };
 use crate::analysis_runner::{
-    build_runtime_config, cleanup_job_directories, resolve_filter_config_path, spawn_analysis_job,
-    spawn_export_job, AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent,
-    AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisWarningMessage,
+    build_runtime_config, cleanup_job_directories, resolve_filter_config_path, AnalysisExportRequest,
+    AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess,
+    AnalysisWarningMessage,
 };
 use crate::viewer_core::{ViewerCoreCloseInput, ViewerCoreMessage};
 use eframe::egui::{self, RichText, ScrollArea};
@@ -56,7 +56,7 @@ pub(super) fn start_analysis_job(app: &mut App) -> Result<(), String> {
 
     cleanup_job_directories(&runtime.jobs_root)?;
 
-    let (job_id, receiver) = spawn_analysis_job(AnalysisJobRequest {
+    let (job_id, receiver) = app.analysis_process_host.spawn_analysis_job(AnalysisJobRequest {
         db_path: app.db_viewer_state.db_path.clone(),
         runtime,
     });
@@ -87,7 +87,7 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
         .clone()
         .ok_or_else(|| "保存対象の分析結果がありません".to_string())?;
 
-    let (job_id, receiver) = spawn_export_job(AnalysisExportRequest {
+    let (job_id, receiver) = app.analysis_process_host.spawn_export_job(AnalysisExportRequest {
         db_path: export_context.db_path,
         filter_config_path: export_context.filter_config_path,
         annotation_csv_path: export_context.annotation_csv_path,

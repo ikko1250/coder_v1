@@ -23,6 +23,7 @@
 //! **データソース世代 `data_source_generation`** は P2-09 として [`docs/p2-09-data-source-generation.md`](../docs/p2-09-data-source-generation.md)。
 //! **`filter` / `csv_loader` のユニットテスト** は P2-10 として [`docs/p2-10-filter-csv-loader-tests.md`](../docs/p2-10-filter-csv-loader-tests.md)。
 //! **ファイルダイアログのホスト抽象（`rfd` の閉じ込め）** は P3-01 として [`docs/p3-01-file-dialog-host.md`](../docs/p3-01-file-dialog-host.md)。
+//! **分析ジョブ起動のホスト抽象**（`spawn_analysis_job` 等の集約）は P3-02 として [`docs/p3-02-analysis-process-host.md`](../docs/p3-02-analysis-process-host.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -61,6 +62,7 @@ use crate::analysis_runner::{
     build_runtime_config, resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig,
     AnalysisRuntimeOverrides, AnalysisWarningMessage,
 };
+use crate::analysis_process_host::{AnalysisProcessHost, ThreadAnalysisProcessHost};
 use crate::csv_loader::load_records;
 use crate::file_dialog_host::{FileDialogHost, RfdFileDialogHost};
 use crate::db::resolve_default_db_path;
@@ -292,6 +294,7 @@ fn build_tree_scroll_request(
 
 pub(crate) struct App {
     file_dialog_host: Box<dyn FileDialogHost>,
+    analysis_process_host: Box<dyn AnalysisProcessHost>,
     records_source_label: String,
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
@@ -311,6 +314,7 @@ impl App {
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let mut app = Self {
             file_dialog_host: Box::new(RfdFileDialogHost),
+            analysis_process_host: Box::new(ThreadAnalysisProcessHost),
             records_source_label: "分析結果なし".to_string(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             analysis_request_state,

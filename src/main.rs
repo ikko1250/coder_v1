@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod analysis_process_host;
 mod analysis_runner;
 mod app;
 mod condition_editor;
