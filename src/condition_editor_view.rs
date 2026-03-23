@@ -46,11 +46,19 @@ pub(crate) fn draw_condition_editor_header_panel(
     pending_path: Option<&Path>,
     status_message: Option<(&str, bool)>,
     projected_legacy_condition_count: usize,
+    data_source_stale: bool,
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("読込中: {loaded_path_label}"));
         ui.label(format!("現在の解決先: {resolved_path_label}"));
     });
+
+    if data_source_stale {
+        ui.colored_label(
+            Color32::from_rgb(200, 120, 40),
+            "メインのデータソース（CSV／分析結果）が読み込み以降に更新されました。必要に応じて条件 JSON を再読込してください。",
+        );
+    }
 
     if let Some(pending_path) = pending_path {
         ui.colored_label(

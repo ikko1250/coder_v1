@@ -1,0 +1,219 @@
+# P1-01: `impl App` 機能別一覧と切り出し候補モジュール
+
+本書は `src/app.rs` 内の **`impl App` に属するメソッド**を列挙し、P1（論理分割）向けの**移動候補モジュール名**を付与したものである。  
+`app.rs` には `impl App` が**二つのブロック**に分かれている（その間に `impl eframe::App for App` が挟まる）。
+
+## `impl App` のブロック構成
+
+| ブロック | おおよその行範囲 | 内容 |
+|----------|------------------|------|
+| 第 1 ブロック | 337 行付近 〜 1300 行付近 | コンストラクタ・データ・フィルタ・選択・DB/注釈・条件エディタ状態・分析ジョブ・警告ウィンドウ・終了ガード等 |
+| `impl eframe::App` | 1302 〜 1348 | `update` のみ |
+| 第 2 ブロック | 1352 行付近 〜 2775 行付近 | DB Viewer ウィンドウ・ツールバー・分析設定・条件エディタ描画・中央ペイン（フィルタ/ツリー/詳細）等 |
+
+※ 行番号は作成時点の参照用。リファクタ後はずれる。
+
+---
+
+## 切り出し候補モジュールとメソッド対応
+
+モジュール名は **スネークケース**（Rust の `app_toolbar.rs` 等）を想定。責務が重いものはさらに分割可能。
+
+### A. `app_data` — データソース・レコード置換
+
+| メソッド | 備考 |
+|----------|------|
+| `App::new` | エントリ。分割時は `App` 組み立てのまま残すか、`App::default` + `init` に分ける判断は後続 |
+| `load_csv` | |
+| `replace_records` | フィルタ・キャッシュ・選択をまとめて更新 |
+
+### B. `app_selection` — 一覧インデックス・キーボード選択
+
+| メソッド | 備考 |
+|----------|------|
+| `apply_selection_change` | |
+| `select_first_filtered_row` | |
+| `move_selection_up` | |
+| `move_selection_down` | |
+| `handle_keyboard_navigation` | **P1-07**: `src/app_lifecycle.rs` 内の非公開関数。`run_update_prelude` から呼ぶ。 |
+| `selected_record` | |
+| `selected_record_index` | |
+| `selected_record_mut` | |
+
+### C. `app_filter` — フィルタ状態と `filtered_indices` 更新
+
+| メソッド | 備考 |
+|----------|------|
+| `apply_filters` | |
+| `record_matches_filters` | |
+| `clear_filters_for_column` | |
+| `clear_all_filters` | |
+| `toggle_filter_value` | |
+
+### D. `app_segments` — 本文セグメント（メモ化キャッシュ）
+
+| メソッド | 備考 |
+|----------|------|
+| `get_segments` | `cached_segments` 無効化ロジックの要。**P1-09**: 無効化・更新の全パスは [`p1-09-cache-invalidation-paths.md`](p1-09-cache-invalidation-paths.md)。 |
+
+### E. `app_annotation` — 手動アノテーション追記
+
+| メソッド | 備考 |
+|----------|------|
+| `resolved_annotation_csv_path` | |
+| `annotation_save_enabled` | |
+| `clear_annotation_editor_status` | |
+| `clear_annotation_editor_inputs` | |
+| `build_annotation_append_row` | |
+| `apply_saved_annotation_to_selected_record` | |
+| `save_annotation_for_selected_record` | |
+
+### F. `app_db_viewer` — DB 参照ウィンドウ・状態準備
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_db_viewer_button` | **実装済**: `src/app_db_viewer.rs`。`impl App` は `draw_db_viewer_button` / `draw_db_viewer_window` のみ委譲。 |
+| `selected_paragraph_id_for_db` 等 | 同上モジュール内の非公開関数（`prepare_db_viewer_state`、`open_db_viewer_for_selected_record`、`load_db_viewer_context` 等）。 |
+| `draw_db_viewer_window` | 同上。ビューポート ID はモジュール内 `VIEWPORT_ID`（P1-05）。`db_viewer_view` は純粋表示のみ。 |
+
+### G. `app_analysis_job` — Python 分析・エクスポート・ランタイム
+
+| メソッド | 備考 |
+|----------|------|
+| `try_cleanup_analysis_jobs` 〜 `guard_root_close_with_dirty_editor` | **実装済**: `src/app_analysis_job.rs`。`handle_*` / `warning_*` はモジュール内の非公開関数。 |
+| `resolved_filter_config_path` | 条件エディタ側は `app_analysis_job::resolved_filter_config_path(self)` を直接呼ぶ。 |
+| `poll_analysis_job` | `app_analysis_job.rs`。**P1-07**: `app_lifecycle::run_update_prelude` から呼ぶ。 |
+| `draw_warning_details_window` | |
+| `guard_root_close_with_dirty_editor` | 終了ガード。**P1-07**: `run_update_prelude` から呼ぶ。 |
+
+### H. `app_condition_editor` — 条件 JSON エディタ（状態・コマンド・描画）
+
+**P1-06 済**: `src/app_condition_editor.rs`。`ConditionEditorState` / `ConditionEditorConfirmAction` は当該ファイルに集約。`impl App` が外部から呼ぶのは `focus_condition_editor_viewport` / `open_condition_editor` / `sync_condition_editor_with_runtime_path` / `draw_condition_editor_window` のみ（いずれも委譲）。`clamp_condition_index` 等のヘルパは当ファイル内の非公開関数。
+
+第 1 ブロック・第 2 ブロックにまたがるメソッドが多い。
+
+**状態・パス同期**
+
+| メソッド |
+|----------|
+| `focus_condition_editor_viewport` |
+| `open_condition_editor` |
+| `load_condition_editor_from_path` |
+| `clamp_condition_editor_selection` |
+| `clamp_condition_editor_group_selection` |
+| `mark_condition_editor_dirty` |
+| `condition_editor_selection_draft` |
+| `condition_editor_window_inputs` |
+| `apply_condition_editor_selection_draft` |
+| `reload_condition_editor` |
+| `request_condition_editor_reload` |
+| `save_condition_editor_document` |
+| `sync_condition_editor_with_runtime_path` |
+
+**描画（サブパネル）**
+
+| メソッド |
+|----------|
+| `draw_condition_editor_body_panel` |
+| `draw_condition_editor_detail_panel` |
+| `draw_condition_editor_detail_contents` |
+| `condition_editor_status_message` |
+| `condition_editor_save_enabled` |
+| `condition_editor_confirm_message` |
+| `draw_condition_editor_embedded_window` |
+| `draw_condition_editor_viewport_panels` |
+| `draw_condition_editor_window` |
+
+**レスポンス適用（イベントハンドラ）**
+
+| メソッド |
+|----------|
+| `apply_condition_editor_close_request` |
+| `apply_condition_editor_footer_response` |
+| `apply_condition_editor_confirm_overlay_response` |
+| `apply_condition_editor_list_response` |
+| `apply_condition_editor_detail_response` |
+| `apply_condition_editor_add_request` |
+| `apply_condition_editor_delete_request` |
+| `apply_condition_editor_reload_request` |
+| `apply_condition_editor_modal_response` |
+| `apply_condition_editor_command_draft` |
+
+### I. `app_toolbar` — トップツールバー
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_toolbar` | **P1-02 済**: `src/app_toolbar.rs`（`app` の子モジュール）に実装。`impl App` は `app_toolbar::draw_toolbar` に委譲。 |
+
+### J. `app_analysis_settings` — 分析設定オーバーレイ
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_analysis_settings_window` | **実装済**: `src/app_analysis_settings.rs`。`draw_analysis_path_override_row` は同ファイル内の非公開関数。 |
+
+### J2. `app_error_dialog` — グローバルエラー（`error_message`）
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_error_dialog_if_any` | **P1-04 済**: `src/app_error_dialog.rs`。`impl eframe::App::update` から呼び出し。 |
+
+### K. `app_warning` — 分析警告詳細ウィンドウ
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_warning_details_window` | **実装場所**: `app_analysis_job.rs`（§G と同じファイル）に集約。 |
+
+### L. `app_lifecycle` — フレーム先頭の統合（ポーリング・キーボード・終了ガード）
+
+| メソッド / 関数 | 備考 |
+|----------|------|
+| `run_update_prelude` | **P1-07 済**: `src/app_lifecycle.rs`。`poll_analysis_job` → `handle_keyboard_navigation` → `guard_root_close_with_dirty_editor` の順。`impl eframe::App::update` 冒頭で呼ぶ。 |
+| `handle_keyboard_navigation` | 同上ファイル内の非公開関数。 |
+| `poll_analysis_job` / `guard_root_close_with_dirty_editor` | 実装は引き続き `app_analysis_job.rs`（上表 G）。 |
+| `update` | `impl eframe::App` は `app.rs` に残す。 |
+
+### M. `app_main_layout` — 中央ペイン（フィルタ・ツリー・詳細・注釈 UI）
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_body` | **P1-03 済**: `src/app_main_layout.rs`。`impl App` は委譲のみ。 |
+| `record_list_panel_width_range` 〜 `draw_annotation_editor_panel` | 同上。`build_record_text_layout_job` / `editor_status_color` も同ファイルへ移動。 |
+| `draw_filters` | `filter_panel_view` 呼び出し |
+| `draw_tree` | `TREE_COLUMN_SPECS` は親 `app.rs` の定数を参照 |
+
+---
+
+## `impl App` に含まれない（ファイル末尾の自由関数）
+
+以下は **`impl App` 外**のヘルパであり、切り出し時は `app_ui_helpers.rs` や既存 `ui_helpers` との整理対象になる。
+
+- `build_record_text_layout_job`（→ `app_main_layout.rs`）
+- `analysis_status_color`（`app_toolbar.rs`）、`editor_status_color`（`app_main_layout.rs`）
+- `draw_analysis_path_override_row`（→ `app_analysis_settings.rs`）
+- `build_tree_*_column` / `tree_*_value` 系
+- `clamp_condition_index` 等（条件エディタ用）→ **`app_condition_editor.rs` 内**（P1-06）
+
+---
+
+## P1-02 以降へのメモ
+
+- **`app_condition_editor`** と **`app_main_layout`** は行数が大きいため、**最初に切り出すなら `app_toolbar` または `app_db_viewer`** のように境界が明瞭なものから着手すると差分が追いやすい。
+- `poll_analysis_job` / `handle_keyboard_navigation` / `guard_root_close_with_dirty_editor` は **`egui::Context` 依存**が強い。P2 のコア分離時はホスト側に残す想定（設計書 §5）。**P1-07** で `app_lifecycle::run_update_prelude` に集約。
+
+## 改訂
+
+| 日付 | 内容 |
+|------|------|
+| 2026-03-23 | P1-01 初版（`feature/p1-01-app-impl-inventory`） |
+| 2026-03-23 | P1-02: `draw_toolbar` を `src/app_toolbar.rs` へ切り出し（子モジュール `#[path]`） |
+| 2026-03-23 | DB Viewer 系を `src/app_db_viewer.rs` へ切り出し（`app` 子モジュール） |
+| 2026-03-23 | 分析設定を `app_analysis_settings.rs`、分析ジョブ・警告・終了ガードを `app_analysis_job.rs` へ切り出し |
+| 2026-03-23 | P1-03: 中央ペインを `app_main_layout.rs` へ切り出し（`TreeScrollRequest` を `pub(super)`） |
+| 2026-03-23 | P1-04 完了: エラーダイアログを `app_error_dialog.rs` へ（分析設定・警告は先行済み） |
+| 2026-03-23 | P1-05: DB Viewer のビューポート ID を `app_db_viewer` に集約、`db_viewer_view` との境界をモジュール doc で明示 |
+| 2026-03-23 | P1-06: 条件エディタを `app_condition_editor.rs` へ集約（`impl App` は委譲のみ） |
+| 2026-03-23 | P1-07: `app_lifecycle.rs` に `run_update_prelude`（ポーリング・キーボード・終了ガード） |
+| 2026-03-23 | P1-08: `all_records` / `filtered_indices` / `selected_row` 変更パスを `docs/p1-08-record-selection-mutation-paths.md` に一覧化 |
+| 2026-03-23 | P1-09: `cached_segments` 等の無効化・更新を `docs/p1-09-cache-invalidation-paths.md` に一覧化 |
+| 2026-03-23 | P1-10: 副作用の境界を `docs/p1-10-side-effect-boundaries.md` に整理（コア候補 / ホスト必須） |
+| 2026-03-23 | P1-11: 公開 API 方針と `dead_code` 解消を `docs/p1-11-public-api-review.md` に記載（`analysis_runner` の test 専用コードを `cfg(test)` へ） |

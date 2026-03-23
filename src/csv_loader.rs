@@ -204,4 +204,61 @@ mod tests {
 
         let _ = fs::remove_file(path);
     }
+
+    #[test]
+    fn load_records_errors_when_file_missing() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "csv-viewer-missing-{}.csv",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::remove_file(&path);
+        let err = load_records(&path).unwrap_err();
+        assert!(
+            err.contains("見つかりません") || err.contains("not found"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn load_records_errors_on_insufficient_columns() {
+        let path = temp_csv_path("bad-headers");
+        fs::write(
+            &path,
+            "foo,bar\n1,2\n",
+        )
+        .unwrap();
+        let err = load_records(&path).unwrap_err();
+        assert!(
+            err.contains("必要な列") || err.contains("不足"),
+            "unexpected message: {err}"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_records_accepts_bom_on_first_header_cell() {
+        let path = temp_csv_path("bom-paragraph");
+        let content = format!(
+            "{}{}",
+            '\u{feff}',
+            concat!(
+                "paragraph_id,document_id,municipality_name,ordinance_or_rule,doc_type,sentence_count,",
+                "paragraph_text,paragraph_text_tagged,matched_condition_ids_text,matched_categories_text,",
+                "match_group_count,annotated_token_count\n",
+                "1,2,市,条例,,3,本文,,cond-1,cat,1,0\n"
+            )
+        );
+        fs::write(&path, content).unwrap();
+
+        let records = load_records(&path).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].analysis_unit, AnalysisUnit::Paragraph);
+        assert_eq!(records[0].paragraph_id, "1");
+
+        let _ = fs::remove_file(path);
+    }
 }

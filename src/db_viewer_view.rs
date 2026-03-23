@@ -1,3 +1,6 @@
+//! DB 参照ウィンドウの**本文・ナビ UI**のみ。ウィンドウの開閉や SQLite 取得は `app_db_viewer`（`src/app_db_viewer.rs`）側。
+//! 入力は `DbViewerState` のスナップショットと前後段落の候補座標、出力は `requested_location` へのオプション書き込みのみ。
+
 use crate::model::DbViewerState;
 use egui::{Color32, RichText, ScrollArea, Ui};
 
