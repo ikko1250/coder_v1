@@ -24,6 +24,7 @@
 //! **`filter` / `csv_loader` のユニットテスト** は P2-10 として [`docs/p2-10-filter-csv-loader-tests.md`](../docs/p2-10-filter-csv-loader-tests.md)。
 //! **ファイルダイアログのホスト抽象（`rfd` の閉じ込め）** は P3-01 として [`docs/p3-01-file-dialog-host.md`](../docs/p3-01-file-dialog-host.md)。
 //! **分析ジョブ起動のホスト抽象**（`spawn_analysis_job` 等の集約）は P3-02 として [`docs/p3-02-analysis-process-host.md`](../docs/p3-02-analysis-process-host.md)。
+//! **ジョブ受信→`apply_event` パイプラインの一本化**は P3-03 として [`docs/p3-03-update-event-pipeline.md`](../docs/p3-03-update-event-pipeline.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。

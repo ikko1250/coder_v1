@@ -15,6 +15,13 @@ use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
+#[derive(Debug, Default)]
+pub(super) struct AnalysisJobPollOutput {
+    pub(super) core_event: Option<ViewerCoreMessage>,
+    pub(super) needs_repaint: bool,
+    pub(super) repaint_after: Option<Duration>,
+}
+
 pub(super) fn try_cleanup_analysis_jobs(app: &mut App) {
     let Some(runtime) = app.analysis_runtime_state.runtime.as_ref() else {
         return;
@@ -103,9 +110,9 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
     Ok(())
 }
 
-pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
+pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
     let Some(running_job) = app.analysis_runtime_state.current_job.as_ref() else {
-        return;
+        return AnalysisJobPollOutput::default();
     };
 
     match running_job.receiver.try_recv() {
@@ -116,11 +123,18 @@ pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
                     if !app.core.job_id_matches_expected(&success.meta.job_id) {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
-                        ctx.request_repaint();
-                        return;
+                        return AnalysisJobPollOutput {
+                            core_event: None,
+                            needs_repaint: true,
+                            repaint_after: None,
+                        };
                     }
                     app.core.clear_expected_job_id();
-                    handle_analysis_success(app, success);
+                    return AnalysisJobPollOutput {
+                        core_event: Some(handle_analysis_success(app, success)),
+                        needs_repaint: true,
+                        repaint_after: None,
+                    };
                 }
                 Err(failure) => {
                     let accept = match failure.meta.as_ref() {
@@ -130,14 +144,21 @@ pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
                     if !accept {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
-                        ctx.request_repaint();
-                        return;
+                        return AnalysisJobPollOutput {
+                            core_event: None,
+                            needs_repaint: true,
+                            repaint_after: None,
+                        };
                     }
                     app.core.clear_expected_job_id();
                     handle_analysis_failure(app, failure);
+                    return AnalysisJobPollOutput {
+                        core_event: None,
+                        needs_repaint: true,
+                        repaint_after: None,
+                    };
                 }
             }
-            ctx.request_repaint();
         }
         Ok(AnalysisJobEvent::ExportCompleted(result)) => {
             app.analysis_runtime_state.current_job = None;
@@ -146,11 +167,19 @@ pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
                     if !app.core.job_id_matches_expected(&success.meta.job_id) {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
-                        ctx.request_repaint();
-                        return;
+                        return AnalysisJobPollOutput {
+                            core_event: None,
+                            needs_repaint: true,
+                            repaint_after: None,
+                        };
                     }
                     app.core.clear_expected_job_id();
                     handle_export_success(app, success);
+                    return AnalysisJobPollOutput {
+                        core_event: None,
+                        needs_repaint: true,
+                        repaint_after: None,
+                    };
                 }
                 Err(failure) => {
                     let accept = match failure.meta.as_ref() {
@@ -160,37 +189,46 @@ pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
                     if !accept {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
-                        ctx.request_repaint();
-                        return;
+                        return AnalysisJobPollOutput {
+                            core_event: None,
+                            needs_repaint: true,
+                            repaint_after: None,
+                        };
                     }
                     app.core.clear_expected_job_id();
                     handle_analysis_failure(app, failure);
+                    return AnalysisJobPollOutput {
+                        core_event: None,
+                        needs_repaint: true,
+                        repaint_after: None,
+                    };
                 }
             }
-            ctx.request_repaint();
         }
-        Err(TryRecvError::Empty) => {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
+        Err(TryRecvError::Empty) => AnalysisJobPollOutput {
+            core_event: None,
+            needs_repaint: false,
+            repaint_after: Some(Duration::from_millis(100)),
+        },
         Err(TryRecvError::Disconnected) => {
             app.analysis_runtime_state.current_job = None;
             app.core.clear_expected_job_id();
             app.analysis_runtime_state.status = AnalysisJobStatus::Failed {
                 summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
             };
-            ctx.request_repaint();
+            AnalysisJobPollOutput {
+                core_event: None,
+                needs_repaint: true,
+                repaint_after: None,
+            }
         }
     }
 }
 
-fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) {
+fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> ViewerCoreMessage {
     let warnings = success.meta.warning_messages.clone();
     let warning_count = warnings.len();
     let source_label = format!("分析結果: {}", success.meta.job_id);
-    let _ = app.apply_event(ViewerCoreMessage::ReplaceRecords {
-        records: success.records,
-        source_label,
-    });
     let mut summary = format!(
         "{}{}抽出 / {:.2} 秒",
         success.meta.selected_unit_count(),
@@ -215,6 +253,10 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) {
         annotation_csv_path,
     });
     app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    ViewerCoreMessage::ReplaceRecords {
+        records: success.records,
+        source_label,
+    }
 }
 
 fn handle_export_success(app: &mut App, success: AnalysisExportSuccess) {

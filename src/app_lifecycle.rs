@@ -12,7 +12,17 @@ use eframe::egui;
 
 /// 1 フレームの UI 描画より前に実行する処理（`poll_analysis_job` → キーボード → 終了ガード）。
 pub(super) fn run_update_prelude(app: &mut App, ctx: &egui::Context) {
-    app_analysis_job::poll_analysis_job(app, ctx);
+    let poll_output = app_analysis_job::poll_analysis_job(app);
+    let mut needs_repaint = poll_output.needs_repaint;
+    if let Some(event) = poll_output.core_event {
+        needs_repaint |= app.apply_event(event).needs_repaint;
+    }
+    if needs_repaint {
+        ctx.request_repaint();
+    }
+    if let Some(delay) = poll_output.repaint_after {
+        ctx.request_repaint_after(delay);
+    }
     handle_keyboard_navigation(app, ctx);
     app_analysis_job::guard_root_close_with_dirty_editor(app, ctx);
 }
