@@ -1,6 +1,6 @@
 # P2-03: `ViewerCoreMessage` 列挙型と主要パスの集約
 
-設計書 §9.1 P2-03 の完了条件に基づき、一覧・フィルタ・選択まわりの更新を **`ViewerCoreMessage`**（`src/viewer_core.rs`）で表現し、[`crate::app::App::apply_core_message`] が **列挙子経由**で処理するようにした。
+設計書 §9.1 P2-03 の完了条件に基づき、一覧・フィルタ・選択まわりの更新を **`ViewerCoreMessage`**（`src/viewer_core.rs`）で表現し、**`App::apply_core_message`**（`src/app.rs`）が **列挙子経由**で処理するようにした。
 
 ## 列挙子と対応する入口（例）
 
