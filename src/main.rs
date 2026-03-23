@@ -9,6 +9,7 @@ mod db;
 mod db_viewer_view;
 mod filter;
 mod filter_panel_view;
+mod file_dialog_host;
 mod font;
 mod manual_annotation_store;
 mod model;

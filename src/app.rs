@@ -22,6 +22,7 @@
 //! **`filtered_indices` 再計算と選択クランプ**は P2-08 として [`docs/p2-08-filter-selection-core.md`](../docs/p2-08-filter-selection-core.md)。
 //! **データソース世代 `data_source_generation`** は P2-09 として [`docs/p2-09-data-source-generation.md`](../docs/p2-09-data-source-generation.md)。
 //! **`filter` / `csv_loader` のユニットテスト** は P2-10 として [`docs/p2-10-filter-csv-loader-tests.md`](../docs/p2-10-filter-csv-loader-tests.md)。
+//! **ファイルダイアログのホスト抽象（`rfd` の閉じ込め）** は P3-01 として [`docs/p3-01-file-dialog-host.md`](../docs/p3-01-file-dialog-host.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -61,6 +62,7 @@ use crate::analysis_runner::{
     AnalysisRuntimeOverrides, AnalysisWarningMessage,
 };
 use crate::csv_loader::load_records;
+use crate::file_dialog_host::{FileDialogHost, RfdFileDialogHost};
 use crate::db::resolve_default_db_path;
 use crate::filter::build_filter_options;
 use crate::manual_annotation_store::{
@@ -289,6 +291,7 @@ fn build_tree_scroll_request(
 }
 
 pub(crate) struct App {
+    file_dialog_host: Box<dyn FileDialogHost>,
     records_source_label: String,
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
@@ -307,6 +310,7 @@ impl App {
         let analysis_request_state = AnalysisRequestState::default();
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let mut app = Self {
+            file_dialog_host: Box::new(RfdFileDialogHost),
             records_source_label: "分析結果なし".to_string(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             analysis_request_state,

@@ -19,11 +19,7 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
             );
 
             if ui.button("CSVを開く").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV files", &["csv"])
-                    .add_filter("All files", &["*"])
-                    .pick_file()
-                {
+                if let Some(path) = app.file_dialog_host.pick_open_csv() {
                     if let Some(out) = app.load_csv(path) {
                         if out.needs_repaint {
                             ui.ctx().request_repaint();
@@ -89,11 +85,7 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
                 .add_enabled(can_export, egui::Button::new("CSV保存(全件)"))
                 .clicked()
             {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV files", &["csv"])
-                    .set_file_name("analysis-result.csv")
-                    .save_file()
-                {
+                if let Some(path) = app.file_dialog_host.pick_save_analysis_result_csv() {
                     if let Err(error) = app.start_export_job(path) {
                         app.error_message = Some(error);
                     }

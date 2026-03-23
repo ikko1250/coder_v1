@@ -68,12 +68,7 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
                 &python_override_label,
                 "自動解決",
                 settings_enabled,
-                || {
-                    rfd::FileDialog::new()
-                        .add_filter("Python", &["exe"])
-                        .add_filter("All files", &["*"])
-                        .pick_file()
-                },
+                || app.file_dialog_host.pick_python_executable(),
                 &mut selected_python_path,
                 &mut clear_python_override,
             );
@@ -86,12 +81,7 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
                 &filter_override_label,
                 "既定値",
                 settings_enabled,
-                || {
-                    rfd::FileDialog::new()
-                        .add_filter("JSON files", &["json"])
-                        .add_filter("All files", &["*"])
-                        .pick_file()
-                },
+                || app.file_dialog_host.pick_open_json(),
                 &mut selected_filter_config_path,
                 &mut clear_filter_config_override,
             );
@@ -104,12 +94,7 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
                 &annotation_override_label,
                 "既定値",
                 settings_enabled,
-                || {
-                    rfd::FileDialog::new()
-                        .add_filter("CSV files", &["csv"])
-                        .set_file_name("manual-annotations.csv")
-                        .save_file()
-                },
+                || app.file_dialog_host.pick_save_annotation_csv(),
                 &mut selected_annotation_csv_path,
                 &mut clear_annotation_csv_override,
             );
