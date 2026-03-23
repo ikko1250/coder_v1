@@ -215,3 +215,4 @@
 | 2026-03-23 | P1-08: `all_records` / `filtered_indices` / `selected_row` 変更パスを `docs/p1-08-record-selection-mutation-paths.md` に一覧化 |
 | 2026-03-23 | P1-09: `cached_segments` 等の無効化・更新を `docs/p1-09-cache-invalidation-paths.md` に一覧化 |
 | 2026-03-23 | P1-10: 副作用の境界を `docs/p1-10-side-effect-boundaries.md` に整理（コア候補 / ホスト必須） |
+| 2026-03-23 | P1-11: 公開 API 方針と `dead_code` 解消を `docs/p1-11-public-api-review.md` に記載（`analysis_runner` の test 専用コードを `cfg(test)` へ） |

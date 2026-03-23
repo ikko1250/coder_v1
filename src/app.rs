@@ -8,6 +8,8 @@
 //! [`docs/p1-09-cache-invalidation-paths.md`](../docs/p1-09-cache-invalidation-paths.md) に記載する。
 //! **副作用の境界（コア候補 / ホスト必須）**は P1-10 として
 //! [`docs/p1-10-side-effect-boundaries.md`](../docs/p1-10-side-effect-boundaries.md) に記載する。
+//! **公開 API・可視性の整理**は P1-11 として
+//! [`docs/p1-11-public-api-review.md`](../docs/p1-11-public-api-review.md) に記載する。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。

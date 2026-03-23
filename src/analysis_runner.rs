@@ -272,13 +272,6 @@ impl AnalysisJsonRecord {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-struct AnalysisJsonResponse {
-    meta: AnalysisMeta,
-    #[serde(default)]
-    records: Vec<AnalysisJsonRecord>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WorkerRuntimeFingerprint {
     python_command: String,
@@ -929,24 +922,42 @@ fn build_worker_response_message(
     fallback_message
 }
 
-fn read_meta_json(path: &Path) -> Result<AnalysisMeta, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|error| format!("meta.json を読めませんでした ({}): {error}", path.display()))?;
-    serde_json::from_str(&text).map_err(|error| {
-        format!(
-            "meta.json の解析に失敗しました ({}): {error}",
-            path.display()
-        )
-    })
-}
+/// meta.json / 仮想 JSON 応答のテスト用（非 test ビルドではコンパイルしない）。
+#[cfg(test)]
+mod json_response_tests {
+    use super::{AnalysisJsonRecord, AnalysisMeta};
+    use serde::Deserialize;
+    use std::fs;
+    use std::path::Path;
 
-fn read_json_response(text: &str) -> Result<AnalysisJsonResponse, String> {
-    serde_json::from_str(text).map_err(|error| format!("JSON 応答の解析に失敗しました: {error}"))
+    #[derive(Clone, Debug, Deserialize, PartialEq)]
+    pub(super) struct AnalysisJsonResponse {
+        pub(super) meta: AnalysisMeta,
+        #[serde(default)]
+        pub(super) records: Vec<AnalysisJsonRecord>,
+    }
+
+    pub(super) fn read_meta_json(path: &Path) -> Result<AnalysisMeta, String> {
+        let text = fs::read_to_string(path).map_err(|error| {
+            format!("meta.json を読めませんでした ({}): {error}", path.display())
+        })?;
+        serde_json::from_str(&text).map_err(|error| {
+            format!(
+                "meta.json の解析に失敗しました ({}): {error}",
+                path.display()
+            )
+        })
+    }
+
+    pub(super) fn read_json_response(text: &str) -> Result<AnalysisJsonResponse, String> {
+        serde_json::from_str(text).map_err(|error| format!("JSON 応答の解析に失敗しました: {error}"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{read_json_response, read_meta_json, AnalysisWarningMessage};
+    use super::json_response_tests::{read_json_response, read_meta_json};
+    use super::AnalysisWarningMessage;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
