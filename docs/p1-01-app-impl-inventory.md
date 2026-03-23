@@ -74,7 +74,7 @@
 |----------|------|
 | `draw_db_viewer_button` | **実装済**: `src/app_db_viewer.rs`。`impl App` は `draw_db_viewer_button` / `draw_db_viewer_window` のみ委譲。 |
 | `selected_paragraph_id_for_db` 等 | 同上モジュール内の非公開関数（`prepare_db_viewer_state`、`open_db_viewer_for_selected_record`、`load_db_viewer_context` 等）。 |
-| `draw_db_viewer_window` | 同上。`parent::DB_VIEWER_VIEWPORT_ID` を参照。 |
+| `draw_db_viewer_window` | 同上。ビューポート ID はモジュール内 `VIEWPORT_ID`（P1-05）。`db_viewer_view` は純粋表示のみ。 |
 
 ### G. `app_analysis_job` — Python 分析・エクスポート・ランタイム
 

@@ -1,4 +1,11 @@
 //! DB 参照ウィンドウ・状態準備。親モジュール `app` の子として `App` の非公開状態にアクセスする。
+//!
+//! **境界（P1-05）**
+//! - 本モジュール: `DbViewerState` の更新、SQLite 取得（[`crate::db`]）、ビューポート／`Window` のホスト。
+//! - [`crate::db_viewer_view`]: **純粋表示**のみ。`DbViewerState` のスナップショットと前後移動の候補を受け取り、
+//!   `requested_location` への書き戻しでナビゲーション意図のみ返す（DB や `App` に触れない）。
+
+const VIEWPORT_ID: &str = "db_viewer_viewport";
 
 use super::App;
 use crate::db::{fetch_paragraph_context, fetch_paragraph_context_by_location};
@@ -131,7 +138,7 @@ pub(super) fn draw_db_viewer_window(app: &mut App, ctx: &egui::Context) {
     let next_location = next_db_viewer_location(app);
     let mut requested_location = None;
     let mut close_requested = false;
-    let viewport_id = egui::ViewportId::from_hash_of(super::DB_VIEWER_VIEWPORT_ID);
+    let viewport_id = egui::ViewportId::from_hash_of(VIEWPORT_ID);
     let builder = egui::ViewportBuilder::default()
         .with_title("DB コンテキスト参照")
         .with_inner_size([760.0, 820.0])

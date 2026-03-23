@@ -129,7 +129,6 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
     },
 ];
 
-const DB_VIEWER_VIEWPORT_ID: &str = "db_viewer_viewport";
 const CONDITION_EDITOR_VIEWPORT_ID: &str = "condition_editor_viewport";
 const RECORD_LIST_PANEL_MIN_WIDTH: f32 = 360.0;
 const RECORD_LIST_PANEL_DEFAULT_RATIO: f32 = 0.33;
