@@ -8,6 +8,7 @@ use crate::analysis_runner::{
     spawn_export_job, AnalysisExportRequest, AnalysisExportSuccess, AnalysisJobEvent,
     AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisWarningMessage,
 };
+use crate::viewer_core::ViewerCoreMessage;
 use eframe::egui::{self, RichText, ScrollArea};
 use egui::TextWrapMode;
 use std::path::PathBuf;
@@ -135,7 +136,10 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) {
     let warnings = success.meta.warning_messages.clone();
     let warning_count = warnings.len();
     let source_label = format!("分析結果: {}", success.meta.job_id);
-    app.replace_records(success.records, source_label);
+    let _ = app.apply_core_message(ViewerCoreMessage::ReplaceRecords {
+        records: success.records,
+        source_label,
+    });
     let mut summary = format!(
         "{}{}抽出 / {:.2} 秒",
         success.meta.selected_unit_count(),

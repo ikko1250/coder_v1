@@ -4,9 +4,38 @@
 //!
 //! - **P2-01**: 足場のみ。
 //! - **P2-02**: レコード・フィルタ・選択の状態を本構造体へ集約。
+//! - **P2-03**: [`ViewerCoreMessage`] でユーザー操作・ジョブ完了に伴うコア更新を型で表現。
 
 use crate::model::{AnalysisRecord, FilterColumn, FilterOption};
 use std::collections::{BTreeSet, HashMap};
+
+/// 一覧・フィルタ・選択まわりの **意図**（UI・ホストからコアへ）。
+///
+/// `egui` 型を含まない。ファイル I/O・子プロセス起動などは [`crate::app::App`] 側の責務。
+#[derive(Debug)]
+pub enum ViewerCoreMessage {
+    /// CSV 読込成功・分析ジョブ完了など、全レコードを差し替える。
+    ReplaceRecords {
+        records: Vec<AnalysisRecord>,
+        source_label: String,
+    },
+    /// 一覧のキーボード ↑（抽出行インデックス）。
+    SelectionMoveUp,
+    /// 一覧のキーボード ↓。
+    SelectionMoveDown,
+    /// 一覧行クリック（`filtered_indices` 上のインデックス）。
+    SelectionSetFilteredRow { filtered_index: usize },
+    /// フィルタ候補のオン/オフ。
+    FilterToggle {
+        column: FilterColumn,
+        value: String,
+        selected: bool,
+    },
+    /// 現在列など、列単位でフィルタ解除。
+    FilterClearColumn(FilterColumn),
+    /// 全フィルタ解除。
+    FilterClearAll,
+}
 
 /// 一覧・フィルタ・選択の状態（`App` が保持）。
 #[derive(Debug)]
@@ -45,12 +74,31 @@ pub(crate) fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usiz
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_selected_row, ViewerCoreState};
+    use super::{clamp_selected_row, ViewerCoreMessage, ViewerCoreState};
+    use crate::model::FilterColumn;
 
     #[test]
     fn viewer_core_state_defaults() {
         let core = ViewerCoreState::default();
         assert!(core.all_records.is_empty());
         assert_eq!(clamp_selected_row(Some(5), 3), Some(2));
+    }
+
+    #[test]
+    fn viewer_core_message_variants_constructible() {
+        let _: ViewerCoreMessage = ViewerCoreMessage::ReplaceRecords {
+            records: Vec::new(),
+            source_label: "test".into(),
+        };
+        let _: ViewerCoreMessage = ViewerCoreMessage::SelectionMoveUp;
+        let _: ViewerCoreMessage = ViewerCoreMessage::SelectionMoveDown;
+        let _: ViewerCoreMessage = ViewerCoreMessage::SelectionSetFilteredRow { filtered_index: 0 };
+        let _: ViewerCoreMessage = ViewerCoreMessage::FilterToggle {
+            column: FilterColumn::MatchedCategories,
+            value: "a".into(),
+            selected: true,
+        };
+        let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearColumn(FilterColumn::MunicipalityName);
+        let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearAll;
     }
 }

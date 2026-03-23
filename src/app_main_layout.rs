@@ -4,6 +4,7 @@ use super::{App, TreeScrollRequest};
 use crate::filter::normalize_filter_candidate_search_text;
 use crate::filter_panel_view::draw_filter_panel as render_filter_panel;
 use crate::model::{AnalysisRecord, FilterColumn, TextSegment};
+use crate::viewer_core::ViewerCoreMessage;
 use crate::ui_helpers::{ime_safe_multiline, ime_safe_singleline};
 use eframe::egui;
 use egui::text::{LayoutJob, TextFormat};
@@ -122,16 +123,26 @@ fn draw_filters(app: &mut App, ui: &mut Ui) {
         app.core.active_filter_column = selected_column;
     }
     if response.clear_column_clicked {
-        app.clear_filters_for_column(app.core.active_filter_column);
+        let _ = app.apply_core_message(ViewerCoreMessage::FilterClearColumn(
+            app.core.active_filter_column,
+        ));
     }
     if response.clear_all_clicked {
-        app.clear_all_filters();
+        let _ = app.apply_core_message(ViewerCoreMessage::FilterClearAll);
     }
     for (value, selected) in response.toggled_options {
-        app.toggle_filter_value(app.core.active_filter_column, &value, selected);
+        let _ = app.apply_core_message(ViewerCoreMessage::FilterToggle {
+            column: app.core.active_filter_column,
+            value,
+            selected,
+        });
     }
     for (column, value) in response.removed_active_values {
-        app.toggle_filter_value(column, &value, false);
+        let _ = app.apply_core_message(ViewerCoreMessage::FilterToggle {
+            column,
+            value,
+            selected: false,
+        });
     }
 }
 

@@ -7,6 +7,7 @@
 
 use super::app_analysis_job;
 use super::App;
+use crate::viewer_core::ViewerCoreMessage;
 use eframe::egui;
 
 /// 1 フレームの UI 描画より前に実行する処理（`poll_analysis_job` → キーボード → 終了ガード）。
@@ -32,8 +33,8 @@ fn handle_keyboard_navigation(app: &mut App, ctx: &egui::Context) {
     });
 
     if down_pressed {
-        app.move_selection_down();
+        let _ = app.apply_core_message(ViewerCoreMessage::SelectionMoveDown);
     } else if up_pressed {
-        app.move_selection_up();
+        let _ = app.apply_core_message(ViewerCoreMessage::SelectionMoveUp);
     }
 }

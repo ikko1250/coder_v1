@@ -13,6 +13,7 @@
 //! **ドメインコア（egui 非依存）の足場**は P2-01 として [`crate::viewer_core`]（`src/viewer_core.rs`）、
 //! 説明は [`docs/p2-01-viewer-core.md`](../docs/p2-01-viewer-core.md)。
 //! **一覧・フィルタ・選択のドメイン状態の集約**は P2-02 として [`docs/p2-02-viewer-core-domain-state.md`](../docs/p2-02-viewer-core-domain-state.md)。
+//! **コア更新の列挙型（`ViewerCoreMessage`）**は P2-03 として [`docs/p2-03-viewer-core-message.md`](../docs/p2-03-viewer-core-message.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -61,7 +62,7 @@ use crate::manual_annotation_store::{
 };
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, TextSegment};
 use crate::tagged_text::parse_tagged_text;
-use crate::viewer_core::{clamp_selected_row, ViewerCoreState};
+use crate::viewer_core::{clamp_selected_row, ViewerCoreMessage, ViewerCoreState};
 use eframe::egui;
 use egui::Ui;
 use egui_extras::Column;
@@ -319,12 +320,40 @@ impl App {
     fn load_csv(&mut self, path: PathBuf) {
         match load_records(&path) {
             Ok(records) => {
-                self.replace_records(records, path.display().to_string());
+                let _ = self.apply_core_message(ViewerCoreMessage::ReplaceRecords {
+                    records,
+                    source_label: path.display().to_string(),
+                });
                 self.analysis_runtime_state.last_export_context = None;
             }
             Err(e) => {
                 self.error_message = Some(e);
             }
+        }
+    }
+
+    /// P2-03: 一覧・フィルタ・選択の **型付き**更新。戻り値は「再描画を促す状態変化があったか」（ホストが `request_repaint` する際の目安）。
+    pub(crate) fn apply_core_message(&mut self, message: ViewerCoreMessage) -> bool {
+        match message {
+            ViewerCoreMessage::ReplaceRecords {
+                records,
+                source_label,
+            } => {
+                self.replace_records(records, source_label);
+                true
+            }
+            ViewerCoreMessage::SelectionMoveUp => self.move_selection_up(),
+            ViewerCoreMessage::SelectionMoveDown => self.move_selection_down(),
+            ViewerCoreMessage::SelectionSetFilteredRow { filtered_index } => self.apply_selection_change(
+                SelectionChange::new(Some(filtered_index), ScrollBehavior::KeepVisible),
+            ),
+            ViewerCoreMessage::FilterToggle {
+                column,
+                value,
+                selected,
+            } => self.toggle_filter_value(column, &value, selected),
+            ViewerCoreMessage::FilterClearColumn(column) => self.clear_filters_for_column(column),
+            ViewerCoreMessage::FilterClearAll => self.clear_all_filters(),
         }
     }
 
@@ -369,42 +398,34 @@ impl App {
         ))
     }
 
-    fn move_selection_up(&mut self) {
+    fn move_selection_up(&mut self) -> bool {
         if self.core.filtered_indices.is_empty() {
-            return;
+            return false;
         }
 
         match self.core.selected_row {
-            Some(idx) if idx > 0 => {
-                self.apply_selection_change(SelectionChange::new(
-                    Some(idx - 1),
-                    ScrollBehavior::KeepVisible,
-                ));
-            }
-            None => {
-                self.select_first_filtered_row(ScrollBehavior::AlignMin);
-            }
-            _ => {}
+            Some(idx) if idx > 0 => self.apply_selection_change(SelectionChange::new(
+                Some(idx - 1),
+                ScrollBehavior::KeepVisible,
+            )),
+            None => self.select_first_filtered_row(ScrollBehavior::AlignMin),
+            _ => false,
         }
     }
 
-    fn move_selection_down(&mut self) {
+    fn move_selection_down(&mut self) -> bool {
         let current_len = self.core.filtered_indices.len();
         if current_len == 0 {
-            return;
+            return false;
         }
 
         match self.core.selected_row {
-            Some(idx) if idx + 1 < current_len => {
-                self.apply_selection_change(SelectionChange::new(
-                    Some(idx + 1),
-                    ScrollBehavior::KeepVisible,
-                ));
-            }
-            None => {
-                self.select_first_filtered_row(ScrollBehavior::AlignMin);
-            }
-            _ => {}
+            Some(idx) if idx + 1 < current_len => self.apply_selection_change(SelectionChange::new(
+                Some(idx + 1),
+                ScrollBehavior::KeepVisible,
+            )),
+            None => self.select_first_filtered_row(ScrollBehavior::AlignMin),
+            _ => false,
         }
     }
 
@@ -582,20 +603,26 @@ impl App {
             .all(|(column, selected)| column.matches(record, selected))
     }
 
-    fn clear_filters_for_column(&mut self, column: FilterColumn) {
+    fn clear_filters_for_column(&mut self, column: FilterColumn) -> bool {
         if self.core.selected_filter_values.remove(&column).is_some() {
             self.apply_filters();
+            true
+        } else {
+            false
         }
     }
 
-    fn clear_all_filters(&mut self) {
+    fn clear_all_filters(&mut self) -> bool {
         if !self.core.selected_filter_values.is_empty() {
             self.core.selected_filter_values.clear();
             self.apply_filters();
+            true
+        } else {
+            false
         }
     }
 
-    fn toggle_filter_value(&mut self, column: FilterColumn, value: &str, selected: bool) {
+    fn toggle_filter_value(&mut self, column: FilterColumn, value: &str, selected: bool) -> bool {
         let changed = {
             let entry = self.core.selected_filter_values.entry(column).or_default();
             if selected {
@@ -617,6 +644,7 @@ impl App {
         if changed {
             self.apply_filters();
         }
+        changed
     }
 
     fn get_segments(&mut self) -> Vec<TextSegment> {
@@ -696,10 +724,9 @@ impl eframe::App for App {
         self.draw_condition_editor_window(ctx);
 
         if let Some(row_index) = clicked_row {
-            if self.apply_selection_change(SelectionChange::new(
-                Some(row_index),
-                ScrollBehavior::KeepVisible,
-            )) {
+            if self.apply_core_message(ViewerCoreMessage::SelectionSetFilteredRow {
+                filtered_index: row_index,
+            }) {
                 ctx.request_repaint();
             }
         }
