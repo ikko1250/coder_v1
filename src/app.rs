@@ -34,6 +34,7 @@
 //! **ブレークチェンジ時の運用手順**は P4-05 として [`docs/p4-05-breaking-change-procedure.md`](../docs/p4-05-breaking-change-procedure.md)。
 //! **workspace 構成（ルート + `src-tauri`）**は P5-01 として [`docs/p5-01-workspace-layout.md`](../docs/p5-01-workspace-layout.md)。
 //! **最小フロント + invoke で P4 DTO 読み取り**は P5-02 として [`docs/p5-02-minimal-front-invoke.md`](../docs/p5-02-minimal-front-invoke.md)。
+//! **Windows 開発時のビルド手順**は P5-03 として [`docs/p5-03-windows-dev-build-steps.md`](../docs/p5-03-windows-dev-build-steps.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
