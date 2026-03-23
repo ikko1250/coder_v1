@@ -19,6 +19,7 @@
 //! **ジョブ ID と `ViewerCoreState::expected_job_id`** は P2-05 として [`docs/p2-05-job-id-validation.md`](../docs/p2-05-job-id-validation.md)。
 //! **`can_close` / `CloseBlockReason`** は P2-06 として [`docs/p2-06-can-close.md`](../docs/p2-06-can-close.md)。
 //! **詳細ペインの `detail_segment_cache` 無効化**は P2-07 として [`docs/p2-07-segment-cache-invalidation.md`](../docs/p2-07-segment-cache-invalidation.md)。
+//! **`filtered_indices` 再計算と選択クランプ**は P2-08 として [`docs/p2-08-filter-selection-core.md`](../docs/p2-08-filter-selection-core.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -376,7 +377,7 @@ impl App {
         self.core.filter_options = build_filter_options(&self.core.all_records);
         self.core.selected_filter_values.clear();
         self.core.filter_candidate_queries.clear();
-        self.core.filtered_indices = (0..self.core.all_records.len()).collect();
+        self.core.recompute_filtered_indices();
         self.core
             .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::ReplaceRecords);
         self.apply_selection_change(SelectionChange::first_filtered_row(
@@ -601,22 +602,10 @@ impl App {
     }
 
     fn apply_filters(&mut self) {
-        self.core.filtered_indices = self
-            .core
-            .all_records
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
-            .collect();
+        self.core.recompute_filtered_indices();
         self.core
             .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::FilterApplied);
         self.select_first_filtered_row(ScrollBehavior::AlignMin);
-    }
-
-    fn record_matches_filters(&self, record: &AnalysisRecord) -> bool {
-        self.core.selected_filter_values
-            .iter()
-            .all(|(column, selected)| column.matches(record, selected))
     }
 
     fn clear_filters_for_column(&mut self, column: FilterColumn) -> bool {

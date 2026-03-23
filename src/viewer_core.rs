@@ -9,6 +9,7 @@
 //! - **P2-05**: `expected_job_id` で非同期ジョブの **有効 ID** を保持し、完了イベントの検証に使う（設計 §5.3）。
 //! - **P2-06**: `can_close` / `CloseBlockReason`（設計 §5.4）。
 //! - **P2-07**: `SegmentCacheInvalidateReason` と `invalidate_detail_segment_cache`（詳細ペインのセグメントキャッシュ）。
+//! - **P2-08**: `recompute_filtered_indices` と `clamp_selected_row_to_filtered_len`。
 
 use crate::model::{AnalysisRecord, FilterColumn, FilterOption, TextSegment};
 use std::collections::{BTreeSet, HashMap};
@@ -144,6 +145,27 @@ impl ViewerCoreState {
     pub(crate) fn set_detail_segment_cache(&mut self, row_no: usize, segments: Vec<TextSegment>) {
         self.detail_segment_cache = Some((row_no, segments));
     }
+
+    /// 現在のフィルタ選択に基づき `filtered_indices` を再計算する（P2-08）。
+    pub(crate) fn recompute_filtered_indices(&mut self) {
+        self.filtered_indices = self
+            .all_records
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
+            .collect();
+    }
+
+    pub(crate) fn record_matches_filters(&self, record: &AnalysisRecord) -> bool {
+        self.selected_filter_values
+            .iter()
+            .all(|(column, selected)| column.matches(record, selected))
+    }
+
+    /// `selected_row` を `filtered_indices.len()` に整合させる（`None` または `0..len`）。
+    pub(crate) fn clamp_selected_row_to_filtered_len(&mut self) {
+        self.selected_row = clamp_selected_row(self.selected_row, self.filtered_indices.len());
+    }
 }
 
 /// フィルタ後の行インデックスを `filtered_len` の範囲にクランプする。
@@ -161,9 +183,43 @@ mod tests {
         clamp_selected_row, CloseBlockReason, CoreOutput, SegmentCacheInvalidateReason,
         ViewerCoreCloseInput, ViewerCoreMessage, ViewerCoreState,
     };
+    use crate::model::AnalysisRecord;
+    use crate::model::AnalysisUnit;
     use crate::model::FilterColumn;
     use crate::model::TextSegment;
     use std::collections::HashMap;
+
+    fn make_minimal_paragraph_record(row_no: usize) -> AnalysisRecord {
+        AnalysisRecord {
+            row_no,
+            analysis_unit: AnalysisUnit::Paragraph,
+            paragraph_id: String::new(),
+            sentence_id: String::new(),
+            document_id: String::new(),
+            municipality_name: String::new(),
+            ordinance_or_rule: String::new(),
+            doc_type: String::new(),
+            sentence_count: String::new(),
+            sentence_no_in_paragraph: String::new(),
+            sentence_no_in_document: String::new(),
+            sentence_text: String::new(),
+            sentence_text_tagged: String::new(),
+            paragraph_text: String::new(),
+            paragraph_text_tagged: String::new(),
+            matched_condition_ids_text: String::new(),
+            matched_categories_text: String::new(),
+            matched_form_group_ids_text: String::new(),
+            matched_form_group_logics_text: String::new(),
+            form_group_explanations_text: String::new(),
+            mixed_scope_warning_text: String::new(),
+            match_group_ids_text: String::new(),
+            match_group_count: String::new(),
+            annotated_token_count: String::new(),
+            manual_annotation_count: String::new(),
+            manual_annotation_pairs_text: String::new(),
+            manual_annotation_namespaces_text: String::new(),
+        }
+    }
 
     fn dummy_segment(text: &str) -> TextSegment {
         TextSegment {
@@ -279,5 +335,52 @@ mod tests {
         core.set_detail_segment_cache(1, vec![dummy_segment("z")]);
         core.invalidate_detail_segment_cache(SegmentCacheInvalidateReason::AnnotationSaved);
         assert!(core.detail_segment_cache.is_none());
+    }
+
+    #[test]
+    fn recompute_filtered_indices_empty_records() {
+        let mut core = ViewerCoreState::default();
+        core.recompute_filtered_indices();
+        assert!(core.filtered_indices.is_empty());
+    }
+
+    #[test]
+    fn recompute_filtered_indices_with_no_active_filters_includes_all_indices() {
+        let mut core = ViewerCoreState::default();
+        core.all_records = vec![
+            make_minimal_paragraph_record(1),
+            make_minimal_paragraph_record(2),
+        ];
+        core.recompute_filtered_indices();
+        assert_eq!(core.filtered_indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn clamp_selected_row_respects_filtered_len_invariant() {
+        let mut core = ViewerCoreState::default();
+        core.filtered_indices = vec![10, 20, 30, 40, 50];
+        core.selected_row = Some(100);
+        core.clamp_selected_row_to_filtered_len();
+        assert_eq!(core.selected_row, Some(4));
+    }
+
+    #[test]
+    fn clamp_selected_row_none_when_filtered_empty() {
+        let mut core = ViewerCoreState::default();
+        core.filtered_indices = vec![];
+        core.selected_row = Some(0);
+        core.clamp_selected_row_to_filtered_len();
+        assert_eq!(core.selected_row, None);
+    }
+
+    #[test]
+    fn recompute_then_clamp_keeps_selected_index_in_range() {
+        let mut core = ViewerCoreState::default();
+        core.all_records = vec![make_minimal_paragraph_record(1)];
+        core.selected_row = Some(100);
+        core.recompute_filtered_indices();
+        assert_eq!(core.filtered_indices, vec![0]);
+        core.clamp_selected_row_to_filtered_len();
+        assert_eq!(core.selected_row, Some(0));
     }
 }
