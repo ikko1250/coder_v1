@@ -74,7 +74,8 @@ pub(super) fn start_analysis_job(app: &mut App) -> Result<(), String> {
     app.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis {
         job_id: job_id.clone(),
     };
-    app.core.set_expected_job_id(job_id);
+    app.core.set_expected_job_id(job_id.clone());
+    app.logger.info(&format!("analysis job started: {job_id}"));
     Ok(())
 }
 
@@ -106,7 +107,8 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
     app.analysis_runtime_state.status = AnalysisJobStatus::RunningExport {
         job_id: job_id.clone(),
     };
-    app.core.set_expected_job_id(job_id);
+    app.core.set_expected_job_id(job_id.clone());
+    app.logger.info(&format!("export job started: {job_id}"));
     Ok(())
 }
 
@@ -123,6 +125,10 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                     if !app.core.job_id_matches_expected(&success.meta.job_id) {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        app.logger.warn(&format!(
+                            "ignored stale analysis completion event: {}",
+                            success.meta.job_id
+                        ));
                         return AnalysisJobPollOutput {
                             core_event: None,
                             needs_repaint: true,
@@ -144,6 +150,7 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                     if !accept {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        app.logger.warn("ignored stale analysis failure event");
                         return AnalysisJobPollOutput {
                             core_event: None,
                             needs_repaint: true,
@@ -167,6 +174,10 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                     if !app.core.job_id_matches_expected(&success.meta.job_id) {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        app.logger.warn(&format!(
+                            "ignored stale export completion event: {}",
+                            success.meta.job_id
+                        ));
                         return AnalysisJobPollOutput {
                             core_event: None,
                             needs_repaint: true,
@@ -189,6 +200,7 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                     if !accept {
                         app.core.clear_expected_job_id();
                         app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        app.logger.warn("ignored stale export failure event");
                         return AnalysisJobPollOutput {
                             core_event: None,
                             needs_repaint: true,
@@ -216,6 +228,8 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
             app.analysis_runtime_state.status = AnalysisJobStatus::Failed {
                 summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
             };
+            app.logger
+                .error("analysis job channel disconnected while waiting for completion");
             AnalysisJobPollOutput {
                 core_event: None,
                 needs_repaint: true,
@@ -253,6 +267,8 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> Viewer
         annotation_csv_path,
     });
     app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    app.logger
+        .info(&format!("analysis job succeeded: {}", success.meta.job_id));
     ViewerCoreMessage::ReplaceRecords {
         records: success.records,
         source_label,
@@ -260,6 +276,7 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> Viewer
 }
 
 fn handle_export_success(app: &mut App, success: AnalysisExportSuccess) {
+    app.logger.info("export job succeeded");
     app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded {
         summary: format!("CSV 保存完了: {}", success.output_csv_path.display()),
     };
@@ -277,6 +294,7 @@ fn handle_analysis_failure(app: &mut App, failure: AnalysisJobFailure) {
         .unwrap_or_default();
     let summary = failure.message.clone();
     app.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary };
+    app.logger.error("analysis or export job failed");
     app.analysis_runtime_state.last_warnings = warnings;
     app.analysis_runtime_state.warning_window_open = false;
 

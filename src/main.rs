@@ -4,6 +4,7 @@ mod analysis_process_host;
 mod analysis_runner;
 mod app;
 mod app_host;
+mod app_logger;
 mod condition_editor;
 mod condition_editor_view;
 mod csv_loader;

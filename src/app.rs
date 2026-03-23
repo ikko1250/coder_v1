@@ -26,6 +26,7 @@
 //! **分析ジョブ起動のホスト抽象**（`spawn_analysis_job` 等の集約）は P3-02 として [`docs/p3-02-analysis-process-host.md`](../docs/p3-02-analysis-process-host.md)。
 //! **ジョブ受信→`apply_event` パイプラインの一本化**は P3-03 として [`docs/p3-03-update-event-pipeline.md`](../docs/p3-03-update-event-pipeline.md)。
 //! **ホスト起動設定（フォント／ウィンドウタイトル）の集約**は P3-04 として [`docs/p3-04-host-startup-config.md`](../docs/p3-04-host-startup-config.md)。
+//! **ログ出力インタフェースの導入**は P3-05 として [`docs/p3-05-app-logger-interface.md`](../docs/p3-05-app-logger-interface.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -65,6 +66,7 @@ use crate::analysis_runner::{
     AnalysisRuntimeOverrides, AnalysisWarningMessage,
 };
 use crate::analysis_process_host::{AnalysisProcessHost, ThreadAnalysisProcessHost};
+use crate::app_logger::{AppLogger, StderrAppLogger};
 use crate::csv_loader::load_records;
 use crate::file_dialog_host::{FileDialogHost, RfdFileDialogHost};
 use crate::db::resolve_default_db_path;
@@ -297,6 +299,7 @@ fn build_tree_scroll_request(
 pub(crate) struct App {
     file_dialog_host: Box<dyn FileDialogHost>,
     analysis_process_host: Box<dyn AnalysisProcessHost>,
+    pub(crate) logger: Box<dyn AppLogger>,
     records_source_label: String,
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
@@ -317,6 +320,7 @@ impl App {
         let mut app = Self {
             file_dialog_host: Box::new(RfdFileDialogHost),
             analysis_process_host: Box::new(ThreadAnalysisProcessHost),
+            logger: Box::new(StderrAppLogger),
             records_source_label: "分析結果なし".to_string(),
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             analysis_request_state,
