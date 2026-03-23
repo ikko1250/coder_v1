@@ -54,7 +54,7 @@
 
 | メソッド | 備考 |
 |----------|------|
-| `get_segments` | `cached_segments` 無効化ロジックの要 |
+| `get_segments` | `cached_segments` 無効化ロジックの要。**P1-09**: 無効化・更新の全パスは [`p1-09-cache-invalidation-paths.md`](p1-09-cache-invalidation-paths.md)。 |
 
 ### E. `app_annotation` — 手動アノテーション追記
 
@@ -213,3 +213,4 @@
 | 2026-03-23 | P1-06: 条件エディタを `app_condition_editor.rs` へ集約（`impl App` は委譲のみ） |
 | 2026-03-23 | P1-07: `app_lifecycle.rs` に `run_update_prelude`（ポーリング・キーボード・終了ガード） |
 | 2026-03-23 | P1-08: `all_records` / `filtered_indices` / `selected_row` 変更パスを `docs/p1-08-record-selection-mutation-paths.md` に一覧化 |
+| 2026-03-23 | P1-09: `cached_segments` 等の無効化・更新を `docs/p1-09-cache-invalidation-paths.md` に一覧化 |
