@@ -15,6 +15,7 @@
 //! **一覧・フィルタ・選択のドメイン状態の集約**は P2-02 として [`docs/p2-02-viewer-core-domain-state.md`](../docs/p2-02-viewer-core-domain-state.md)。
 //! **コア更新の列挙型（`ViewerCoreMessage`）**は P2-03 として [`docs/p2-03-viewer-core-message.md`](../docs/p2-03-viewer-core-message.md)。
 //! **`apply_event` → `CoreOutput`（`needs_repaint`）**は P2-04 として [`docs/p2-04-core-output.md`](../docs/p2-04-core-output.md)。
+//! **ジョブ ID と `ViewerCoreState::expected_job_id`** は P2-05 として [`docs/p2-05-job-id-validation.md`](../docs/p2-05-job-id-validation.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -324,6 +325,8 @@ impl App {
     fn load_csv(&mut self, path: PathBuf) -> Option<CoreOutput> {
         match load_records(&path) {
             Ok(records) => {
+                // 進行中ジョブの遅延完了で上書きされないよう、データソース切替前に期待 ID を無効化（§5.3）。
+                self.core.clear_expected_job_id();
                 let out = self.apply_event(ViewerCoreMessage::ReplaceRecords {
                     records,
                     source_label: path.display().to_string(),

@@ -6,6 +6,7 @@
 //! - **P2-02**: レコード・フィルタ・選択の状態を本構造体へ集約。
 //! - **P2-03**: [`ViewerCoreMessage`] でユーザー操作・ジョブ完了に伴うコア更新を型で表現。
 //! - **P2-04**: `App::apply_event` の戻り値 [`CoreOutput`] に `needs_repaint`（設計 §5.5）。
+//! - **P2-05**: `expected_job_id` で非同期ジョブの **有効 ID** を保持し、完了イベントの検証に使う（設計 §5.3）。
 
 use crate::model::{AnalysisRecord, FilterColumn, FilterOption};
 use std::collections::{BTreeSet, HashMap};
@@ -58,6 +59,8 @@ pub struct ViewerCoreState {
     pub(crate) filter_candidate_queries: HashMap<FilterColumn, String>,
     pub(crate) active_filter_column: FilterColumn,
     pub(crate) selected_row: Option<usize>,
+    /// 現在「この ID の完了だけ受け入れる」分析／エクスポートジョブ。CSV 再読込などで [`Self::clear_expected_job_id`] する。
+    pub(crate) expected_job_id: Option<String>,
 }
 
 impl Default for ViewerCoreState {
@@ -70,7 +73,27 @@ impl Default for ViewerCoreState {
             filter_candidate_queries: HashMap::new(),
             active_filter_column: FilterColumn::MatchedCategories,
             selected_row: None,
+            expected_job_id: None,
         }
+    }
+}
+
+impl ViewerCoreState {
+    pub(crate) fn set_expected_job_id(&mut self, job_id: String) {
+        self.expected_job_id = Some(job_id);
+    }
+
+    pub(crate) fn clear_expected_job_id(&mut self) {
+        self.expected_job_id = None;
+    }
+
+    pub(crate) fn job_id_matches_expected(&self, job_id: &str) -> bool {
+        self.expected_job_id.as_deref() == Some(job_id)
+    }
+
+    /// `meta` が無い失敗は、期待 ID が無いときは破棄（遅延メッセージ）、あるときは同一チャネル由来とみなして受理する。
+    pub(crate) fn accept_failure_without_meta_job_id(&self) -> bool {
+        self.expected_job_id.is_some()
     }
 }
 
@@ -92,7 +115,30 @@ mod tests {
     fn viewer_core_state_defaults() {
         let core = ViewerCoreState::default();
         assert!(core.all_records.is_empty());
+        assert!(core.expected_job_id.is_none());
         assert_eq!(clamp_selected_row(Some(5), 3), Some(2));
+    }
+
+    #[test]
+    fn stale_job_id_is_rejected() {
+        let mut core = ViewerCoreState::default();
+        core.set_expected_job_id("job-b".into());
+        assert!(!core.job_id_matches_expected("job-a"));
+    }
+
+    #[test]
+    fn matching_job_id_is_accepted() {
+        let mut core = ViewerCoreState::default();
+        core.set_expected_job_id("job-a".into());
+        assert!(core.job_id_matches_expected("job-a"));
+    }
+
+    #[test]
+    fn clear_expected_invalidates_job() {
+        let mut core = ViewerCoreState::default();
+        core.set_expected_job_id("x".into());
+        core.clear_expected_job_id();
+        assert!(!core.job_id_matches_expected("x"));
     }
 
     #[test]

@@ -64,7 +64,10 @@ pub(super) fn start_analysis_job(app: &mut App) -> Result<(), String> {
     app.analysis_runtime_state.last_warnings.clear();
     app.analysis_runtime_state.warning_window_open = false;
     app.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-    app.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis { job_id };
+    app.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis {
+        job_id: job_id.clone(),
+    };
+    app.core.set_expected_job_id(job_id);
     Ok(())
 }
 
@@ -93,7 +96,10 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
     });
 
     app.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-    app.analysis_runtime_state.status = AnalysisJobStatus::RunningExport { job_id };
+    app.analysis_runtime_state.status = AnalysisJobStatus::RunningExport {
+        job_id: job_id.clone(),
+    };
+    app.core.set_expected_job_id(job_id);
     Ok(())
 }
 
@@ -106,16 +112,60 @@ pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
         Ok(AnalysisJobEvent::AnalysisCompleted(result)) => {
             app.analysis_runtime_state.current_job = None;
             match result {
-                Ok(success) => handle_analysis_success(app, success),
-                Err(failure) => handle_analysis_failure(app, failure),
+                Ok(success) => {
+                    if !app.core.job_id_matches_expected(&success.meta.job_id) {
+                        app.core.clear_expected_job_id();
+                        app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        ctx.request_repaint();
+                        return;
+                    }
+                    app.core.clear_expected_job_id();
+                    handle_analysis_success(app, success);
+                }
+                Err(failure) => {
+                    let accept = match failure.meta.as_ref() {
+                        Some(meta) => app.core.job_id_matches_expected(&meta.job_id),
+                        None => app.core.accept_failure_without_meta_job_id(),
+                    };
+                    if !accept {
+                        app.core.clear_expected_job_id();
+                        app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        ctx.request_repaint();
+                        return;
+                    }
+                    app.core.clear_expected_job_id();
+                    handle_analysis_failure(app, failure);
+                }
             }
             ctx.request_repaint();
         }
         Ok(AnalysisJobEvent::ExportCompleted(result)) => {
             app.analysis_runtime_state.current_job = None;
             match result {
-                Ok(success) => handle_export_success(app, success),
-                Err(failure) => handle_analysis_failure(app, failure),
+                Ok(success) => {
+                    if !app.core.job_id_matches_expected(&success.meta.job_id) {
+                        app.core.clear_expected_job_id();
+                        app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        ctx.request_repaint();
+                        return;
+                    }
+                    app.core.clear_expected_job_id();
+                    handle_export_success(app, success);
+                }
+                Err(failure) => {
+                    let accept = match failure.meta.as_ref() {
+                        Some(meta) => app.core.job_id_matches_expected(&meta.job_id),
+                        None => app.core.accept_failure_without_meta_job_id(),
+                    };
+                    if !accept {
+                        app.core.clear_expected_job_id();
+                        app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                        ctx.request_repaint();
+                        return;
+                    }
+                    app.core.clear_expected_job_id();
+                    handle_analysis_failure(app, failure);
+                }
             }
             ctx.request_repaint();
         }
@@ -124,6 +174,7 @@ pub(super) fn poll_analysis_job(app: &mut App, ctx: &egui::Context) {
         }
         Err(TryRecvError::Disconnected) => {
             app.analysis_runtime_state.current_job = None;
+            app.core.clear_expected_job_id();
             app.analysis_runtime_state.status = AnalysisJobStatus::Failed {
                 summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
             };
