@@ -280,3 +280,112 @@ fn compare_numeric_filter_values(left: &str, right: &str) -> Ordering {
             .then_with(|| left_trimmed.cmp(right_trimmed)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::AnalysisUnit;
+    use std::collections::BTreeSet;
+
+    fn empty_paragraph_record(row_no: usize) -> AnalysisRecord {
+        AnalysisRecord {
+            row_no,
+            analysis_unit: AnalysisUnit::Paragraph,
+            paragraph_id: String::new(),
+            sentence_id: String::new(),
+            document_id: String::new(),
+            municipality_name: String::new(),
+            ordinance_or_rule: String::new(),
+            doc_type: String::new(),
+            sentence_count: String::new(),
+            sentence_no_in_paragraph: String::new(),
+            sentence_no_in_document: String::new(),
+            sentence_text: String::new(),
+            sentence_text_tagged: String::new(),
+            paragraph_text: String::new(),
+            paragraph_text_tagged: String::new(),
+            matched_condition_ids_text: String::new(),
+            matched_categories_text: String::new(),
+            matched_form_group_ids_text: String::new(),
+            matched_form_group_logics_text: String::new(),
+            form_group_explanations_text: String::new(),
+            mixed_scope_warning_text: String::new(),
+            match_group_ids_text: String::new(),
+            match_group_count: String::new(),
+            annotated_token_count: String::new(),
+            manual_annotation_count: String::new(),
+            manual_annotation_pairs_text: String::new(),
+            manual_annotation_namespaces_text: String::new(),
+        }
+    }
+
+    #[test]
+    fn display_filter_value_empty_shows_placeholder() {
+        assert_eq!(display_filter_value(""), "(空)");
+        assert_eq!(display_filter_value("x"), "x");
+    }
+
+    #[test]
+    fn normalize_filter_candidate_search_text_trims_and_lowercases() {
+        assert_eq!(
+            normalize_filter_candidate_search_text("  AbC  "),
+            "abc"
+        );
+    }
+
+    #[test]
+    fn filter_column_matches_empty_selection_is_always_true() {
+        let record = empty_paragraph_record(1);
+        let empty: BTreeSet<String> = BTreeSet::new();
+        assert!(FilterColumn::MunicipalityName.matches(&record, &empty));
+    }
+
+    #[test]
+    fn filter_column_municipality_matches_selected_value() {
+        let mut a = empty_paragraph_record(1);
+        a.municipality_name = "札幌市".to_string();
+        let mut b = empty_paragraph_record(2);
+        b.municipality_name = "旭川市".to_string();
+        let selected: BTreeSet<String> = ["札幌市".to_string()].into_iter().collect();
+        assert!(FilterColumn::MunicipalityName.matches(&a, &selected));
+        assert!(!FilterColumn::MunicipalityName.matches(&b, &selected));
+    }
+
+    #[test]
+    fn filter_column_matched_categories_any_token_matches() {
+        let mut record = empty_paragraph_record(1);
+        record.matched_categories_text = "A, B、C".to_string();
+        let selected: BTreeSet<String> = ["B".to_string()].into_iter().collect();
+        assert!(FilterColumn::MatchedCategories.matches(&record, &selected));
+        let selected2: BTreeSet<String> = ["Z".to_string()].into_iter().collect();
+        assert!(!FilterColumn::MatchedCategories.matches(&record, &selected2));
+    }
+
+    #[test]
+    fn build_filter_options_counts_distinct_municipalities() {
+        let mut a = empty_paragraph_record(1);
+        a.municipality_name = "札幌市".to_string();
+        let mut b = empty_paragraph_record(2);
+        b.municipality_name = "札幌市".to_string();
+        let mut c = empty_paragraph_record(3);
+        c.municipality_name = "旭川市".to_string();
+        let opts = build_filter_options(&[a, b, c]);
+        let muni = opts.get(&FilterColumn::MunicipalityName).unwrap();
+        assert_eq!(muni.len(), 2);
+        let total: usize = muni.iter().map(|o| o.count).sum();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn build_filter_options_sorts_numeric_columns_numerically() {
+        let mut r1 = empty_paragraph_record(1);
+        r1.match_group_count = "10".to_string();
+        let mut r2 = empty_paragraph_record(2);
+        r2.match_group_count = "2".to_string();
+        let opts = build_filter_options(&[r1, r2]);
+        let counts = opts.get(&FilterColumn::MatchGroupCount).unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts[0].value, "2");
+        assert_eq!(counts[1].value, "10");
+    }
+}

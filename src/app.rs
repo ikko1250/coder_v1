@@ -21,6 +21,7 @@
 //! **詳細ペインの `detail_segment_cache` 無効化**は P2-07 として [`docs/p2-07-segment-cache-invalidation.md`](../docs/p2-07-segment-cache-invalidation.md)。
 //! **`filtered_indices` 再計算と選択クランプ**は P2-08 として [`docs/p2-08-filter-selection-core.md`](../docs/p2-08-filter-selection-core.md)。
 //! **データソース世代 `data_source_generation`** は P2-09 として [`docs/p2-09-data-source-generation.md`](../docs/p2-09-data-source-generation.md)。
+//! **`filter` / `csv_loader` のユニットテスト** は P2-10 として [`docs/p2-10-filter-csv-loader-tests.md`](../docs/p2-10-filter-csv-loader-tests.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
