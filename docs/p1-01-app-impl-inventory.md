@@ -35,7 +35,7 @@
 | `select_first_filtered_row` | |
 | `move_selection_up` | |
 | `move_selection_down` | |
-| `handle_keyboard_navigation` | `egui::Context` 依存（ホスト寄り） |
+| `handle_keyboard_navigation` | **P1-07**: `src/app_lifecycle.rs` 内の非公開関数。`run_update_prelude` から呼ぶ。 |
 | `selected_record` | |
 | `selected_record_index` | |
 | `selected_record_mut` | |
@@ -82,9 +82,9 @@
 |----------|------|
 | `try_cleanup_analysis_jobs` 〜 `guard_root_close_with_dirty_editor` | **実装済**: `src/app_analysis_job.rs`。`handle_*` / `warning_*` はモジュール内の非公開関数。 |
 | `resolved_filter_config_path` | 条件エディタ側は `app_analysis_job::resolved_filter_config_path(self)` を直接呼ぶ。 |
-| `poll_analysis_job` | `egui::Context` 依存。 |
+| `poll_analysis_job` | `app_analysis_job.rs`。**P1-07**: `app_lifecycle::run_update_prelude` から呼ぶ。 |
 | `draw_warning_details_window` | |
-| `guard_root_close_with_dirty_editor` | 終了ガード（未保存の条件エディタ）。 |
+| `guard_root_close_with_dirty_editor` | 終了ガード。**P1-07**: `run_update_prelude` から呼ぶ。 |
 
 ### H. `app_condition_editor` — 条件 JSON エディタ（状態・コマンド・描画）
 
@@ -163,12 +163,14 @@
 |----------|------|
 | `draw_warning_details_window` | **実装場所**: `app_analysis_job.rs`（§G と同じファイル）に集約。 |
 
-### L. `app_lifecycle` — フレーム単位の統合・終了ガード
+### L. `app_lifecycle` — フレーム先頭の統合（ポーリング・キーボード・終了ガード）
 
-| メソッド | 備考 |
+| メソッド / 関数 | 備考 |
 |----------|------|
-| `guard_root_close_with_dirty_editor` | **実装場所**: `app_analysis_job.rs`。 |
-| `update` | `impl eframe::App` だが、論理上は「フレームオーケストレーション」。ファイル上は現状どおり `app.rs` に残すか、`app_lifecycle.rs` に移すかは実装時判断 |
+| `run_update_prelude` | **P1-07 済**: `src/app_lifecycle.rs`。`poll_analysis_job` → `handle_keyboard_navigation` → `guard_root_close_with_dirty_editor` の順。`impl eframe::App::update` 冒頭で呼ぶ。 |
+| `handle_keyboard_navigation` | 同上ファイル内の非公開関数。 |
+| `poll_analysis_job` / `guard_root_close_with_dirty_editor` | 実装は引き続き `app_analysis_job.rs`（上表 G）。 |
+| `update` | `impl eframe::App` は `app.rs` に残す。 |
 
 ### M. `app_main_layout` — 中央ペイン（フィルタ・ツリー・詳細・注釈 UI）
 
@@ -196,7 +198,7 @@
 ## P1-02 以降へのメモ
 
 - **`app_condition_editor`** と **`app_main_layout`** は行数が大きいため、**最初に切り出すなら `app_toolbar` または `app_db_viewer`** のように境界が明瞭なものから着手すると差分が追いやすい。
-- `poll_analysis_job` / `handle_keyboard_navigation` / `guard_root_close_with_dirty_editor` は **`egui::Context` 依存**が強い。P2 のコア分離時はホスト側に残す想定（設計書 §5）。
+- `poll_analysis_job` / `handle_keyboard_navigation` / `guard_root_close_with_dirty_editor` は **`egui::Context` 依存**が強い。P2 のコア分離時はホスト側に残す想定（設計書 §5）。**P1-07** で `app_lifecycle::run_update_prelude` に集約。
 
 ## 改訂
 
@@ -209,3 +211,4 @@
 | 2026-03-23 | P1-03: 中央ペインを `app_main_layout.rs` へ切り出し（`TreeScrollRequest` を `pub(super)`） |
 | 2026-03-23 | P1-04 完了: エラーダイアログを `app_error_dialog.rs` へ（分析設定・警告は先行済み） |
 | 2026-03-23 | P1-06: 条件エディタを `app_condition_editor.rs` へ集約（`impl App` は委譲のみ） |
+| 2026-03-23 | P1-07: `app_lifecycle.rs` に `run_update_prelude`（ポーリング・キーボード・終了ガード） |

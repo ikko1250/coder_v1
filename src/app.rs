@@ -10,6 +10,7 @@
 //! 中央ペイン（フィルタ・一覧・詳細）は [`app_main_layout`](app_main_layout)（`src/app_main_layout.rs`）。
 //! エラーダイアログは [`app_error_dialog`](app_error_dialog)（`src/app_error_dialog.rs`）。
 //! 条件 JSON エディタは [`app_condition_editor`](app_condition_editor)（`src/app_condition_editor.rs`）。
+//! フレーム先頭（ジョブポーリング・キーボード・終了ガード）は [`app_lifecycle`](app_lifecycle)（`src/app_lifecycle.rs`）。
 
 #[path = "app_toolbar.rs"]
 mod app_toolbar;
@@ -31,6 +32,9 @@ mod app_error_dialog;
 
 #[path = "app_condition_editor.rs"]
 mod app_condition_editor;
+
+#[path = "app_lifecycle.rs"]
+mod app_lifecycle;
 
 use crate::analysis_runner::{
     build_runtime_config, resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig,
@@ -412,28 +416,6 @@ impl App {
         }
     }
 
-    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        if self.error_message.is_some()
-            || self.filtered_indices.is_empty()
-            || ctx.wants_keyboard_input()
-        {
-            return;
-        }
-
-        let (up_pressed, down_pressed) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::ArrowUp),
-                i.key_pressed(egui::Key::ArrowDown),
-            )
-        });
-
-        if down_pressed {
-            self.move_selection_down();
-        } else if up_pressed {
-            self.move_selection_up();
-        }
-    }
-
     fn selected_record(&self) -> Option<&AnalysisRecord> {
         let filtered_idx = self.selected_row?;
         let record_idx = *self.filtered_indices.get(filtered_idx)?;
@@ -691,24 +673,14 @@ impl App {
         app_analysis_job::start_export_job(self, output_csv_path)
     }
 
-    fn poll_analysis_job(&mut self, ctx: &egui::Context) {
-        app_analysis_job::poll_analysis_job(self, ctx);
-    }
-
     fn draw_warning_details_window(&mut self, ctx: &egui::Context) {
         app_analysis_job::draw_warning_details_window(self, ctx);
-    }
-
-    fn guard_root_close_with_dirty_editor(&mut self, ctx: &egui::Context) {
-        app_analysis_job::guard_root_close_with_dirty_editor(self, ctx);
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_analysis_job(ctx);
-        self.handle_keyboard_navigation(ctx);
-        self.guard_root_close_with_dirty_editor(ctx);
+        app_lifecycle::run_update_prelude(self, ctx);
 
         app_error_dialog::draw_error_dialog_if_any(self, ctx);
 
