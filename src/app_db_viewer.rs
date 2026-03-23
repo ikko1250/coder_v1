@@ -43,6 +43,7 @@ fn prepare_db_viewer_state(app: &mut App) -> Result<(), String> {
     app.db_viewer_state.source_paragraph_text = Some(source_paragraph_text);
     app.db_viewer_state.context = None;
     app.db_viewer_state.error_message = None;
+    app.db_viewer_state.data_source_generation_when_prepared = Some(app.core.data_source_generation);
     Ok(())
 }
 

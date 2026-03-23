@@ -142,6 +142,8 @@ pub(crate) struct DbViewerState {
     pub(crate) source_paragraph_text: Option<String>,
     pub(crate) context: Option<DbParagraphContext>,
     pub(crate) error_message: Option<String>,
+    /// P2-09: `prepare_db_viewer_state` 時点の `ViewerCoreState::data_source_generation`（整合確認用）。
+    pub(crate) data_source_generation_when_prepared: Option<u64>,
 }
 
 impl DbViewerState {
@@ -153,6 +155,7 @@ impl DbViewerState {
             source_paragraph_text: None,
             context: None,
             error_message: None,
+            data_source_generation_when_prepared: None,
         }
     }
 
@@ -162,5 +165,6 @@ impl DbViewerState {
         self.source_paragraph_text = None;
         self.context = None;
         self.error_message = None;
+        self.data_source_generation_when_prepared = None;
     }
 }

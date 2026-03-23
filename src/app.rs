@@ -20,6 +20,7 @@
 //! **`can_close` / `CloseBlockReason`** は P2-06 として [`docs/p2-06-can-close.md`](../docs/p2-06-can-close.md)。
 //! **詳細ペインの `detail_segment_cache` 無効化**は P2-07 として [`docs/p2-07-segment-cache-invalidation.md`](../docs/p2-07-segment-cache-invalidation.md)。
 //! **`filtered_indices` 再計算と選択クランプ**は P2-08 として [`docs/p2-08-filter-selection-core.md`](../docs/p2-08-filter-selection-core.md)。
+//! **データソース世代 `data_source_generation`** は P2-09 として [`docs/p2-09-data-source-generation.md`](../docs/p2-09-data-source-generation.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -378,6 +379,7 @@ impl App {
         self.core.selected_filter_values.clear();
         self.core.filter_candidate_queries.clear();
         self.core.recompute_filtered_indices();
+        self.core.bump_data_source_generation();
         self.core
             .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::ReplaceRecords);
         self.apply_selection_change(SelectionChange::first_filtered_row(

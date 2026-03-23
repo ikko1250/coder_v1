@@ -10,6 +10,7 @@
 //! - **P2-06**: `can_close` / `CloseBlockReason`（設計 §5.4）。
 //! - **P2-07**: `SegmentCacheInvalidateReason` と `invalidate_detail_segment_cache`（詳細ペインのセグメントキャッシュ）。
 //! - **P2-08**: `recompute_filtered_indices` と `clamp_selected_row_to_filtered_len`。
+//! - **P2-09**: `data_source_generation`（CSV／分析結果の世代カウンタ、§11.4）。
 
 use crate::model::{AnalysisRecord, FilterColumn, FilterOption, TextSegment};
 use std::collections::{BTreeSet, HashMap};
@@ -91,6 +92,8 @@ pub struct ViewerCoreState {
     pub(crate) expected_job_id: Option<String>,
     /// 詳細ペイン用。第 1 要素は `AnalysisRecord::row_no`。[`Self::invalidate_detail_segment_cache`] で明示的に無効化する。
     pub(crate) detail_segment_cache: Option<(usize, Vec<TextSegment>)>,
+    /// メインのレコード集合が置き換わるたびに増える（§11.4）。サブウィンドウは読み込み時の値と比較する。
+    pub(crate) data_source_generation: u64,
 }
 
 impl Default for ViewerCoreState {
@@ -105,6 +108,7 @@ impl Default for ViewerCoreState {
             selected_row: None,
             expected_job_id: None,
             detail_segment_cache: None,
+            data_source_generation: 0,
         }
     }
 }
@@ -165,6 +169,11 @@ impl ViewerCoreState {
     /// `selected_row` を `filtered_indices.len()` に整合させる（`None` または `0..len`）。
     pub(crate) fn clamp_selected_row_to_filtered_len(&mut self) {
         self.selected_row = clamp_selected_row(self.selected_row, self.filtered_indices.len());
+    }
+
+    /// CSV／分析結果で `all_records` を差し替えた直後に呼ぶ。単調に増加する。
+    pub(crate) fn bump_data_source_generation(&mut self) {
+        self.data_source_generation = self.data_source_generation.wrapping_add(1);
     }
 }
 
@@ -235,6 +244,7 @@ mod tests {
         assert!(core.all_records.is_empty());
         assert!(core.expected_job_id.is_none());
         assert!(core.detail_segment_cache.is_none());
+        assert_eq!(core.data_source_generation, 0);
         assert_eq!(clamp_selected_row(Some(5), 3), Some(2));
     }
 
@@ -382,5 +392,15 @@ mod tests {
         assert_eq!(core.filtered_indices, vec![0]);
         core.clamp_selected_row_to_filtered_len();
         assert_eq!(core.selected_row, Some(0));
+    }
+
+    #[test]
+    fn data_source_generation_bumps_monotonically() {
+        let mut core = ViewerCoreState::default();
+        assert_eq!(core.data_source_generation, 0);
+        core.bump_data_source_generation();
+        assert_eq!(core.data_source_generation, 1);
+        core.bump_data_source_generation();
+        assert_eq!(core.data_source_generation, 2);
     }
 }

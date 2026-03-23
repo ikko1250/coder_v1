@@ -68,6 +68,8 @@ struct ConditionEditorWindowInputs {
 #[derive(Clone, Debug, Default)]
 pub(super) struct ConditionEditorState {
     pub(super) window_open: bool,
+    /// P2-09: 条件 JSON を最後に読み込んだときの `core.data_source_generation`。
+    data_source_generation_at_load: Option<u64>,
     loaded_path: Option<PathBuf>,
     pending_path_sync: Option<PathBuf>,
     document: Option<FilterConfigDocument>,
@@ -113,6 +115,7 @@ fn load_condition_editor_from_path(
         ));
     }
     app.condition_editor_state.window_open = true;
+    app.condition_editor_state.data_source_generation_at_load = Some(app.core.data_source_generation);
     app.condition_editor_state.loaded_path = Some(path);
     app.condition_editor_state.pending_path_sync = None;
     app.condition_editor_state.document = Some(document);
@@ -416,6 +419,13 @@ fn condition_editor_status_message(app: &App) -> Option<(&str, bool)> {
         .map(|message| (message, app.condition_editor_state.status_is_error))
 }
 
+fn condition_editor_data_source_stale(app: &App) -> bool {
+    match app.condition_editor_state.data_source_generation_at_load {
+        Some(snapshot) => snapshot != app.core.data_source_generation,
+        None => false,
+    }
+}
+
 fn condition_editor_save_enabled(app: &App, can_modify: bool, resolved_path_ok: bool) -> bool {
     can_modify
         && app.condition_editor_state.document.is_some()
@@ -460,6 +470,7 @@ fn draw_condition_editor_embedded_window(
                 app.condition_editor_state.pending_path_sync.as_deref(),
                 condition_editor_status_message(app),
                 app.condition_editor_state.projected_legacy_condition_count,
+                condition_editor_data_source_stale(app),
             );
             ui.separator();
             draw_condition_editor_body_panel(
@@ -509,6 +520,7 @@ fn draw_condition_editor_viewport_panels(
                 app.condition_editor_state.pending_path_sync.as_deref(),
                 condition_editor_status_message(app),
                 app.condition_editor_state.projected_legacy_condition_count,
+                condition_editor_data_source_stale(app),
             );
         });
 
