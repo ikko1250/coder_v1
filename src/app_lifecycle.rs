@@ -18,7 +18,7 @@ pub(super) fn run_update_prelude(app: &mut App, ctx: &egui::Context) {
 
 fn handle_keyboard_navigation(app: &mut App, ctx: &egui::Context) {
     if app.error_message.is_some()
-        || app.filtered_indices.is_empty()
+        || app.core.filtered_indices.is_empty()
         || ctx.wants_keyboard_input()
     {
         return;

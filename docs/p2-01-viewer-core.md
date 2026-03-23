@@ -7,14 +7,13 @@
 | 項目 | 説明 |
 |------|------|
 | モジュール | `viewer_core`（`main.rs` で `mod viewer_core;`） |
-| 状態型 | `ViewerCoreState` — P2-01 時点ではフィールドなしのプレースホルダ（`Default`） |
-| `dead_code` | P2-02 で `App` が保持するまで、`ViewerCoreState` に `#[allow(dead_code)]`（非 test ビルドでは未構築のため） |
-| テスト | `viewer_core_state_defaults`（`Default` が組み立て可能であることのみ） |
+| 状態型 | P2-01 時点では `ViewerCoreState` はフィールドなしのプレースホルダ（`Default`）。**P2-02 で**レコード・フィルタ・選択のフィールドを [`docs/p2-02-viewer-core-domain-state.md`](p2-02-viewer-core-domain-state.md) に従い集約した。 |
+| テスト | `viewer_core_state_defaults`（`Default` と `clamp_selected_row` の簡易チェック） |
 
-## 非目的（P2-01 ではやらないこと）
+## 非目的（P2-01 当時のスコープ外）
 
-- `App` への組み込み
-- レコード・フィルタの実データ移行（P2-02 以降）
+- `App` への組み込み（→ P2-02）
+- レコード・フィルタの実データ移行（→ P2-02）
 
 ## 改訂
 

@@ -12,6 +12,7 @@
 //! [`docs/p1-11-public-api-review.md`](../docs/p1-11-public-api-review.md) に記載する。
 //! **ドメインコア（egui 非依存）の足場**は P2-01 として [`crate::viewer_core`]（`src/viewer_core.rs`）、
 //! 説明は [`docs/p2-01-viewer-core.md`](../docs/p2-01-viewer-core.md)。
+//! **一覧・フィルタ・選択のドメイン状態の集約**は P2-02 として [`docs/p2-02-viewer-core-domain-state.md`](../docs/p2-02-viewer-core-domain-state.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -58,12 +59,13 @@ use crate::manual_annotation_store::{
     append_manual_annotation_row, build_manual_annotation_pair, first_manual_annotation_line,
     increment_manual_annotation_count, ManualAnnotationAppendRow,
 };
-use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, FilterOption, TextSegment};
+use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, TextSegment};
 use crate::tagged_text::parse_tagged_text;
+use crate::viewer_core::{clamp_selected_row, ViewerCoreState};
 use eframe::egui;
 use egui::Ui;
 use egui_extras::Column;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
@@ -253,14 +255,6 @@ impl SelectionChange {
     }
 }
 
-fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usize) -> Option<usize> {
-    match (selected_row, filtered_len) {
-        (_, 0) => None,
-        (Some(idx), len) => Some(idx.min(len - 1)),
-        (None, _) => None,
-    }
-}
-
 fn build_tree_scroll_request(
     selected_row: Option<usize>,
     scroll_behavior: ScrollBehavior,
@@ -287,13 +281,7 @@ pub(crate) struct App {
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
     analysis_runtime_state: AnalysisRuntimeState,
-    all_records: Vec<AnalysisRecord>,
-    filtered_indices: Vec<usize>,
-    filter_options: HashMap<FilterColumn, Vec<FilterOption>>,
-    selected_filter_values: HashMap<FilterColumn, BTreeSet<String>>,
-    filter_candidate_queries: HashMap<FilterColumn, String>,
-    active_filter_column: FilterColumn,
-    selected_row: Option<usize>,
+    pub(crate) core: ViewerCoreState,
     pending_tree_scroll: Option<TreeScrollRequest>,
     pub(crate) error_message: Option<String>,
     cached_segments: Option<(usize, Vec<TextSegment>)>,
@@ -312,13 +300,7 @@ impl App {
             db_viewer_state: DbViewerState::new(resolve_default_db_path()),
             analysis_request_state,
             analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
-            all_records: Vec::new(),
-            filtered_indices: Vec::new(),
-            filter_options: HashMap::new(),
-            selected_filter_values: HashMap::new(),
-            filter_candidate_queries: HashMap::new(),
-            active_filter_column: FilterColumn::MatchedCategories,
-            selected_row: None,
+            core: ViewerCoreState::default(),
             pending_tree_scroll: None,
             error_message: None,
             cached_segments: None,
@@ -347,16 +329,16 @@ impl App {
     }
 
     fn replace_records(&mut self, records: Vec<AnalysisRecord>, source_label: String) {
-        self.all_records = records;
+        self.core.all_records = records;
         self.records_source_label = source_label;
         self.db_viewer_state.reset_loaded_state();
-        self.filter_options = build_filter_options(&self.all_records);
-        self.selected_filter_values.clear();
-        self.filter_candidate_queries.clear();
-        self.filtered_indices = (0..self.all_records.len()).collect();
+        self.core.filter_options = build_filter_options(&self.core.all_records);
+        self.core.selected_filter_values.clear();
+        self.core.filter_candidate_queries.clear();
+        self.core.filtered_indices = (0..self.core.all_records.len()).collect();
         self.cached_segments = None;
         self.apply_selection_change(SelectionChange::first_filtered_row(
-            self.filtered_indices.len(),
+            self.core.filtered_indices.len(),
             ScrollBehavior::AlignMin,
         ));
         self.error_message = None;
@@ -365,10 +347,10 @@ impl App {
     }
 
     fn apply_selection_change(&mut self, change: SelectionChange) -> bool {
-        let next = clamp_selected_row(change.selected_row, self.filtered_indices.len());
-        let selection_changed = self.selected_row != next;
+        let next = clamp_selected_row(change.selected_row, self.core.filtered_indices.len());
+        let selection_changed = self.core.selected_row != next;
         if selection_changed {
-            self.selected_row = next;
+            self.core.selected_row = next;
             self.cached_segments = None;
             self.clear_annotation_editor_status();
         }
@@ -382,17 +364,17 @@ impl App {
 
     fn select_first_filtered_row(&mut self, scroll_behavior: ScrollBehavior) -> bool {
         self.apply_selection_change(SelectionChange::first_filtered_row(
-            self.filtered_indices.len(),
+            self.core.filtered_indices.len(),
             scroll_behavior,
         ))
     }
 
     fn move_selection_up(&mut self) {
-        if self.filtered_indices.is_empty() {
+        if self.core.filtered_indices.is_empty() {
             return;
         }
 
-        match self.selected_row {
+        match self.core.selected_row {
             Some(idx) if idx > 0 => {
                 self.apply_selection_change(SelectionChange::new(
                     Some(idx - 1),
@@ -407,12 +389,12 @@ impl App {
     }
 
     fn move_selection_down(&mut self) {
-        let current_len = self.filtered_indices.len();
+        let current_len = self.core.filtered_indices.len();
         if current_len == 0 {
             return;
         }
 
-        match self.selected_row {
+        match self.core.selected_row {
             Some(idx) if idx + 1 < current_len => {
                 self.apply_selection_change(SelectionChange::new(
                     Some(idx + 1),
@@ -427,19 +409,19 @@ impl App {
     }
 
     fn selected_record(&self) -> Option<&AnalysisRecord> {
-        let filtered_idx = self.selected_row?;
-        let record_idx = *self.filtered_indices.get(filtered_idx)?;
-        self.all_records.get(record_idx)
+        let filtered_idx = self.core.selected_row?;
+        let record_idx = *self.core.filtered_indices.get(filtered_idx)?;
+        self.core.all_records.get(record_idx)
     }
 
     fn selected_record_index(&self) -> Option<usize> {
-        let filtered_idx = self.selected_row?;
-        self.filtered_indices.get(filtered_idx).copied()
+        let filtered_idx = self.core.selected_row?;
+        self.core.filtered_indices.get(filtered_idx).copied()
     }
 
     fn selected_record_mut(&mut self) -> Option<&mut AnalysisRecord> {
         let record_idx = self.selected_record_index()?;
-        self.all_records.get_mut(record_idx)
+        self.core.all_records.get_mut(record_idx)
     }
 
     fn resolved_annotation_csv_path(&self) -> Result<PathBuf, String> {
@@ -537,7 +519,7 @@ impl App {
                     &annotation_row.label_namespace,
                 );
         }
-        self.filter_options = build_filter_options(&self.all_records);
+        self.core.filter_options = build_filter_options(&self.core.all_records);
         self.cached_segments = None;
         Ok(())
     }
@@ -583,7 +565,8 @@ impl App {
     }
 
     fn apply_filters(&mut self) {
-        self.filtered_indices = self
+        self.core.filtered_indices = self
+            .core
             .all_records
             .iter()
             .enumerate()
@@ -594,27 +577,27 @@ impl App {
     }
 
     fn record_matches_filters(&self, record: &AnalysisRecord) -> bool {
-        self.selected_filter_values
+        self.core.selected_filter_values
             .iter()
             .all(|(column, selected)| column.matches(record, selected))
     }
 
     fn clear_filters_for_column(&mut self, column: FilterColumn) {
-        if self.selected_filter_values.remove(&column).is_some() {
+        if self.core.selected_filter_values.remove(&column).is_some() {
             self.apply_filters();
         }
     }
 
     fn clear_all_filters(&mut self) {
-        if !self.selected_filter_values.is_empty() {
-            self.selected_filter_values.clear();
+        if !self.core.selected_filter_values.is_empty() {
+            self.core.selected_filter_values.clear();
             self.apply_filters();
         }
     }
 
     fn toggle_filter_value(&mut self, column: FilterColumn, value: &str, selected: bool) {
         let changed = {
-            let entry = self.selected_filter_values.entry(column).or_default();
+            let entry = self.core.selected_filter_values.entry(column).or_default();
             if selected {
                 entry.insert(value.to_string())
             } else {
@@ -623,11 +606,12 @@ impl App {
         };
 
         if self
+            .core
             .selected_filter_values
             .get(&column)
             .is_some_and(BTreeSet::is_empty)
         {
-            self.selected_filter_values.remove(&column);
+            self.core.selected_filter_values.remove(&column);
         }
 
         if changed {

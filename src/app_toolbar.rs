@@ -30,16 +30,16 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
 
             ui.separator();
             let selected_position = app
-                .selected_row
+                .core.selected_row
                 .map(|idx| idx + 1)
                 .map(|position| position.to_string())
                 .unwrap_or_else(|| "-".to_string());
             ui.label(format!(
                 "総件数: {} 件  抽出後: {} 件  選択: {} / {}",
-                app.all_records.len(),
-                app.filtered_indices.len(),
+                app.core.all_records.len(),
+                app.core.filtered_indices.len(),
                 selected_position,
-                app.filtered_indices.len()
+                app.core.filtered_indices.len()
             ));
         });
 

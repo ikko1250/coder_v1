@@ -57,16 +57,18 @@ fn record_list_panel_width_range(available_width: f32) -> RangeInclusive<f32> {
 }
 
 fn draw_filters(app: &mut App, ui: &mut Ui) {
-    let active_count: usize = app.selected_filter_values.values().map(BTreeSet::len).sum();
+    let active_count: usize = app.core.selected_filter_values.values().map(BTreeSet::len).sum();
     let options = app
+        .core
         .filter_options
-        .get(&app.active_filter_column)
+        .get(&app.core.active_filter_column)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let selected_values = app.selected_filter_values.get(&app.active_filter_column);
+    let selected_values = app.core.selected_filter_values.get(&app.core.active_filter_column);
     let candidate_query = app
+        .core
         .filter_candidate_queries
-        .get(&app.active_filter_column)
+        .get(&app.core.active_filter_column)
         .map(String::as_str)
         .unwrap_or("");
     let normalized_query = normalize_filter_candidate_search_text(candidate_query);
@@ -84,6 +86,7 @@ fn draw_filters(app: &mut App, ui: &mut Ui) {
         }
     }
     let active_values: Vec<(FilterColumn, String)> = app
+        .core
         .selected_filter_values
         .iter()
         .flat_map(|(column, values)| {
@@ -96,7 +99,7 @@ fn draw_filters(app: &mut App, ui: &mut Ui) {
         .collect();
     let response = render_filter_panel(
         ui,
-        app.active_filter_column,
+        app.core.active_filter_column,
         active_count,
         &matching_options,
         &selected_non_matching_options,
@@ -106,26 +109,26 @@ fn draw_filters(app: &mut App, ui: &mut Ui) {
         !options.is_empty(),
     );
 
-    let response_column = app.active_filter_column;
+    let response_column = app.core.active_filter_column;
     if let Some(updated_query) = response.updated_query {
         if updated_query.is_empty() {
-            app.filter_candidate_queries.remove(&response_column);
+            app.core.filter_candidate_queries.remove(&response_column);
         } else {
-            app.filter_candidate_queries
+            app.core.filter_candidate_queries
                 .insert(response_column, updated_query);
         }
     }
     if let Some(selected_column) = response.selected_column {
-        app.active_filter_column = selected_column;
+        app.core.active_filter_column = selected_column;
     }
     if response.clear_column_clicked {
-        app.clear_filters_for_column(app.active_filter_column);
+        app.clear_filters_for_column(app.core.active_filter_column);
     }
     if response.clear_all_clicked {
         app.clear_all_filters();
     }
     for (value, selected) in response.toggled_options {
-        app.toggle_filter_value(app.active_filter_column, &value, selected);
+        app.toggle_filter_value(app.core.active_filter_column, &value, selected);
     }
     for (column, value) in response.removed_active_values {
         app.toggle_filter_value(column, &value, false);
@@ -137,8 +140,8 @@ fn draw_tree(
     ui: &mut Ui,
     tree_scroll_request: Option<TreeScrollRequest>,
 ) -> Option<usize> {
-    let filtered_indices = &app.filtered_indices;
-    let selected_row = app.selected_row;
+    let filtered_indices = &app.core.filtered_indices;
+    let selected_row = app.core.selected_row;
     let mut clicked_row = None;
     let selected_fill = Color32::from_rgb(70, 130, 180);
     let mut table = TableBuilder::new(ui)
@@ -167,7 +170,7 @@ fn draw_tree(
         .body(|body| {
             body.rows(22.0, filtered_indices.len(), |mut row| {
                 let i = row.index();
-                let record = &app.all_records[filtered_indices[i]];
+                let record = &app.core.all_records[filtered_indices[i]];
                 let is_selected = selected_row == Some(i);
 
                 let mut row_clicked = false;
