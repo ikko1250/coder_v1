@@ -212,3 +212,4 @@
 | 2026-03-23 | P1-04 完了: エラーダイアログを `app_error_dialog.rs` へ（分析設定・警告は先行済み） |
 | 2026-03-23 | P1-06: 条件エディタを `app_condition_editor.rs` へ集約（`impl App` は委譲のみ） |
 | 2026-03-23 | P1-07: `app_lifecycle.rs` に `run_update_prelude`（ポーリング・キーボード・終了ガード） |
+| 2026-03-23 | P1-08: `all_records` / `filtered_indices` / `selected_row` 変更パスを `docs/p1-08-record-selection-mutation-paths.md` に一覧化 |

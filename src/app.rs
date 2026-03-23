@@ -2,6 +2,8 @@
 //!
 //! **`impl App` の機能別メソッド一覧と切り出し候補モジュール**は P1-01 として
 //! [`docs/p1-01-app-impl-inventory.md`](../docs/p1-01-app-impl-inventory.md) に記載する。
+//! **`all_records` / `filtered_indices` / `selected_row` の変更経路**は P1-08 として
+//! [`docs/p1-08-record-selection-mutation-paths.md`](../docs/p1-08-record-selection-mutation-paths.md) に記載する。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
