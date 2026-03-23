@@ -61,10 +61,8 @@ pub(crate) enum IpcEvent {
         outcome: AnalysisOutcomeDto,
     },
     Error {
-        code: String,
-        message: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        job_id: Option<String>,
+        #[serde(flatten)]
+        error: IpcErrorDto,
     },
 }
 
@@ -77,11 +75,19 @@ pub(crate) enum AnalysisOutcomeDto {
     Cancelled,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IpcErrorDto {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) job_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        AnalysisOutcomeDto, ApiEnvelope, IpcCommand, IpcEvent,
-    };
+    use super::{AnalysisOutcomeDto, ApiEnvelope, IpcCommand, IpcErrorDto, IpcEvent};
 
     #[test]
     fn ipc_command_round_trip_json() {
@@ -110,6 +116,44 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).unwrap();
+        let parsed: ApiEnvelope<IpcEvent> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn ipc_error_event_serialization_omits_job_id_when_none() {
+        let event = ApiEnvelope {
+            api_version: "2026-03-23".to_string(),
+            payload: IpcEvent::Error {
+                error: IpcErrorDto {
+                    code: "csv_not_found".to_string(),
+                    message: "CSV が見つかりません".to_string(),
+                    job_id: None,
+                },
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("\"code\":\"csv_not_found\""));
+        assert!(!json.contains("\"jobId\""));
+        let parsed: ApiEnvelope<IpcEvent> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn ipc_error_event_serialization_keeps_job_id_when_present() {
+        let event = ApiEnvelope {
+            api_version: "2026-03-23".to_string(),
+            payload: IpcEvent::Error {
+                error: IpcErrorDto {
+                    code: "analysis_failed".to_string(),
+                    message: "analysis subprocess exited with code 1".to_string(),
+                    job_id: Some("job-999".to_string()),
+                },
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"jobId\":\"job-999\""));
         let parsed: ApiEnvelope<IpcEvent> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, event);
     }
