@@ -10,6 +10,8 @@
 //! [`docs/p1-10-side-effect-boundaries.md`](../docs/p1-10-side-effect-boundaries.md) に記載する。
 //! **公開 API・可視性の整理**は P1-11 として
 //! [`docs/p1-11-public-api-review.md`](../docs/p1-11-public-api-review.md) に記載する。
+//! **ドメインコア（egui 非依存）の足場**は P2-01 として [`crate::viewer_core`]（`src/viewer_core.rs`）、
+//! 説明は [`docs/p2-01-viewer-core.md`](../docs/p2-01-viewer-core.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。

@@ -14,6 +14,7 @@ mod manual_annotation_store;
 mod model;
 mod tagged_text;
 mod ui_helpers;
+mod viewer_core;
 
 use crate::app::App;
 use crate::font::configure_japanese_font;
