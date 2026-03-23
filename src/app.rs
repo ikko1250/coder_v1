@@ -8,6 +8,7 @@
 //! 分析設定ウィンドウは [`app_analysis_settings`](app_analysis_settings)（`src/app_analysis_settings.rs`）。
 //! 分析ジョブ・警告一覧は [`app_analysis_job`](app_analysis_job)（`src/app_analysis_job.rs`）。
 //! 中央ペイン（フィルタ・一覧・詳細）は [`app_main_layout`](app_main_layout)（`src/app_main_layout.rs`）。
+//! エラーダイアログは [`app_error_dialog`](app_error_dialog)（`src/app_error_dialog.rs`）。
 
 #[path = "app_toolbar.rs"]
 mod app_toolbar;
@@ -23,6 +24,9 @@ mod app_analysis_job;
 
 #[path = "app_main_layout.rs"]
 mod app_main_layout;
+
+#[path = "app_error_dialog.rs"]
+mod app_error_dialog;
 
 use crate::analysis_runner::{
     build_runtime_config, resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig,
@@ -965,17 +969,7 @@ impl eframe::App for App {
         self.handle_keyboard_navigation(ctx);
         self.guard_root_close_with_dirty_editor(ctx);
 
-        if let Some(err) = self.error_message.clone() {
-            egui::Window::new("エラー")
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label(&err);
-                    if ui.button("閉じる").clicked() {
-                        self.error_message = None;
-                    }
-                });
-        }
+        app_error_dialog::draw_error_dialog_if_any(self, ctx);
 
         self.draw_warning_details_window(ctx);
 

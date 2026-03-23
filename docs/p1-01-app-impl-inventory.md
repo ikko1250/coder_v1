@@ -149,6 +149,12 @@
 |----------|------|
 | `draw_analysis_settings_window` | **実装済**: `src/app_analysis_settings.rs`。`draw_analysis_path_override_row` は同ファイル内の非公開関数。 |
 
+### J2. `app_error_dialog` — グローバルエラー（`error_message`）
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_error_dialog_if_any` | **P1-04 済**: `src/app_error_dialog.rs`。`impl eframe::App::update` から呼び出し。 |
+
 ### K. `app_warning` — 分析警告詳細ウィンドウ
 
 | メソッド | 備考 |
@@ -199,3 +205,4 @@
 | 2026-03-23 | DB Viewer 系を `src/app_db_viewer.rs` へ切り出し（`app` 子モジュール） |
 | 2026-03-23 | 分析設定を `app_analysis_settings.rs`、分析ジョブ・警告・終了ガードを `app_analysis_job.rs` へ切り出し |
 | 2026-03-23 | P1-03: 中央ペインを `app_main_layout.rs` へ切り出し（`TreeScrollRequest` を `pub(super)`） |
+| 2026-03-23 | P1-04 完了: エラーダイアログを `app_error_dialog.rs` へ（分析設定・警告は先行済み） |
