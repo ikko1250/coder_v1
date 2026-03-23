@@ -3,6 +3,7 @@
 mod analysis_process_host;
 mod analysis_runner;
 mod app;
+mod app_host;
 mod condition_editor;
 mod condition_editor_view;
 mod csv_loader;
@@ -19,8 +20,7 @@ mod ui_helpers;
 mod viewer_core;
 
 use crate::app::App;
-use crate::font::configure_japanese_font;
-use eframe::egui;
+use crate::app_host::{apply_host_startup_effects, build_native_options, APP_WINDOW_TITLE};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -30,35 +30,14 @@ fn main() {
         .filter(|arg| !arg.starts_with("--"))
         .map(std::path::PathBuf::from);
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("条例分析ビューア")
-            .with_inner_size([1480.0, 920.0]),
-        ..Default::default()
-    };
+    let options = build_native_options();
 
     eframe::run_native(
-        "条例分析ビューア",
+        APP_WINDOW_TITLE,
         options,
         Box::new(move |cc| {
-            let font_setup_result = configure_japanese_font(&cc.egui_ctx);
             let mut app = App::new(initial_csv_path.clone());
-
-            match font_setup_result {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    if app.error_message.is_none() {
-                        app.error_message = Some(
-                            "日本語フォントが見つからなかったため、日本語テキストが正しく表示されない可能性があります。".to_string(),
-                        );
-                    }
-                }
-                Err(err) => {
-                    if app.error_message.is_none() {
-                        app.error_message = Some(err);
-                    }
-                }
-            }
+            apply_host_startup_effects(cc, &mut app);
 
             Ok(Box::new(app))
         }),
