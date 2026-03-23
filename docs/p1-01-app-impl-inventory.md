@@ -1,0 +1,217 @@
+# P1-01: `impl App` 機能別一覧と切り出し候補モジュール
+
+本書は `src/app.rs` 内の **`impl App` に属するメソッド**を列挙し、P1（論理分割）向けの**移動候補モジュール名**を付与したものである。  
+`app.rs` には `impl App` が**二つのブロック**に分かれている（その間に `impl eframe::App for App` が挟まる）。
+
+## `impl App` のブロック構成
+
+| ブロック | おおよその行範囲 | 内容 |
+|----------|------------------|------|
+| 第 1 ブロック | 337 行付近 〜 1300 行付近 | コンストラクタ・データ・フィルタ・選択・DB/注釈・条件エディタ状態・分析ジョブ・警告ウィンドウ・終了ガード等 |
+| `impl eframe::App` | 1302 〜 1348 | `update` のみ |
+| 第 2 ブロック | 1352 行付近 〜 2775 行付近 | DB Viewer ウィンドウ・ツールバー・分析設定・条件エディタ描画・中央ペイン（フィルタ/ツリー/詳細）等 |
+
+※ 行番号は作成時点の参照用。リファクタ後はずれる。
+
+---
+
+## 切り出し候補モジュールとメソッド対応
+
+モジュール名は **スネークケース**（Rust の `app_toolbar.rs` 等）を想定。責務が重いものはさらに分割可能。
+
+### A. `app_data` — データソース・レコード置換
+
+| メソッド | 備考 |
+|----------|------|
+| `App::new` | エントリ。分割時は `App` 組み立てのまま残すか、`App::default` + `init` に分ける判断は後続 |
+| `load_csv` | |
+| `replace_records` | フィルタ・キャッシュ・選択をまとめて更新 |
+
+### B. `app_selection` — 一覧インデックス・キーボード選択
+
+| メソッド | 備考 |
+|----------|------|
+| `apply_selection_change` | |
+| `select_first_filtered_row` | |
+| `move_selection_up` | |
+| `move_selection_down` | |
+| `handle_keyboard_navigation` | `egui::Context` 依存（ホスト寄り） |
+| `selected_record` | |
+| `selected_record_index` | |
+| `selected_record_mut` | |
+
+### C. `app_filter` — フィルタ状態と `filtered_indices` 更新
+
+| メソッド | 備考 |
+|----------|------|
+| `apply_filters` | |
+| `record_matches_filters` | |
+| `clear_filters_for_column` | |
+| `clear_all_filters` | |
+| `toggle_filter_value` | |
+
+### D. `app_segments` — 本文セグメント（メモ化キャッシュ）
+
+| メソッド | 備考 |
+|----------|------|
+| `get_segments` | `cached_segments` 無効化ロジックの要 |
+
+### E. `app_annotation` — 手動アノテーション追記
+
+| メソッド | 備考 |
+|----------|------|
+| `resolved_annotation_csv_path` | |
+| `annotation_save_enabled` | |
+| `clear_annotation_editor_status` | |
+| `clear_annotation_editor_inputs` | |
+| `build_annotation_append_row` | |
+| `apply_saved_annotation_to_selected_record` | |
+| `save_annotation_for_selected_record` | |
+
+### F. `app_db_viewer` — DB 参照ウィンドウ・状態準備
+
+| メソッド | 備考 |
+|----------|------|
+| `db_viewer_state` | |
+| `db_viewer_state_mut` | |
+| `selected_paragraph_id_for_db` | |
+| `prepare_db_viewer_state` | |
+| `draw_db_viewer_button` | ツールバーから呼ばれるが DB 機能用 |
+| `open_db_viewer_for_selected_record` | |
+| `load_db_viewer_context` | |
+| `load_db_viewer_context_for_location` | |
+| `previous_db_viewer_location` | |
+| `next_db_viewer_location` | |
+| `draw_db_viewer_window` | |
+
+### G. `app_analysis_job` — Python 分析・エクスポート・ランタイム
+
+| メソッド | 備考 |
+|----------|------|
+| `try_cleanup_analysis_jobs` | |
+| `refresh_analysis_runtime` | |
+| `resolved_filter_config_path` | |
+| `start_analysis_job` | |
+| `start_export_job` | |
+| `poll_analysis_job` | `egui::Context` 依存 |
+| `handle_analysis_success` | |
+| `handle_export_success` | |
+| `handle_analysis_failure` | |
+| `warning_headline` | |
+| `warning_detail_lines` | |
+
+### H. `app_condition_editor` — 条件 JSON エディタ（状態・コマンド・描画）
+
+第 1 ブロック・第 2 ブロックにまたがるメソッドが多い。
+
+**状態・パス同期**
+
+| メソッド |
+|----------|
+| `focus_condition_editor_viewport` |
+| `open_condition_editor` |
+| `load_condition_editor_from_path` |
+| `clamp_condition_editor_selection` |
+| `clamp_condition_editor_group_selection` |
+| `mark_condition_editor_dirty` |
+| `condition_editor_selection_draft` |
+| `condition_editor_window_inputs` |
+| `apply_condition_editor_selection_draft` |
+| `reload_condition_editor` |
+| `request_condition_editor_reload` |
+| `save_condition_editor_document` |
+| `sync_condition_editor_with_runtime_path` |
+
+**描画（サブパネル）**
+
+| メソッド |
+|----------|
+| `draw_condition_editor_body_panel` |
+| `draw_condition_editor_detail_panel` |
+| `draw_condition_editor_detail_contents` |
+| `condition_editor_status_message` |
+| `condition_editor_save_enabled` |
+| `condition_editor_confirm_message` |
+| `draw_condition_editor_embedded_window` |
+| `draw_condition_editor_viewport_panels` |
+| `draw_condition_editor_window` |
+
+**レスポンス適用（イベントハンドラ）**
+
+| メソッド |
+|----------|
+| `apply_condition_editor_close_request` |
+| `apply_condition_editor_footer_response` |
+| `apply_condition_editor_confirm_overlay_response` |
+| `apply_condition_editor_list_response` |
+| `apply_condition_editor_detail_response` |
+| `apply_condition_editor_add_request` |
+| `apply_condition_editor_delete_request` |
+| `apply_condition_editor_reload_request` |
+| `apply_condition_editor_modal_response` |
+| `apply_condition_editor_command_draft` |
+
+### I. `app_toolbar` — トップツールバー
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_toolbar` | ファイルダイアログ・分析ボタン等。肥大化しているためサブ関数への分割は P1-02 以降でも可 |
+
+### J. `app_analysis_settings` — 分析設定オーバーレイ
+
+| メソッド |
+|----------|
+| `draw_analysis_settings_window` |
+
+### K. `app_warning` — 分析警告詳細ウィンドウ
+
+| メソッド |
+|----------|
+| `draw_warning_details_window` |
+
+### L. `app_lifecycle` — フレーム単位の統合・終了ガード
+
+| メソッド | 備考 |
+|----------|------|
+| `guard_root_close_with_dirty_editor` | `egui::Context` 依存 |
+| `update` | `impl eframe::App` だが、論理上は「フレームオーケストレーション」。ファイル上は現状どおり `app.rs` に残すか、`app_lifecycle.rs` に移すかは実装時判断 |
+
+### M. `app_main_layout` — 中央ペイン（フィルタ・ツリー・詳細・注釈 UI）
+
+| メソッド | 備考 |
+|----------|------|
+| `draw_body` | レイアウトの心臓部 |
+| `record_list_panel_width_range` | |
+| `draw_filters` | `filter_panel_view` 呼び出し |
+| `draw_tree` | レコード一覧テーブル |
+| `draw_detail` | |
+| `draw_record_summary` | |
+| `draw_record_text_panel` | |
+| `draw_form_group_explanations_panel` | |
+| `draw_annotation_editor_collapsed_bar` | |
+| `draw_annotation_editor_panel` | |
+
+---
+
+## `impl App` に含まれない（ファイル末尾の自由関数）
+
+以下は **`impl App` 外**のヘルパであり、切り出し時は `app_ui_helpers.rs` や既存 `ui_helpers` との整理対象になる。
+
+- `build_record_text_layout_job`
+- `analysis_status_color`, `editor_status_color`
+- `draw_analysis_path_override_row`
+- `build_tree_*_column` / `tree_*_value` 系
+- `clamp_condition_index` 等（条件エディタ用の自由関数）
+
+---
+
+## P1-02 以降へのメモ
+
+- **`app_condition_editor`** と **`app_main_layout`** は行数が大きいため、**最初に切り出すなら `app_toolbar` または `app_db_viewer`** のように境界が明瞭なものから着手すると差分が追いやすい。
+- `poll_analysis_job` / `handle_keyboard_navigation` / `guard_root_close_with_dirty_editor` は **`egui::Context` 依存**が強い。P2 のコア分離時はホスト側に残す想定（設計書 §5）。
+
+## 改訂
+
+| 日付 | 内容 |
+|------|------|
+| 2026-03-23 | P1-01 初版（`feature/p1-01-app-impl-inventory`） |

@@ -1,3 +1,7 @@
+//! 条例分析ビューアのメイン UI（egui）。
+//!
+//! **`impl App` の機能別メソッド一覧と切り出し候補モジュール**は P1-01 として
+//! [`docs/p1-01-app-impl-inventory.md`](../docs/p1-01-app-impl-inventory.md) に記載する。
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, resolve_annotation_csv_path,
     resolve_filter_config_path, spawn_analysis_job, spawn_export_job, AnalysisExportRequest,
