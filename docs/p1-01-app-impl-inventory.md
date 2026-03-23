@@ -80,17 +80,11 @@
 
 | メソッド | 備考 |
 |----------|------|
-| `try_cleanup_analysis_jobs` | |
-| `refresh_analysis_runtime` | |
-| `resolved_filter_config_path` | |
-| `start_analysis_job` | |
-| `start_export_job` | |
-| `poll_analysis_job` | `egui::Context` 依存 |
-| `handle_analysis_success` | |
-| `handle_export_success` | |
-| `handle_analysis_failure` | |
-| `warning_headline` | |
-| `warning_detail_lines` | |
+| `try_cleanup_analysis_jobs` 〜 `guard_root_close_with_dirty_editor` | **実装済**: `src/app_analysis_job.rs`。`handle_*` / `warning_*` はモジュール内の非公開関数。 |
+| `resolved_filter_config_path` | 条件エディタ側は `app_analysis_job::resolved_filter_config_path(self)` を直接呼ぶ。 |
+| `poll_analysis_job` | `egui::Context` 依存。 |
+| `draw_warning_details_window` | |
+| `guard_root_close_with_dirty_editor` | 終了ガード（未保存の条件エディタ）。 |
 
 ### H. `app_condition_editor` — 条件 JSON エディタ（状態・コマンド・描画）
 
@@ -151,21 +145,21 @@
 
 ### J. `app_analysis_settings` — 分析設定オーバーレイ
 
-| メソッド |
-|----------|
-| `draw_analysis_settings_window` |
+| メソッド | 備考 |
+|----------|------|
+| `draw_analysis_settings_window` | **実装済**: `src/app_analysis_settings.rs`。`draw_analysis_path_override_row` は同ファイル内の非公開関数。 |
 
 ### K. `app_warning` — 分析警告詳細ウィンドウ
 
-| メソッド |
-|----------|
-| `draw_warning_details_window` |
+| メソッド | 備考 |
+|----------|------|
+| `draw_warning_details_window` | **実装場所**: `app_analysis_job.rs`（§G と同じファイル）に集約。 |
 
 ### L. `app_lifecycle` — フレーム単位の統合・終了ガード
 
 | メソッド | 備考 |
 |----------|------|
-| `guard_root_close_with_dirty_editor` | `egui::Context` 依存 |
+| `guard_root_close_with_dirty_editor` | **実装場所**: `app_analysis_job.rs`。 |
 | `update` | `impl eframe::App` だが、論理上は「フレームオーケストレーション」。ファイル上は現状どおり `app.rs` に残すか、`app_lifecycle.rs` に移すかは実装時判断 |
 
 ### M. `app_main_layout` — 中央ペイン（フィルタ・ツリー・詳細・注釈 UI）
@@ -209,3 +203,4 @@
 | 2026-03-23 | P1-01 初版（`feature/p1-01-app-impl-inventory`） |
 | 2026-03-23 | P1-02: `draw_toolbar` を `src/app_toolbar.rs` へ切り出し（子モジュール `#[path]`） |
 | 2026-03-23 | DB Viewer 系を `src/app_db_viewer.rs` へ切り出し（`app` 子モジュール） |
+| 2026-03-23 | 分析設定を `app_analysis_settings.rs`、分析ジョブ・警告・終了ガードを `app_analysis_job.rs` へ切り出し |

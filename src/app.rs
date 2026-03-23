@@ -5,6 +5,8 @@
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
+//! 分析設定ウィンドウは [`app_analysis_settings`](app_analysis_settings)（`src/app_analysis_settings.rs`）。
+//! 分析ジョブ・警告一覧は [`app_analysis_job`](app_analysis_job)（`src/app_analysis_job.rs`）。
 
 #[path = "app_toolbar.rs"]
 mod app_toolbar;
@@ -12,11 +14,15 @@ mod app_toolbar;
 #[path = "app_db_viewer.rs"]
 mod app_db_viewer;
 
+#[path = "app_analysis_settings.rs"]
+mod app_analysis_settings;
+
+#[path = "app_analysis_job.rs"]
+mod app_analysis_job;
+
 use crate::analysis_runner::{
-    build_runtime_config, cleanup_job_directories, resolve_annotation_csv_path,
-    resolve_filter_config_path, spawn_analysis_job, spawn_export_job, AnalysisExportRequest,
-    AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest,
-    AnalysisJobSuccess, AnalysisRuntimeConfig, AnalysisRuntimeOverrides, AnalysisWarningMessage,
+    build_runtime_config, resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig,
+    AnalysisRuntimeOverrides, AnalysisWarningMessage,
 };
 use crate::condition_editor::{
     build_default_condition_item, load_condition_document, save_condition_document_atomic,
@@ -51,8 +57,7 @@ use egui_extras::{Column, Size, StripBuilder, TableBuilder};
 use std::collections::{BTreeSet, HashMap};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::Duration;
+use std::sync::mpsc::Receiver;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TreeScrollRequest {
@@ -720,31 +725,11 @@ impl App {
     }
 
     fn try_cleanup_analysis_jobs(&mut self) {
-        let Some(runtime) = self.analysis_runtime_state.runtime.as_ref() else {
-            return;
-        };
-
-        if let Err(error) = cleanup_job_directories(&runtime.jobs_root) {
-            self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary: error };
-        }
+        app_analysis_job::try_cleanup_analysis_jobs(self);
     }
 
     fn refresh_analysis_runtime(&mut self) {
-        if self.analysis_runtime_state.current_job.is_some() {
-            return;
-        }
-
-        let runtime = build_runtime_config(&self.analysis_request_state.runtime_overrides());
-        self.analysis_runtime_state = AnalysisRuntimeState::from_runtime(runtime);
-        self.try_cleanup_analysis_jobs();
-        self.sync_condition_editor_with_runtime_path();
-    }
-
-    fn resolved_filter_config_path(&self) -> Result<PathBuf, String> {
-        if let Some(runtime) = self.analysis_runtime_state.runtime.as_ref() {
-            return Ok(runtime.filter_config_path.clone());
-        }
-        resolve_filter_config_path(&self.analysis_request_state.runtime_overrides())
+        app_analysis_job::refresh_analysis_runtime(self);
     }
 
     fn focus_condition_editor_viewport(&self, ctx: &egui::Context) {
@@ -761,7 +746,7 @@ impl App {
             self.focus_condition_editor_viewport(ctx);
             return Ok(());
         }
-        let path = self.resolved_filter_config_path()?;
+        let path = app_analysis_job::resolved_filter_config_path(self)?;
         self.load_condition_editor_from_path(path, "条件 JSON を読み込みました。")
     }
 
@@ -843,7 +828,7 @@ impl App {
     }
 
     fn condition_editor_window_inputs(&self, ctx: &egui::Context) -> ConditionEditorWindowInputs {
-        let resolved_path_result = self.resolved_filter_config_path();
+        let resolved_path_result = app_analysis_job::resolved_filter_config_path(self);
         let resolved_path_label = resolved_path_result
             .as_ref()
             .map(|path| path.display().to_string())
@@ -915,7 +900,7 @@ impl App {
             return;
         }
 
-        let Ok(resolved_path) = self.resolved_filter_config_path() else {
+        let Ok(resolved_path) = app_analysis_job::resolved_filter_config_path(self) else {
             return;
         };
         let Some(loaded_path) = self.condition_editor_state.loaded_path.clone() else {
@@ -954,313 +939,23 @@ impl App {
     }
 
     fn start_analysis_job(&mut self) -> Result<(), String> {
-        if self.analysis_runtime_state.current_job.is_some() {
-            return Err("分析ジョブは既に実行中です".to_string());
-        }
-
-        let runtime = self
-            .analysis_runtime_state
-            .runtime
-            .clone()
-            .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
-
-        cleanup_job_directories(&runtime.jobs_root)?;
-
-        let (job_id, receiver) = spawn_analysis_job(AnalysisJobRequest {
-            db_path: self.db_viewer_state.db_path.clone(),
-            runtime,
-        });
-
-        self.analysis_runtime_state.last_warnings.clear();
-        self.analysis_runtime_state.warning_window_open = false;
-        self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-        self.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis { job_id };
-        Ok(())
+        app_analysis_job::start_analysis_job(self)
     }
 
     fn start_export_job(&mut self, output_csv_path: PathBuf) -> Result<(), String> {
-        if self.analysis_runtime_state.current_job.is_some() {
-            return Err("分析ジョブは既に実行中です".to_string());
-        }
-
-        let runtime = self
-            .analysis_runtime_state
-            .runtime
-            .clone()
-            .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
-        let export_context = self
-            .analysis_runtime_state
-            .last_export_context
-            .clone()
-            .ok_or_else(|| "保存対象の分析結果がありません".to_string())?;
-
-        let (job_id, receiver) = spawn_export_job(AnalysisExportRequest {
-            db_path: export_context.db_path,
-            filter_config_path: export_context.filter_config_path,
-            annotation_csv_path: export_context.annotation_csv_path,
-            output_csv_path,
-            runtime,
-        });
-
-        self.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
-        self.analysis_runtime_state.status = AnalysisJobStatus::RunningExport { job_id };
-        Ok(())
+        app_analysis_job::start_export_job(self, output_csv_path)
     }
 
     fn poll_analysis_job(&mut self, ctx: &egui::Context) {
-        let Some(running_job) = self.analysis_runtime_state.current_job.as_ref() else {
-            return;
-        };
-
-        match running_job.receiver.try_recv() {
-            Ok(AnalysisJobEvent::AnalysisCompleted(result)) => {
-                self.analysis_runtime_state.current_job = None;
-                match result {
-                    Ok(success) => self.handle_analysis_success(success),
-                    Err(failure) => self.handle_analysis_failure(failure),
-                }
-                ctx.request_repaint();
-            }
-            Ok(AnalysisJobEvent::ExportCompleted(result)) => {
-                self.analysis_runtime_state.current_job = None;
-                match result {
-                    Ok(success) => self.handle_export_success(success),
-                    Err(failure) => self.handle_analysis_failure(failure),
-                }
-                ctx.request_repaint();
-            }
-            Err(TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(100));
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.analysis_runtime_state.current_job = None;
-                self.analysis_runtime_state.status = AnalysisJobStatus::Failed {
-                    summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
-                };
-                ctx.request_repaint();
-            }
-        }
-    }
-
-    fn handle_analysis_success(&mut self, success: AnalysisJobSuccess) {
-        let warnings = success.meta.warning_messages.clone();
-        let warning_count = warnings.len();
-        let source_label = format!("分析結果: {}", success.meta.job_id);
-        self.replace_records(success.records, source_label);
-        let mut summary = format!(
-            "{}{}抽出 / {:.2} 秒",
-            success.meta.selected_unit_count(),
-            success.meta.analysis_unit.count_label(),
-            success.meta.duration_seconds
-        );
-        if warning_count > 0 {
-            summary.push_str(&format!(" / 警告 {} 件", warning_count));
-        }
-        self.analysis_runtime_state.last_warnings = warnings;
-        self.analysis_runtime_state.warning_window_open = false;
-        let annotation_csv_path = self
-            .analysis_runtime_state
-            .runtime
-            .as_ref()
-            .map(|runtime| runtime.annotation_csv_path.clone())
-            .or_else(|| self.resolved_annotation_csv_path().ok())
-            .unwrap_or_default();
-        self.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
-            db_path: PathBuf::from(&success.meta.db_path),
-            filter_config_path: PathBuf::from(&success.meta.filter_config_path),
-            annotation_csv_path,
-        });
-        self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
-    }
-
-    fn handle_export_success(&mut self, success: AnalysisExportSuccess) {
-        self.analysis_runtime_state.status = AnalysisJobStatus::Succeeded {
-            summary: format!("CSV 保存完了: {}", success.output_csv_path.display()),
-        };
-        self.error_message = Some(format!(
-            "CSV を保存しました。\n\n保存先:\n{}",
-            success.output_csv_path.display()
-        ));
-    }
-
-    fn handle_analysis_failure(&mut self, failure: AnalysisJobFailure) {
-        let warnings = failure
-            .meta
-            .as_ref()
-            .map(|meta| meta.warning_messages.clone())
-            .unwrap_or_default();
-        let summary = failure.message.clone();
-        self.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary };
-        self.analysis_runtime_state.last_warnings = warnings;
-        self.analysis_runtime_state.warning_window_open = false;
-
-        let mut error_message = failure.message;
-        if !failure.stderr.is_empty() {
-            error_message.push_str("\n\nstderr:\n");
-            error_message.push_str(&failure.stderr);
-        }
-        if let Some(meta) = failure.meta {
-            if !meta.error_summary.trim().is_empty() {
-                error_message.push_str("\n\nmeta.errorSummary:\n");
-                error_message.push_str(&meta.error_summary);
-            }
-        }
-        self.error_message = Some(error_message);
-    }
-
-    fn warning_headline(&self, warning: &AnalysisWarningMessage) -> String {
-        match warning.code.as_str() {
-            "distance_match_fallback" => {
-                let requested_mode = warning.requested_mode.as_deref().unwrap_or("unknown");
-                let used_mode = warning.used_mode.as_deref().unwrap_or("unknown");
-                match (warning.combination_count, warning.combination_cap) {
-                    (Some(count), Some(cap)) if count > cap => format!(
-                        "distance matching: {requested_mode} -> {used_mode} ({count} / cap {cap}, +{})",
-                        count - cap
-                    ),
-                    (Some(count), Some(cap)) => {
-                        format!("distance matching: {requested_mode} -> {used_mode} ({count} / cap {cap})")
-                    }
-                    _ => format!("distance matching: {requested_mode} -> {used_mode}"),
-                }
-            }
-            code if code.ends_with("_defaulted") => warning
-                .field_name
-                .as_ref()
-                .map(|field_name| format!("設定を既定値へ補正: {field_name}"))
-                .filter(|headline| !headline.trim().is_empty())
-                .or_else(|| (!warning.message.trim().is_empty()).then(|| warning.message.clone()))
-                .unwrap_or_else(|| format!("警告コード: {}", warning.code)),
-            code if code.starts_with("sqlite_") => warning
-                .query_name
-                .as_ref()
-                .map(|query_name| format!("DB 読込失敗: {query_name}"))
-                .filter(|headline| !headline.trim().is_empty())
-                .or_else(|| (!warning.message.trim().is_empty()).then(|| warning.message.clone()))
-                .unwrap_or_else(|| format!("警告コード: {}", warning.code)),
-            _ if !warning.message.trim().is_empty() => warning.message.clone(),
-            _ if !warning.code.trim().is_empty() => format!("警告コード: {}", warning.code),
-            _ => "詳細不明の警告".to_string(),
-        }
-    }
-
-    fn warning_detail_lines(&self, warning: &AnalysisWarningMessage) -> Vec<String> {
-        let mut lines = Vec::new();
-        if !warning.message.trim().is_empty() && self.warning_headline(warning) != warning.message {
-            lines.push(format!("message: {}", warning.message));
-        }
-        if !warning.code.trim().is_empty() {
-            lines.push(format!("code: {}", warning.code));
-        }
-        if let Some(severity) = &warning.severity {
-            lines.push(format!("severity: {severity}"));
-        }
-        if let Some(scope) = &warning.scope {
-            lines.push(format!("scope: {scope}"));
-        }
-        if let Some(condition_id) = &warning.condition_id {
-            lines.push(format!("conditionId: {condition_id}"));
-        }
-        if let Some(field_name) = &warning.field_name {
-            lines.push(format!("fieldName: {field_name}"));
-        }
-        if let Some(unit_id) = warning.unit_id {
-            lines.push(format!("unitId: {unit_id}"));
-        }
-        if let Some(query_name) = &warning.query_name {
-            lines.push(format!("queryName: {query_name}"));
-        }
-        match (&warning.requested_mode, &warning.used_mode) {
-            (Some(requested_mode), Some(used_mode)) => {
-                lines.push(format!("mode: {requested_mode} -> {used_mode}"));
-            }
-            (Some(requested_mode), None) => lines.push(format!("requestedMode: {requested_mode}")),
-            (None, Some(used_mode)) => lines.push(format!("usedMode: {used_mode}")),
-            (None, None) => {}
-        }
-        match (warning.combination_count, warning.combination_cap) {
-            (Some(count), Some(cap)) if count > cap => {
-                lines.push(format!(
-                    "combinationCount: {count} / cap {cap} (+{})",
-                    count - cap
-                ));
-            }
-            (Some(count), Some(cap)) => {
-                lines.push(format!("combinationCount: {count} / cap {cap}"))
-            }
-            (Some(count), None) => lines.push(format!("combinationCount: {count}")),
-            (None, Some(cap)) => lines.push(format!("combinationCap: {cap}")),
-            (None, None) => {}
-        }
-        if let Some(safety_limit) = warning.safety_limit {
-            lines.push(format!("safetyLimit: {safety_limit}"));
-        }
-        if let Some(db_path) = &warning.db_path {
-            lines.push(format!("dbPath: {db_path}"));
-        }
-        lines
+        app_analysis_job::poll_analysis_job(self, ctx);
     }
 
     fn draw_warning_details_window(&mut self, ctx: &egui::Context) {
-        if !self.analysis_runtime_state.warning_window_open {
-            return;
-        }
-
-        let mut window_open = self.analysis_runtime_state.warning_window_open;
-        egui::Window::new(format!(
-            "警告詳細 ({})",
-            self.analysis_runtime_state.last_warnings.len()
-        ))
-        .open(&mut window_open)
-        .resizable(true)
-        .default_width(620.0)
-        .show(ctx, |ui| {
-            ScrollArea::vertical()
-                .max_height(480.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (idx, warning) in
-                        self.analysis_runtime_state.last_warnings.iter().enumerate()
-                    {
-                        ui.group(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{}. {}",
-                                    idx + 1,
-                                    self.warning_headline(warning)
-                                ))
-                                .strong(),
-                            );
-                            for line in self.warning_detail_lines(warning) {
-                                ui.add(egui::Label::new(line).wrap_mode(TextWrapMode::Wrap));
-                            }
-                        });
-                        if idx + 1 < self.analysis_runtime_state.last_warnings.len() {
-                            ui.add_space(6.0);
-                        }
-                    }
-                });
-        });
-        self.analysis_runtime_state.warning_window_open = window_open;
+        app_analysis_job::draw_warning_details_window(self, ctx);
     }
 
     fn guard_root_close_with_dirty_editor(&mut self, ctx: &egui::Context) {
-        if !self.condition_editor_state.is_dirty {
-            return;
-        }
-        let close_requested = ctx.input(|input| input.viewport().close_requested());
-        if !close_requested {
-            return;
-        }
-
-        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        self.error_message = Some(
-            "condition editor に未保存の変更があるため、アプリ終了を中止しました。保存または破棄してから閉じてください。"
-                .to_string(),
-        );
-        if self.condition_editor_state.window_open {
-            self.focus_condition_editor_viewport(ctx);
-        }
+        app_analysis_job::guard_root_close_with_dirty_editor(self, ctx);
     }
 }
 
@@ -1327,154 +1022,7 @@ impl App {
     }
 
     fn draw_analysis_settings_window(&mut self, ctx: &egui::Context) {
-        if !self.analysis_request_state.settings_window_open {
-            return;
-        }
-
-        let mut window_open = self.analysis_request_state.settings_window_open;
-        let mut selected_python_path = None;
-        let mut selected_filter_config_path = None;
-        let mut selected_annotation_csv_path = None;
-        let mut clear_python_override = false;
-        let mut clear_filter_config_override = false;
-        let mut clear_annotation_csv_override = false;
-        let settings_enabled = self.analysis_runtime_state.current_job.is_none();
-        let python_override_label = self
-            .analysis_request_state
-            .python_path_override
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "自動解決".to_string());
-        let filter_override_label = self
-            .analysis_request_state
-            .filter_config_path_override
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "既定値 (asset/cooccurrence-conditions.json)".to_string());
-        let annotation_override_label = self
-            .analysis_request_state
-            .annotation_csv_path_override
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "既定値 (asset/manual-annotations.csv)".to_string());
-        let resolved_python_label = self
-            .analysis_runtime_state
-            .runtime
-            .as_ref()
-            .map(|runtime| runtime.python_label.clone())
-            .unwrap_or_else(|| "-".to_string());
-        let resolved_filter_label = self
-            .analysis_runtime_state
-            .runtime
-            .as_ref()
-            .map(|runtime| runtime.filter_config_path.display().to_string())
-            .unwrap_or_else(|| "-".to_string());
-        let resolved_annotation_label = self
-            .resolved_annotation_csv_path()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|error| format!("解決失敗: {error}"));
-        let status_text = self.analysis_runtime_state.status_text();
-
-        egui::Window::new("分析設定")
-            .open(&mut window_open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("分析実行に使う Python と条件 JSON を切り替えます。");
-                ui.label("この設定は現在のセッション内だけで有効です。");
-                ui.separator();
-
-                draw_analysis_path_override_row(
-                    ui,
-                    "Python 実行ファイル",
-                    &python_override_label,
-                    "自動解決",
-                    settings_enabled,
-                    || {
-                        rfd::FileDialog::new()
-                            .add_filter("Python", &["exe"])
-                            .add_filter("All files", &["*"])
-                            .pick_file()
-                    },
-                    &mut selected_python_path,
-                    &mut clear_python_override,
-                );
-                ui.label(format!("現在の解決結果: {resolved_python_label}"));
-                ui.separator();
-
-                draw_analysis_path_override_row(
-                    ui,
-                    "条件 JSON",
-                    &filter_override_label,
-                    "既定値",
-                    settings_enabled,
-                    || {
-                        rfd::FileDialog::new()
-                            .add_filter("JSON files", &["json"])
-                            .add_filter("All files", &["*"])
-                            .pick_file()
-                    },
-                    &mut selected_filter_config_path,
-                    &mut clear_filter_config_override,
-                );
-                ui.label(format!("現在の解決結果: {resolved_filter_label}"));
-                ui.separator();
-
-                draw_analysis_path_override_row(
-                    ui,
-                    "annotation CSV",
-                    &annotation_override_label,
-                    "既定値",
-                    settings_enabled,
-                    || {
-                        rfd::FileDialog::new()
-                            .add_filter("CSV files", &["csv"])
-                            .set_file_name("manual-annotations.csv")
-                            .save_file()
-                    },
-                    &mut selected_annotation_csv_path,
-                    &mut clear_annotation_csv_override,
-                );
-                ui.label(format!("現在の解決結果: {resolved_annotation_label}"));
-                ui.separator();
-
-                ui.label(format!("状態: {status_text}"));
-                if !settings_enabled {
-                    ui.label("分析ジョブ実行中は設定を変更できません。");
-                }
-            });
-
-        self.analysis_request_state.settings_window_open = window_open;
-
-        let mut runtime_changed = false;
-        if let Some(path) = selected_python_path {
-            self.analysis_request_state.python_path_override = Some(path);
-            runtime_changed = true;
-        }
-        if clear_python_override {
-            self.analysis_request_state.python_path_override = None;
-            runtime_changed = true;
-        }
-        if let Some(path) = selected_filter_config_path {
-            self.analysis_request_state.filter_config_path_override = Some(path);
-            runtime_changed = true;
-        }
-        if clear_filter_config_override {
-            self.analysis_request_state.filter_config_path_override = None;
-            runtime_changed = true;
-        }
-        if let Some(path) = selected_annotation_csv_path {
-            self.analysis_request_state.annotation_csv_path_override = Some(path);
-            runtime_changed = true;
-        }
-        if clear_annotation_csv_override {
-            self.analysis_request_state.annotation_csv_path_override = None;
-            runtime_changed = true;
-        }
-
-        if runtime_changed {
-            self.refresh_analysis_runtime();
-            ctx.request_repaint();
-        }
+        app_analysis_settings::draw_analysis_settings_window(self, ctx);
     }
 
     fn draw_condition_editor_body_panel(
@@ -2518,41 +2066,6 @@ fn editor_status_color(is_error: bool) -> Color32 {
     } else {
         Color32::from_rgb(70, 130, 70)
     }
-}
-
-fn draw_analysis_path_override_row<F>(
-    ui: &mut Ui,
-    label: &str,
-    current_label: &str,
-    reset_label: &str,
-    settings_enabled: bool,
-    mut choose_path: F,
-    selected_path: &mut Option<PathBuf>,
-    clear_override: &mut bool,
-) where
-    F: FnMut() -> Option<PathBuf>,
-{
-    ui.label(label);
-    ui.horizontal(|ui| {
-        let mut displayed_label = current_label.to_string();
-        ui.add(
-            ime_safe_singleline(&mut displayed_label)
-                .desired_width(460.0)
-                .interactive(false),
-        );
-        if ui
-            .add_enabled(settings_enabled, egui::Button::new("選択"))
-            .clicked()
-        {
-            *selected_path = choose_path();
-        }
-        if ui
-            .add_enabled(settings_enabled, egui::Button::new(reset_label))
-            .clicked()
-        {
-            *clear_override = true;
-        }
-    });
 }
 
 fn build_tree_row_no_column() -> Column {
