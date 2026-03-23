@@ -4,9 +4,13 @@
 //! [`docs/p1-01-app-impl-inventory.md`](../docs/p1-01-app-impl-inventory.md) に記載する。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
+//! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
 
 #[path = "app_toolbar.rs"]
 mod app_toolbar;
+
+#[path = "app_db_viewer.rs"]
+mod app_db_viewer;
 
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, resolve_annotation_csv_path,
@@ -29,10 +33,7 @@ use crate::condition_editor_view::{
     ConfirmOverlayResponse,
 };
 use crate::csv_loader::load_records;
-use crate::db::{
-    fetch_paragraph_context, fetch_paragraph_context_by_location, resolve_default_db_path,
-};
-use crate::db_viewer_view::render_db_viewer_contents;
+use crate::db::resolve_default_db_path;
 use crate::filter::{build_filter_options, normalize_filter_candidate_search_text};
 use crate::filter_panel_view::draw_filter_panel as render_filter_panel;
 use crate::manual_annotation_store::{
@@ -403,52 +404,6 @@ impl App {
         self.error_message = None;
         self.annotation_editor_state.status_message = None;
         self.annotation_editor_state.status_is_error = false;
-    }
-
-    #[allow(dead_code)]
-    fn db_viewer_state(&self) -> &DbViewerState {
-        &self.db_viewer_state
-    }
-
-    #[allow(dead_code)]
-    fn db_viewer_state_mut(&mut self) -> &mut DbViewerState {
-        &mut self.db_viewer_state
-    }
-
-    #[allow(dead_code)]
-    fn selected_paragraph_id_for_db(&self) -> Result<i64, String> {
-        let record = self
-            .selected_record()
-            .ok_or_else(|| "レコードが選択されていません".to_string())?;
-        if !record.supports_db_viewer() {
-            return Err("sentence 行では DB viewer は未対応です".to_string());
-        }
-
-        record.paragraph_id.parse::<i64>().map_err(|error| {
-            format!(
-                "paragraph_id を数値として解釈できません: {} ({error})",
-                record.paragraph_id
-            )
-        })
-    }
-
-    #[allow(dead_code)]
-    fn prepare_db_viewer_state(&mut self) -> Result<(), String> {
-        let selected_record = self
-            .selected_record()
-            .ok_or_else(|| "レコードが選択されていません".to_string())?;
-        if !selected_record.supports_db_viewer() {
-            return Err("sentence 行では DB viewer は未対応です".to_string());
-        }
-        let paragraph_id = self.selected_paragraph_id_for_db()?;
-        let source_paragraph_text = selected_record.paragraph_text.clone();
-
-        self.db_viewer_state.is_open = true;
-        self.db_viewer_state.source_paragraph_id = Some(paragraph_id);
-        self.db_viewer_state.source_paragraph_text = Some(source_paragraph_text);
-        self.db_viewer_state.context = None;
-        self.db_viewer_state.error_message = None;
-        Ok(())
     }
 
     fn apply_selection_change(&mut self, change: SelectionChange) -> bool {
@@ -1360,148 +1315,11 @@ impl eframe::App for App {
 
 impl App {
     fn draw_db_viewer_button(&mut self, ui: &mut Ui, enabled: bool) {
-        let response = ui.add_enabled(enabled, egui::Button::new("DB参照"));
-        if response.clicked() {
-            if let Err(error) = self.open_db_viewer_for_selected_record() {
-                self.error_message = Some(error);
-            }
-        }
-    }
-
-    fn open_db_viewer_for_selected_record(&mut self) -> Result<(), String> {
-        self.prepare_db_viewer_state()?;
-        self.load_db_viewer_context();
-        Ok(())
-    }
-
-    fn load_db_viewer_context(&mut self) {
-        let Some(paragraph_id) = self.db_viewer_state.source_paragraph_id else {
-            self.db_viewer_state.context = None;
-            self.db_viewer_state.error_message =
-                Some("参照元 paragraph_id が未設定です".to_string());
-            self.db_viewer_state.is_open = true;
-            return;
-        };
-
-        match fetch_paragraph_context(&self.db_viewer_state.db_path, paragraph_id) {
-            Ok(context) => {
-                self.db_viewer_state.context = Some(context);
-                self.db_viewer_state.error_message = None;
-                self.db_viewer_state.is_open = true;
-            }
-            Err(error) => {
-                self.db_viewer_state.context = None;
-                self.db_viewer_state.error_message = Some(error);
-                self.db_viewer_state.is_open = true;
-            }
-        }
-    }
-
-    fn load_db_viewer_context_for_location(&mut self, document_id: i64, paragraph_no: i64) {
-        match fetch_paragraph_context_by_location(
-            &self.db_viewer_state.db_path,
-            document_id,
-            paragraph_no,
-        ) {
-            Ok(context) => {
-                self.db_viewer_state.context = Some(context);
-                self.db_viewer_state.error_message = None;
-            }
-            Err(error) => {
-                self.db_viewer_state.context = None;
-                self.db_viewer_state.error_message = Some(error);
-            }
-        }
-    }
-
-    fn previous_db_viewer_location(&self) -> Option<(i64, i64)> {
-        let context = self.db_viewer_state.context.as_ref()?;
-        let previous_paragraph_no = context
-            .paragraphs
-            .iter()
-            .filter(|paragraph| paragraph.paragraph_no < context.center.paragraph_no)
-            .map(|paragraph| paragraph.paragraph_no)
-            .max()?;
-
-        Some((context.center.document_id, previous_paragraph_no))
-    }
-
-    fn next_db_viewer_location(&self) -> Option<(i64, i64)> {
-        let context = self.db_viewer_state.context.as_ref()?;
-        let next_paragraph_no = context
-            .paragraphs
-            .iter()
-            .filter(|paragraph| paragraph.paragraph_no > context.center.paragraph_no)
-            .map(|paragraph| paragraph.paragraph_no)
-            .min()?;
-
-        Some((context.center.document_id, next_paragraph_no))
+        app_db_viewer::draw_db_viewer_button(self, ui, enabled);
     }
 
     fn draw_db_viewer_window(&mut self, ctx: &egui::Context) {
-        if !self.db_viewer_state.is_open {
-            return;
-        }
-
-        let snapshot = self.db_viewer_state.clone();
-        let previous_location = self.previous_db_viewer_location();
-        let next_location = self.next_db_viewer_location();
-        let mut requested_location = None;
-        let mut close_requested = false;
-        let viewport_id = egui::ViewportId::from_hash_of(DB_VIEWER_VIEWPORT_ID);
-        let builder = egui::ViewportBuilder::default()
-            .with_title("DB コンテキスト参照")
-            .with_inner_size([760.0, 820.0])
-            .with_resizable(true);
-
-        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, class| {
-            close_requested = viewport_ctx.input(|input| input.viewport().close_requested());
-
-            match class {
-                egui::ViewportClass::Embedded => {
-                    let mut fallback_open = true;
-                    egui::Window::new("DB コンテキスト参照")
-                        .open(&mut fallback_open)
-                        .default_width(760.0)
-                        .default_height(820.0)
-                        .resizable(true)
-                        .show(viewport_ctx, |ui| {
-                            render_db_viewer_contents(
-                                ui,
-                                &snapshot,
-                                previous_location,
-                                next_location,
-                                &mut requested_location,
-                            );
-                        });
-
-                    if !fallback_open {
-                        close_requested = true;
-                    }
-                }
-                _ => {
-                    egui::CentralPanel::default().show(viewport_ctx, |ui| {
-                        render_db_viewer_contents(
-                            ui,
-                            &snapshot,
-                            previous_location,
-                            next_location,
-                            &mut requested_location,
-                        );
-                    });
-                }
-            }
-        });
-
-        if close_requested {
-            self.db_viewer_state.is_open = false;
-            return;
-        }
-
-        if let Some((document_id, paragraph_no)) = requested_location {
-            self.load_db_viewer_context_for_location(document_id, paragraph_no);
-            ctx.request_repaint();
-        }
+        app_db_viewer::draw_db_viewer_window(self, ctx);
     }
 
     fn draw_toolbar(&mut self, ui: &mut Ui) {

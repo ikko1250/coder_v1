@@ -72,17 +72,9 @@
 
 | メソッド | 備考 |
 |----------|------|
-| `db_viewer_state` | |
-| `db_viewer_state_mut` | |
-| `selected_paragraph_id_for_db` | |
-| `prepare_db_viewer_state` | |
-| `draw_db_viewer_button` | ツールバーから呼ばれるが DB 機能用 |
-| `open_db_viewer_for_selected_record` | |
-| `load_db_viewer_context` | |
-| `load_db_viewer_context_for_location` | |
-| `previous_db_viewer_location` | |
-| `next_db_viewer_location` | |
-| `draw_db_viewer_window` | |
+| `draw_db_viewer_button` | **実装済**: `src/app_db_viewer.rs`。`impl App` は `draw_db_viewer_button` / `draw_db_viewer_window` のみ委譲。 |
+| `selected_paragraph_id_for_db` 等 | 同上モジュール内の非公開関数（`prepare_db_viewer_state`、`open_db_viewer_for_selected_record`、`load_db_viewer_context` 等）。 |
+| `draw_db_viewer_window` | 同上。`parent::DB_VIEWER_VIEWPORT_ID` を参照。 |
 
 ### G. `app_analysis_job` — Python 分析・エクスポート・ランタイム
 
@@ -216,3 +208,4 @@
 |------|------|
 | 2026-03-23 | P1-01 初版（`feature/p1-01-app-impl-inventory`） |
 | 2026-03-23 | P1-02: `draw_toolbar` を `src/app_toolbar.rs` へ切り出し（子モジュール `#[path]`） |
+| 2026-03-23 | DB Viewer 系を `src/app_db_viewer.rs` へ切り出し（`app` 子モジュール） |
