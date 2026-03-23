@@ -4,22 +4,24 @@
 
 ---
 
-## 1. `App::cached_segments`（本文ハイライト用セグメント）
+## 1. `ViewerCoreState::detail_segment_cache`（本文ハイライト用セグメント）
 
 ### 1.1 役割
 
-- 型: `Option<(usize, Vec<TextSegment>)>`
+- 型: `Option<(usize, Vec<TextSegment>)>`（**P2-07** で `App::cached_segments` から `viewer_core` へ移動）
 - **第 1 要素**は `AnalysisRecord::row_no`（一覧上の行番号キー）。選択行のタグ付きテキストを `parse_tagged_text` した結果を保持し、`get_segments` の再パースを避ける。
 
 ### 1.2 無効化（`None` へのクリア）
 
-| 箇所（メソッド） | ファイル | トリガー |
-|------------------|----------|----------|
-| `App::new` の初期化 | `app.rs` | 起動時 `cached_segments: None` |
-| `replace_records` | `app.rs` | CSV／分析結果でレコード配列を差し替え |
-| `apply_selection_change`（選択が変わったときのみ） | `app.rs` | `selection_changed` が true のとき |
-| `apply_filters` | `app.rs` | フィルタ再計算（一覧の行集合が変わるため） |
-| `apply_saved_annotation_to_selected_record` | `app.rs` | 手動アノテーションを選択行に反映した直後（レコード内容更新に合わせ詳細ペインの整合を取る） |
+`ViewerCoreState::invalidate_detail_segment_cache(SegmentCacheInvalidateReason)`（`src/viewer_core.rs`）。理由列挙子は P2-07 で経路を明示するため。
+
+| 箇所（メソッド） | ファイル | `SegmentCacheInvalidateReason` |
+|------------------|----------|-------------------------------|
+| `ViewerCoreState::default` | `viewer_core.rs` | 初期化で `None` |
+| `replace_records` | `app.rs` | `ReplaceRecords` |
+| `apply_selection_change`（選択が変わったときのみ） | `app.rs` | `SelectionChanged` |
+| `apply_filters` | `app.rs` | `FilterApplied` |
+| `apply_saved_annotation_to_selected_record` | `app.rs` | `AnnotationSaved` |
 
 **間接経路**: `load_csv` → `replace_records`；分析成功 `handle_analysis_success` → `replace_records`；フィルタ UI → `apply_filters` / `clear_*` / `toggle_filter_value` → `apply_filters`；キーボード・クリック → `apply_selection_change`；注釈保存成功 → `apply_saved_annotation_to_selected_record`（`save_annotation_for_selected_record` 経由）。
 
@@ -27,7 +29,7 @@
 
 | 箇所 | ファイル | 内容 |
 |------|----------|------|
-| `get_segments` | `app.rs` | 選択行の `row_no` がキャッシュと一致すれば `Vec` を clone で返す。一致しなければ `parse_tagged_text` 後に `Some((row_no, segs))` を代入。選択なしは `Vec::new()` のみでキャッシュは更新しない。 |
+| `get_segments` | `app.rs` | 選択行の `row_no` がキャッシュと一致すれば `Vec` を clone で返す。一致しなければ `parse_tagged_text` 後に `set_detail_segment_cache` で代入。選択なしは `Vec::new()` のみでキャッシュは更新しない。 |
 
 ### 1.4 利用箇所（読み取り）
 
@@ -37,7 +39,7 @@
 
 ### 1.5 インプレース更新（手動アノテーション）
 
-同一 `row_no` のまま `AnalysisRecord` を更新する **`apply_saved_annotation_to_selected_record`** では、**`filter_options` 再構築に加え `cached_segments = None`** を行う（P1 レビュー後の追補）。本文タグ付き文字列が注釈と無関係でも、ツリー側の表示整合のためキャッシュを捨てる。
+同一 `row_no` のまま `AnalysisRecord` を更新する **`apply_saved_annotation_to_selected_record`** では、**`filter_options` 再構築に加え `invalidate_detail_segment_cache(AnnotationSaved)`** を行う（P1 レビュー後の追補、P2-07 で理由明示）。本文タグ付き文字列が注釈と無関係でも、ツリー側の表示整合のためキャッシュを捨てる。
 
 ---
 
@@ -71,3 +73,4 @@
 |------|------|
 | 2026-03-23 | P1-09 初版 |
 | 2026-03-23 | 注釈保存経路で `cached_segments` を無効化する旨を追記（`apply_saved_annotation_to_selected_record`） |
+| 2026-03-23 | P2-07: `detail_segment_cache` を `ViewerCoreState` へ、`SegmentCacheInvalidateReason` を追記 |

@@ -8,8 +8,9 @@
 //! - **P2-04**: `App::apply_event` の戻り値 [`CoreOutput`] に `needs_repaint`（設計 §5.5）。
 //! - **P2-05**: `expected_job_id` で非同期ジョブの **有効 ID** を保持し、完了イベントの検証に使う（設計 §5.3）。
 //! - **P2-06**: `can_close` / `CloseBlockReason`（設計 §5.4）。
+//! - **P2-07**: `SegmentCacheInvalidateReason` と `invalidate_detail_segment_cache`（詳細ペインのセグメントキャッシュ）。
 
-use crate::model::{AnalysisRecord, FilterColumn, FilterOption};
+use crate::model::{AnalysisRecord, FilterColumn, FilterOption, TextSegment};
 use std::collections::{BTreeSet, HashMap};
 
 /// コア更新後にホスト（egui）へ伝える **副作用ヒント**（再描画など）。`egui` 非依存。
@@ -32,6 +33,19 @@ pub(crate) enum CloseBlockReason {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ViewerCoreCloseInput {
     pub(crate) condition_editor_dirty: bool,
+}
+
+/// 詳細ペインの `detail_segment_cache` を無効化する **経路**（P2-07 / P1-09）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SegmentCacheInvalidateReason {
+    /// `replace_records`（CSV・分析ジョブ完了など）
+    ReplaceRecords,
+    /// 一覧の選択行が変わった
+    SelectionChanged,
+    /// フィルタ再計算で一覧の行集合が変わる
+    FilterApplied,
+    /// 手動アノテーションを選択行に反映した直後
+    AnnotationSaved,
 }
 
 /// 一覧・フィルタ・選択まわりの **意図**（UI・ホストからコアへ）。
@@ -74,6 +88,8 @@ pub struct ViewerCoreState {
     pub(crate) selected_row: Option<usize>,
     /// 現在「この ID の完了だけ受け入れる」分析／エクスポートジョブ。CSV 再読込などで [`Self::clear_expected_job_id`] する。
     pub(crate) expected_job_id: Option<String>,
+    /// 詳細ペイン用。第 1 要素は `AnalysisRecord::row_no`。[`Self::invalidate_detail_segment_cache`] で明示的に無効化する。
+    pub(crate) detail_segment_cache: Option<(usize, Vec<TextSegment>)>,
 }
 
 impl Default for ViewerCoreState {
@@ -87,6 +103,7 @@ impl Default for ViewerCoreState {
             active_filter_column: FilterColumn::MatchedCategories,
             selected_row: None,
             expected_job_id: None,
+            detail_segment_cache: None,
         }
     }
 }
@@ -117,6 +134,16 @@ impl ViewerCoreState {
         }
         Ok(())
     }
+
+    /// 詳細ペインのタグ付きテキストセグメントキャッシュを無効化する。理由はログ・デバッグ用に列挙子で渡す。
+    pub(crate) fn invalidate_detail_segment_cache(&mut self, reason: SegmentCacheInvalidateReason) {
+        let _ = reason;
+        self.detail_segment_cache = None;
+    }
+
+    pub(crate) fn set_detail_segment_cache(&mut self, row_no: usize, segments: Vec<TextSegment>) {
+        self.detail_segment_cache = Some((row_no, segments));
+    }
 }
 
 /// フィルタ後の行インデックスを `filtered_len` の範囲にクランプする。
@@ -131,16 +158,27 @@ pub(crate) fn clamp_selected_row(selected_row: Option<usize>, filtered_len: usiz
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_selected_row, CloseBlockReason, CoreOutput, ViewerCoreCloseInput, ViewerCoreMessage,
-        ViewerCoreState,
+        clamp_selected_row, CloseBlockReason, CoreOutput, SegmentCacheInvalidateReason,
+        ViewerCoreCloseInput, ViewerCoreMessage, ViewerCoreState,
     };
     use crate::model::FilterColumn;
+    use crate::model::TextSegment;
+    use std::collections::HashMap;
+
+    fn dummy_segment(text: &str) -> TextSegment {
+        TextSegment {
+            text: text.to_string(),
+            is_hit: false,
+            attributes: HashMap::new(),
+        }
+    }
 
     #[test]
     fn viewer_core_state_defaults() {
         let core = ViewerCoreState::default();
         assert!(core.all_records.is_empty());
         assert!(core.expected_job_id.is_none());
+        assert!(core.detail_segment_cache.is_none());
         assert_eq!(clamp_selected_row(Some(5), 3), Some(2));
     }
 
@@ -208,5 +246,38 @@ mod tests {
         };
         let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearColumn(FilterColumn::MunicipalityName);
         let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearAll;
+    }
+
+    #[test]
+    fn detail_segment_cache_cleared_on_invalidate_does_not_reuse_stale_row() {
+        let mut core = ViewerCoreState::default();
+        core.set_detail_segment_cache(1, vec![dummy_segment("row1-only")]);
+        assert!(core.detail_segment_cache.as_ref().is_some_and(|(r, _)| *r == 1));
+
+        core.invalidate_detail_segment_cache(SegmentCacheInvalidateReason::SelectionChanged);
+        assert!(core.detail_segment_cache.is_none());
+
+        // 別行を表示するときに、古い row_no のキャッシュが残っていない
+        core.set_detail_segment_cache(2, vec![dummy_segment("row2")]);
+        assert_eq!(
+            core.detail_segment_cache.as_ref().map(|(r, _)| *r),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn segment_cache_invalidate_reasons_are_distinct_paths() {
+        let mut core = ViewerCoreState::default();
+        core.set_detail_segment_cache(1, vec![dummy_segment("x")]);
+        core.invalidate_detail_segment_cache(SegmentCacheInvalidateReason::ReplaceRecords);
+        assert!(core.detail_segment_cache.is_none());
+
+        core.set_detail_segment_cache(1, vec![dummy_segment("y")]);
+        core.invalidate_detail_segment_cache(SegmentCacheInvalidateReason::FilterApplied);
+        assert!(core.detail_segment_cache.is_none());
+
+        core.set_detail_segment_cache(1, vec![dummy_segment("z")]);
+        core.invalidate_detail_segment_cache(SegmentCacheInvalidateReason::AnnotationSaved);
+        assert!(core.detail_segment_cache.is_none());
     }
 }

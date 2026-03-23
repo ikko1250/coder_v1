@@ -4,8 +4,9 @@
 //! [`docs/p1-01-app-impl-inventory.md`](../docs/p1-01-app-impl-inventory.md) に記載する。
 //! **`all_records` / `filtered_indices` / `selected_row` の変更経路**は P1-08 として
 //! [`docs/p1-08-record-selection-mutation-paths.md`](../docs/p1-08-record-selection-mutation-paths.md) に記載する。
-//! **`cached_segments` 等のキャッシュ無効化・更新**は P1-09 として
-//! [`docs/p1-09-cache-invalidation-paths.md`](../docs/p1-09-cache-invalidation-paths.md) に記載する。
+//! **詳細ペインのセグメントキャッシュ**は P1-09 として
+//! [`docs/p1-09-cache-invalidation-paths.md`](../docs/p1-09-cache-invalidation-paths.md) に記載し、P2-07 で
+//! [`docs/p2-07-segment-cache-invalidation.md`](../docs/p2-07-segment-cache-invalidation.md) のとおりコア側で無効化経路を明示する。
 //! **副作用の境界（コア候補 / ホスト必須）**は P1-10 として
 //! [`docs/p1-10-side-effect-boundaries.md`](../docs/p1-10-side-effect-boundaries.md) に記載する。
 //! **公開 API・可視性の整理**は P1-11 として
@@ -17,6 +18,7 @@
 //! **`apply_event` → `CoreOutput`（`needs_repaint`）**は P2-04 として [`docs/p2-04-core-output.md`](../docs/p2-04-core-output.md)。
 //! **ジョブ ID と `ViewerCoreState::expected_job_id`** は P2-05 として [`docs/p2-05-job-id-validation.md`](../docs/p2-05-job-id-validation.md)。
 //! **`can_close` / `CloseBlockReason`** は P2-06 として [`docs/p2-06-can-close.md`](../docs/p2-06-can-close.md)。
+//! **詳細ペインの `detail_segment_cache` 無効化**は P2-07 として [`docs/p2-07-segment-cache-invalidation.md`](../docs/p2-07-segment-cache-invalidation.md)。
 //!
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
@@ -66,7 +68,8 @@ use crate::manual_annotation_store::{
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, TextSegment};
 use crate::tagged_text::parse_tagged_text;
 use crate::viewer_core::{
-    clamp_selected_row, CoreOutput, ViewerCoreEvent, ViewerCoreMessage, ViewerCoreState,
+    clamp_selected_row, CoreOutput, SegmentCacheInvalidateReason, ViewerCoreEvent, ViewerCoreMessage,
+    ViewerCoreState,
 };
 use eframe::egui;
 use egui::Ui;
@@ -290,7 +293,6 @@ pub(crate) struct App {
     pub(crate) core: ViewerCoreState,
     pending_tree_scroll: Option<TreeScrollRequest>,
     pub(crate) error_message: Option<String>,
-    cached_segments: Option<(usize, Vec<TextSegment>)>,
     annotation_editor_state: AnnotationEditorState,
     condition_editor_state: app_condition_editor::ConditionEditorState,
     record_list_panel_ratio: f32,
@@ -309,7 +311,6 @@ impl App {
             core: ViewerCoreState::default(),
             pending_tree_scroll: None,
             error_message: None,
-            cached_segments: None,
             annotation_editor_state: AnnotationEditorState::default(),
             condition_editor_state: app_condition_editor::ConditionEditorState::default(),
             record_list_panel_ratio: RECORD_LIST_PANEL_DEFAULT_RATIO,
@@ -376,7 +377,8 @@ impl App {
         self.core.selected_filter_values.clear();
         self.core.filter_candidate_queries.clear();
         self.core.filtered_indices = (0..self.core.all_records.len()).collect();
-        self.cached_segments = None;
+        self.core
+            .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::ReplaceRecords);
         self.apply_selection_change(SelectionChange::first_filtered_row(
             self.core.filtered_indices.len(),
             ScrollBehavior::AlignMin,
@@ -391,7 +393,8 @@ impl App {
         let selection_changed = self.core.selected_row != next;
         if selection_changed {
             self.core.selected_row = next;
-            self.cached_segments = None;
+            self.core
+                .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::SelectionChanged);
             self.clear_annotation_editor_status();
         }
 
@@ -552,7 +555,8 @@ impl App {
                 );
         }
         self.core.filter_options = build_filter_options(&self.core.all_records);
-        self.cached_segments = None;
+        self.core
+            .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::AnnotationSaved);
         Ok(())
     }
 
@@ -604,7 +608,8 @@ impl App {
             .enumerate()
             .filter_map(|(idx, record)| self.record_matches_filters(record).then_some(idx))
             .collect();
-        self.cached_segments = None;
+        self.core
+            .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::FilterApplied);
         self.select_first_filtered_row(ScrollBehavior::AlignMin);
     }
 
@@ -661,7 +666,7 @@ impl App {
     fn get_segments(&mut self) -> Vec<TextSegment> {
         if let Some(record) = self.selected_record() {
             let row_no = record.row_no;
-            if let Some((cached_row, ref segs)) = self.cached_segments {
+            if let Some((cached_row, ref segs)) = self.core.detail_segment_cache {
                 if cached_row == row_no {
                     return segs.clone();
                 }
@@ -672,7 +677,7 @@ impl App {
                 record.primary_text_tagged().to_string()
             };
             let segs = parse_tagged_text(&tagged);
-            self.cached_segments = Some((row_no, segs.clone()));
+            self.core.set_detail_segment_cache(row_no, segs.clone());
             segs
         } else {
             Vec::new()
