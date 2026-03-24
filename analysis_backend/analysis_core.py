@@ -255,11 +255,13 @@ def build_rendered_sentences_df(
     tokens_with_position_df: pl.DataFrame,
     token_annotations_df: pl.DataFrame,
     sentence_match_summary_df: pl.DataFrame | None = None,
+    paragraph_match_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     return _build_rendered_sentences_df_impl(
         tokens_with_position_df=tokens_with_position_df,
         token_annotations_df=token_annotations_df,
         sentence_match_summary_df=sentence_match_summary_df,
+        paragraph_match_summary_df=paragraph_match_summary_df,
     )
 
 

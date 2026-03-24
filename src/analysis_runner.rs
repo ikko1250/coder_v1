@@ -17,7 +17,7 @@ const DEFAULT_SCRIPT_RELATIVE_PATH: &str = "run-analysis.py";
 const DEFAULT_JOBS_RELATIVE_PATH: &str = "runtime/jobs";
 const JOB_HISTORY_KEEP_COUNT: usize = 5;
 const PYTHON_PATH_ENV_KEY: &str = "CSV_VIEWER_PYTHON";
-const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(240);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AnalysisRuntimeOverrides {
