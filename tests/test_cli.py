@@ -3,6 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 from contextlib import redirect_stderr, redirect_stdout
 import csv
+import gc
 import io
 import json
 from pathlib import Path
@@ -349,6 +350,32 @@ def build_sentence_unit_overall_scope_filter_config(filter_config_path: Path) ->
     )
 
 
+def build_sentence_unit_paragraph_scope_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "analysis_unit": "sentence",
+        "condition_match_logic": "any",
+        "max_reconstructed_paragraphs": 10,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "suppress_area_paragraph",
+                "categories": ["概念:抑制区域"],
+                "overall_search_scope": "paragraph",
+                "form_groups": [
+                    {
+                        "forms": ["抑制", "区域"],
+                        "match_logic": "and",
+                        "search_scope": "sentence",
+                    }
+                ],
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def build_warning_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "unexpected",
@@ -535,6 +562,7 @@ class CliContractTests(unittest.TestCase):
             stderr_buffer = io.StringIO()
             with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
                 return_code = run_analysis_job(args)
+            gc.collect()
 
             self.assertEqual(return_code, 1)
             meta_path = output_dir / "meta.json"
@@ -1011,6 +1039,58 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area_sentence")
             self.assertIn("[[HIT ", rows[0]["sentence_text_tagged"])
+
+    def test_run_analysis_job_sentence_unit_paragraph_scope_keeps_display_and_direct_hit_highlight_split(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            output_dir = temp_path / "job"
+            build_table_paragraph_test_db(db_path)
+            build_sentence_unit_paragraph_scope_filter_config(filter_config_path)
+            args = Namespace(
+                job_id="sentence-paragraph-scope-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(temp_path / "missing-annotations.csv"),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="csv",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            meta_path = output_dir / "meta.json"
+            csv_path = output_dir / "result-sentences.csv"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.assertEqual(meta["analysisUnit"], "sentence")
+            self.assertEqual(meta["selectedParagraphCount"], 1)
+            self.assertEqual(meta["selectedSentenceCount"], 2)
+
+            with csv_path.open(encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+            self.assertEqual(len(rows), 2)
+            rows_by_sentence = {row["sentence_id"]: row for row in rows}
+            self.assertEqual(sorted(rows_by_sentence.keys()), ["11", "12"])
+            self.assertEqual(
+                rows_by_sentence["11"]["matched_condition_ids_text"],
+                "suppress_area_paragraph",
+            )
+            self.assertIn("[[HIT ", rows_by_sentence["11"]["sentence_text_tagged"])
+            self.assertEqual(
+                rows_by_sentence["12"]["matched_condition_ids_text"],
+                "suppress_area_paragraph",
+            )
+            self.assertNotIn("[[HIT ", rows_by_sentence["12"]["sentence_text_tagged"])
 
     def test_run_analysis_job_emits_sentence_records_for_json_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -488,21 +488,41 @@ def build_rendered_sentences_df(
     return (
         merged_df
         .with_columns([
-            pl.when(pl.col("matched_condition_ids_summary").is_not_null())
-            .then(pl.col("matched_condition_ids_summary"))
-            .otherwise(pl.col("matched_condition_ids"))
+            pl.when(
+                pl.when(pl.col("matched_condition_ids_summary").is_not_null())
+                .then(pl.col("matched_condition_ids_summary"))
+                .otherwise(pl.col("matched_condition_ids"))
+                .is_null()
+            )
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(
+                pl.when(pl.col("matched_condition_ids_summary").is_not_null())
+                .then(pl.col("matched_condition_ids_summary"))
+                .otherwise(pl.col("matched_condition_ids"))
+            )
             .alias("matched_condition_ids"),
+            pl.when(
+                pl.when(pl.col("matched_categories_summary").is_not_null())
+                .then(pl.col("matched_categories_summary"))
+                .otherwise(pl.col("matched_categories"))
+                .is_null()
+            )
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(
+                pl.when(pl.col("matched_categories_summary").is_not_null())
+                .then(pl.col("matched_categories_summary"))
+                .otherwise(pl.col("matched_categories"))
+            )
+            .alias("matched_categories"),
             pl.when(pl.col("matched_condition_ids_text_summary").is_not_null())
             .then(pl.col("matched_condition_ids_text_summary"))
             .otherwise(pl.col("matched_condition_ids_text"))
+            .fill_null("")
             .alias("matched_condition_ids_text"),
-            pl.when(pl.col("matched_categories_summary").is_not_null())
-            .then(pl.col("matched_categories_summary"))
-            .otherwise(pl.col("matched_categories"))
-            .alias("matched_categories"),
             pl.when(pl.col("matched_categories_text_summary").is_not_null())
             .then(pl.col("matched_categories_text_summary"))
             .otherwise(pl.col("matched_categories_text"))
+            .fill_null("")
             .alias("matched_categories_text"),
         ])
         .select(list(RENDERED_SENTENCE_SCHEMA.keys()))

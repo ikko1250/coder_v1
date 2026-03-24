@@ -1245,6 +1245,188 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(result.target_paragraph_ids, [1, 2])
         self.assertEqual(result.sentence_match_summary_df.get_column("sentence_id").to_list(), [11, 21])
         self.assertEqual(result.paragraph_match_summary_df.get_column("paragraph_id").to_list(), [1, 2])
+        self.assertEqual(
+            result.sentence_hit_tokens_df.sort(["sentence_id", "token_no"]).get_column("sentence_id").to_list(),
+            [11, 11, 21, 21],
+        )
+
+    def test_phase1_build_sentence_condition_truth_df_propagates_paragraph_matches(self) -> None:
+        sentence_universe_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12, 21],
+                "paragraph_id": [1, 1, 2],
+            }
+        )
+        sentence_match_summary_df = pl.DataFrame(
+            {
+                "sentence_id": [11],
+                "paragraph_id": [1],
+                "condition_count": [2],
+                "matched_condition_count": [1],
+                "is_selected": [True],
+                "matched_condition_ids": [["cond_sentence"]],
+                "matched_condition_ids_text": ["cond_sentence"],
+                "matched_categories": [["cat_sentence"]],
+                "matched_categories_text": ["cat_sentence"],
+            }
+        )
+        paragraph_match_summary_df = pl.DataFrame(
+            {
+                "paragraph_id": [1],
+                "condition_count": [2],
+                "matched_condition_count": [1],
+                "is_selected": [True],
+                "matched_condition_ids": [["cond_paragraph"]],
+                "matched_condition_ids_text": ["cond_paragraph"],
+                "matched_categories": [["cat_paragraph"]],
+                "matched_categories_text": ["cat_paragraph"],
+                "matched_form_group_ids_text": [""],
+                "matched_form_group_logics_text": [""],
+                "form_group_explanations_text": [""],
+                "mixed_scope_warning_text": [""],
+            }
+        )
+
+        truth_df = condition_evaluator._build_sentence_condition_truth_df(
+            sentence_universe_df=sentence_universe_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="cond_sentence",
+                    categories=["cat_sentence"],
+                    category_text="cat_sentence",
+                    forms=["抑制"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="cond_paragraph",
+                    categories=["cat_paragraph"],
+                    category_text="cat_paragraph",
+                    forms=["区域"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                ),
+            ],
+            sentence_match_summary_df=sentence_match_summary_df,
+            paragraph_match_summary_df=paragraph_match_summary_df,
+        )
+
+        truth_rows = {
+            (row["sentence_id"], row["condition_id"]): row["is_match"]
+            for row in truth_df.to_dicts()
+        }
+        self.assertTrue(truth_rows[(11, "cond_sentence")])
+        self.assertFalse(truth_rows[(12, "cond_sentence")])
+        self.assertFalse(truth_rows[(21, "cond_sentence")])
+        self.assertTrue(truth_rows[(11, "cond_paragraph")])
+        self.assertTrue(truth_rows[(12, "cond_paragraph")])
+        self.assertFalse(truth_rows[(21, "cond_paragraph")])
+
+    def test_phase1_inherit_paragraph_summary_to_sentence_summary_fills_missing_rows(self) -> None:
+        sentence_universe_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+            }
+        )
+        sentence_match_summary_df = pl.DataFrame(
+            {
+                "sentence_id": [11],
+                "paragraph_id": [1],
+                "condition_count": [2],
+                "matched_condition_count": [1],
+                "is_selected": [True],
+                "matched_condition_ids": [["cond_sentence"]],
+                "matched_condition_ids_text": ["cond_sentence"],
+                "matched_categories": [["cat_sentence"]],
+                "matched_categories_text": ["cat_sentence"],
+            }
+        )
+        paragraph_match_summary_df = pl.DataFrame(
+            {
+                "paragraph_id": [1],
+                "condition_count": [2],
+                "matched_condition_count": [1],
+                "is_selected": [True],
+                "matched_condition_ids": [["cond_paragraph"]],
+                "matched_condition_ids_text": ["cond_paragraph"],
+                "matched_categories": [["cat_paragraph"]],
+                "matched_categories_text": ["cat_paragraph"],
+                "matched_form_group_ids_text": [""],
+                "matched_form_group_logics_text": [""],
+                "form_group_explanations_text": [""],
+                "mixed_scope_warning_text": [""],
+            }
+        )
+
+        merged_summary_df = condition_evaluator._inherit_paragraph_summary_to_sentence_summary(
+            sentence_universe_df=sentence_universe_df,
+            sentence_match_summary_df=sentence_match_summary_df,
+            paragraph_match_summary_df=paragraph_match_summary_df,
+        )
+        summary_rows = {
+            row["sentence_id"]: row
+            for row in merged_summary_df.to_dicts()
+        }
+
+        self.assertEqual(summary_rows[11]["matched_condition_ids"], ["cond_sentence"])
+        self.assertEqual(summary_rows[12]["matched_condition_ids"], ["cond_paragraph"])
+        self.assertEqual(summary_rows[12]["matched_categories"], ["cat_paragraph"])
+
+    def test_phase2_sentence_unit_includes_paragraph_scoped_conditions(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 2, 2],
+                "sentence_id": [11, 11, 12, 21, 21],
+                "token_no": [0, 1, 0, 0, 1],
+                "normalized_form": ["抑制", "区域", "その他", "抑制", "区域"],
+                "surface": ["抑制", "区域", "その他", "抑制", "区域"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12, 21],
+                "paragraph_id": [1, 1, 2],
+                "sentence_no_in_paragraph": [1, 2, 1],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="paragraph_scope_only",
+                    categories=["概念:抑制区域"],
+                    category_text="概念:抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                )
+            ],
+            analysis_unit="sentence",
+        )
+
+        self.assertEqual(result.target_sentence_ids, [11, 12, 21])
+        self.assertEqual(result.target_paragraph_ids, [1, 2])
+        self.assertEqual(
+            result.sentence_match_summary_df.sort(["paragraph_id", "sentence_id"]).get_column("sentence_id").to_list(),
+            [11, 12, 21],
+        )
+        self.assertEqual(
+            result.paragraph_match_summary_df.sort("paragraph_id").get_column("paragraph_id").to_list(),
+            [1, 2],
+        )
+        self.assertEqual(
+            result.sentence_hit_tokens_df.sort(["sentence_id", "token_no"]).get_column("sentence_id").to_list(),
+            [11, 11, 21, 21],
+        )
 
     def test_select_target_ids_by_conditions_result_sentence_unit_caps_distinct_paragraphs(self) -> None:
         tokens_df = pl.DataFrame(
@@ -2149,6 +2331,41 @@ class AnalysisCoreContractTests(unittest.TestCase):
             "g1: and forms=[区域] scope=paragraph",
             rendered_df.get_column("form_group_explanations_text").to_list()[0],
         )
+
+    def test_build_rendered_sentences_df_normalizes_null_summary_values(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 11],
+                "sentence_no_in_paragraph": [1, 1],
+                "token_no": [0, 1],
+                "sentence_token_position": [0, 1],
+                "paragraph_token_position": [0, 1],
+                "normalized_form": ["抑制", "区域"],
+                "surface": ["抑制", "区域"],
+            }
+        )
+        sentence_match_summary_df = pl.DataFrame(
+            {
+                "sentence_id": [11],
+                "paragraph_id": [1],
+                "matched_condition_ids": [None],
+                "matched_condition_ids_text": [None],
+                "matched_categories": [None],
+                "matched_categories_text": [None],
+            }
+        )
+
+        rendered_df = analysis_core.build_rendered_sentences_df(
+            tokens_with_position_df=tokens_with_position_df,
+            token_annotations_df=pl.DataFrame(),
+            sentence_match_summary_df=sentence_match_summary_df,
+        )
+        row = rendered_df.row(0, named=True)
+        self.assertEqual(row["matched_condition_ids"], [])
+        self.assertEqual(row["matched_condition_ids_text"], "")
+        self.assertEqual(row["matched_categories"], [])
+        self.assertEqual(row["matched_categories_text"], "")
 
     def test_build_reconstructed_paragraphs_export_df_keeps_required_columns(self) -> None:
         reconstructed_paragraphs_df = pl.DataFrame(
