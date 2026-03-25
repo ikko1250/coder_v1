@@ -36,8 +36,12 @@ from .rendering import build_rendered_sentences_df as _build_rendered_sentences_
 from .rendering import build_token_annotations_df as _build_token_annotations_df_impl
 from .rendering import render_tagged_token as _render_tagged_token_impl
 from .token_position import build_tokens_with_position_df as _build_tokens_with_position_df_impl
+from .text_unit_frames import TextUnitFrames
+from .text_unit_frames import build_text_unit_frames as _build_text_unit_frames_impl
 
 __all__ = [
+    "TextUnitFrames",
+    "build_text_unit_frames",
     "build_condition_hit_tokens_df",
     "build_condition_hit_result",
     "build_reconstructed_paragraphs_export_df",
@@ -97,6 +101,10 @@ def read_analysis_sentences(db_path: Path, limit_rows: int | None = None) -> pl.
 
 def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
     return _read_analysis_sentences_result_impl(db_path=db_path, limit_rows=limit_rows)
+
+
+def build_text_unit_frames(sentences_df: pl.DataFrame) -> TextUnitFrames:
+    return _build_text_unit_frames_impl(sentences_df)
 
 
 def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) -> pl.DataFrame:

@@ -8,6 +8,7 @@ from .condition_model import NormalizedCondition
 from .condition_model import NormalizedFormGroup
 from .condition_model import NormalizeConditionsResult
 from .condition_model import TargetSelectionResult
+from .text_unit_frames import build_text_unit_frames
 from .distance_matcher import build_condition_hit_result
 from .distance_matcher import evaluate_distance_matches_by_unit
 from .frame_schema import CONDITION_HIT_SCHEMA
@@ -86,6 +87,12 @@ SENTENCE_SUMMARY_SCHEMA = {
     "matched_categories": pl.List(pl.String),
     "matched_categories_text": pl.String,
 }
+SENTENCE_TOKEN_COVERAGE_SCHEMA = {
+    "sentence_id": pl.Int64,
+    "paragraph_id": pl.Int64,
+    "token_count": pl.UInt32,
+    "has_display_tokens": pl.Boolean,
+}
 
 
 def _empty_candidate_tokens_df() -> pl.DataFrame:
@@ -114,6 +121,46 @@ def _empty_group_matched_units_df() -> pl.DataFrame:
 
 def _empty_sentence_summary_df() -> pl.DataFrame:
     return empty_df(SENTENCE_SUMMARY_SCHEMA)
+
+
+def _empty_sentence_token_coverage_df() -> pl.DataFrame:
+    return empty_df(SENTENCE_TOKEN_COVERAGE_SCHEMA)
+
+
+def _build_sentence_token_coverage_df(
+    *,
+    tokens_df: pl.DataFrame,
+    sentences_df: pl.DataFrame,
+) -> pl.DataFrame:
+    if sentences_df.is_empty():
+        return _empty_sentence_token_coverage_df()
+
+    sentence_keys_df = sentences_df.select(["sentence_id", "paragraph_id"]).unique()
+    token_counts_df = (
+        tokens_df
+        .group_by(["sentence_id", "paragraph_id"])
+        .agg(pl.len().cast(pl.UInt32).alias("token_count"))
+        if not tokens_df.is_empty()
+        else pl.DataFrame(
+            schema={
+                "sentence_id": pl.Int64,
+                "paragraph_id": pl.Int64,
+                "token_count": pl.UInt32,
+            }
+        )
+    )
+    return (
+        sentence_keys_df
+        .join(token_counts_df, on=["sentence_id", "paragraph_id"], how="left")
+        .with_columns(
+            pl.col("token_count").fill_null(0).cast(pl.UInt32).alias("token_count")
+        )
+        .with_columns(
+            (pl.col("token_count") > 0).alias("has_display_tokens")
+        )
+        .select(list(SENTENCE_TOKEN_COVERAGE_SCHEMA.keys()))
+        .sort(["paragraph_id", "sentence_id"])
+    )
 
 
 def _normalized_conditions_to_dicts(
@@ -1811,53 +1858,49 @@ def _inherit_paragraph_summary_to_sentence_summary(
         )
         .with_columns(
             [
-                pl.when(pl.col("condition_count").is_null())
-                .then(pl.col("condition_count_paragraph"))
-                .otherwise(pl.col("condition_count"))
-                .fill_null(0)
-                .cast(pl.UInt32)
-                .alias("condition_count"),
-                pl.when(pl.col("matched_condition_count").is_null())
-                .then(pl.col("matched_condition_count_paragraph"))
-                .otherwise(pl.col("matched_condition_count"))
-                .fill_null(0)
-                .cast(pl.UInt32)
-                .alias("matched_condition_count"),
+                pl.col("condition_count").fill_null(0).cast(pl.UInt32).alias("condition_count_sentence"),
+                pl.col("condition_count_paragraph").fill_null(0).cast(pl.UInt32).alias("condition_count_paragraph"),
                 pl.when(pl.col("is_selected").is_null())
                 .then(pl.col("is_selected_paragraph"))
                 .otherwise(pl.col("is_selected"))
                 .fill_null(False)
                 .alias("is_selected"),
-                pl.when(pl.col("matched_condition_ids").is_null())
-                .then(pl.col("matched_condition_ids_paragraph"))
-                .otherwise(pl.col("matched_condition_ids"))
+                pl.concat_list(
+                    [
+                        pl.col("matched_condition_ids").fill_null(
+                            pl.lit([], dtype=pl.List(pl.String))
+                        ),
+                        pl.col("matched_condition_ids_paragraph").fill_null(
+                            pl.lit([], dtype=pl.List(pl.String))
+                        ),
+                    ]
+                )
+                .list.unique()
+                .list.sort()
                 .alias("matched_condition_ids"),
-                pl.when(pl.col("matched_condition_ids_text").is_null())
-                .then(pl.col("matched_condition_ids_text_paragraph"))
-                .otherwise(pl.col("matched_condition_ids_text"))
-                .fill_null("")
-                .alias("matched_condition_ids_text"),
-                pl.when(pl.col("matched_categories").is_null())
-                .then(pl.col("matched_categories_paragraph"))
-                .otherwise(pl.col("matched_categories"))
+                pl.concat_list(
+                    [
+                        pl.col("matched_categories").fill_null(
+                            pl.lit([], dtype=pl.List(pl.String))
+                        ),
+                        pl.col("matched_categories_paragraph").fill_null(
+                            pl.lit([], dtype=pl.List(pl.String))
+                        ),
+                    ]
+                )
+                .list.unique()
+                .list.sort()
                 .alias("matched_categories"),
-                pl.when(pl.col("matched_categories_text").is_null())
-                .then(pl.col("matched_categories_text_paragraph"))
-                .otherwise(pl.col("matched_categories_text"))
-                .fill_null("")
-                .alias("matched_categories_text"),
             ]
         )
         .with_columns(
             [
-                pl.when(pl.col("matched_condition_ids").is_null())
-                .then(pl.lit([], dtype=pl.List(pl.String)))
-                .otherwise(pl.col("matched_condition_ids"))
-                .alias("matched_condition_ids"),
-                pl.when(pl.col("matched_categories").is_null())
-                .then(pl.lit([], dtype=pl.List(pl.String)))
-                .otherwise(pl.col("matched_categories"))
-                .alias("matched_categories"),
+                (pl.col("condition_count_sentence") + pl.col("condition_count_paragraph"))
+                .cast(pl.UInt32)
+                .alias("condition_count"),
+                pl.col("matched_condition_ids").list.len().cast(pl.UInt32).alias("matched_condition_count"),
+                pl.col("matched_condition_ids").list.join(", ").alias("matched_condition_ids_text"),
+                pl.col("matched_categories").list.join(", ").alias("matched_categories_text"),
             ]
         )
         .select(list(SENTENCE_SUMMARY_SCHEMA.keys()))
@@ -2372,6 +2415,7 @@ def select_target_ids_by_conditions_result(
     distance_match_combination_cap: int = 10000,
     distance_match_strict_safety_limit: int = 1000000,
 ) -> TargetSelectionResult:
+    text_unit_frames = build_text_unit_frames(sentences_df)
     if not normalized_conditions:
         return TargetSelectionResult(
             candidate_tokens_df=tokens_df.clear(),
@@ -2381,6 +2425,7 @@ def select_target_ids_by_conditions_result(
             sentence_hit_tokens_df=_empty_condition_hit_tokens_df(),
             target_paragraph_ids=[],
             target_sentence_ids=[],
+            text_unit_frames=text_unit_frames,
         )
 
     if analysis_unit == "sentence":
@@ -2412,6 +2457,12 @@ def select_target_ids_by_conditions_result(
             else _empty_candidate_tokens_df()
         )
         sentence_universe_df = sentences_df.select(["sentence_id", "paragraph_id"]).unique()
+        # In sentence mode, target_sentence_ids must remain a displayable sentence set:
+        # only sentence/paragraph pairs backed by at least one token row count as selectable.
+        sentence_token_coverage_df = _build_sentence_token_coverage_df(
+            tokens_df=tokens_df,
+            sentences_df=sentence_universe_df,
+        )
         warning_messages: list[MatchingWarning] = []
 
         sentence_hit_tokens_df = _empty_condition_hit_tokens_df()
@@ -2508,6 +2559,7 @@ def select_target_ids_by_conditions_result(
                 target_paragraph_ids=[],
                 target_sentence_ids=[],
                 warning_messages=warning_messages,
+                text_unit_frames=text_unit_frames,
             )
 
         normalized_match_logic = condition_match_logic.strip().lower()
@@ -2526,6 +2578,22 @@ def select_target_ids_by_conditions_result(
                     ).alias("is_selected"),
                 ]
             )
+            .sort(["paragraph_id", "sentence_id"])
+        )
+        selected_displayable_sentence_keys_df = (
+            sentence_selection_df
+            .join(
+                sentence_token_coverage_df.select(
+                    ["sentence_id", "paragraph_id", "has_display_tokens"]
+                ),
+                on=["sentence_id", "paragraph_id"],
+                how="left",
+            )
+            .with_columns(
+                pl.col("has_display_tokens").fill_null(False).alias("has_display_tokens")
+            )
+            .filter(pl.col("is_selected") & pl.col("has_display_tokens"))
+            .select(["sentence_id", "paragraph_id"])
             .sort(["paragraph_id", "sentence_id"])
         )
 
@@ -2657,12 +2725,19 @@ def select_target_ids_by_conditions_result(
             if not paragraph_match_summary_df.is_empty()
             else []
         )
+        displayable_selected_paragraph_ids = (
+            set(selected_displayable_sentence_keys_df.get_column("paragraph_id").to_list())
+            if not selected_displayable_sentence_keys_df.is_empty()
+            else set()
+        )
+        target_paragraph_ids = [
+            paragraph_id
+            for paragraph_id in target_paragraph_ids
+            if paragraph_id in displayable_selected_paragraph_ids
+        ]
         target_sentence_ids = (
-            sentence_selection_df
-            .filter(
-                pl.col("is_selected")
-                & pl.col("paragraph_id").is_in(target_paragraph_ids)
-            )
+            selected_displayable_sentence_keys_df
+            .filter(pl.col("paragraph_id").is_in(target_paragraph_ids))
             .sort(["paragraph_id", "sentence_id"])
             .get_column("sentence_id")
             .to_list()
@@ -2671,13 +2746,11 @@ def select_target_ids_by_conditions_result(
         )
         sentence_match_summary_df = _inherit_paragraph_summary_to_sentence_summary(
             sentence_universe_df=(
-                sentence_universe_df.filter(pl.col("sentence_id").is_in(target_sentence_ids))
-                if not paragraph_scoped_conditions
-                else (
-                    sentence_universe_df.filter(pl.col("paragraph_id").is_in(target_paragraph_ids))
-                    if target_paragraph_ids
-                    else sentence_universe_df.clear()
+                selected_displayable_sentence_keys_df.filter(
+                    pl.col("paragraph_id").is_in(target_paragraph_ids)
                 )
+                if target_paragraph_ids
+                else selected_displayable_sentence_keys_df.clear()
             ),
             sentence_match_summary_df=sentence_match_summary_df_sentence_scope,
             paragraph_match_summary_df=paragraph_match_summary_df_paragraph_scope,
@@ -2718,6 +2791,7 @@ def select_target_ids_by_conditions_result(
             target_paragraph_ids=target_paragraph_ids,
             target_sentence_ids=target_sentence_ids,
             warning_messages=warning_messages,
+            text_unit_frames=text_unit_frames,
         )
 
     all_forms = sorted({
@@ -2759,6 +2833,7 @@ def select_target_ids_by_conditions_result(
             sentence_hit_tokens_df=_empty_condition_hit_tokens_df(),
             target_paragraph_ids=[],
             target_sentence_ids=[],
+            text_unit_frames=text_unit_frames,
         )
 
     base_condition_eval_frames: list[pl.DataFrame] = []
@@ -2798,6 +2873,7 @@ def select_target_ids_by_conditions_result(
             sentence_hit_tokens_df=_empty_condition_hit_tokens_df(),
             target_paragraph_ids=[],
             target_sentence_ids=[],
+            text_unit_frames=text_unit_frames,
         )
 
     base_condition_eval_df = pl.concat(base_condition_eval_frames, how="vertical")
@@ -2855,4 +2931,5 @@ def select_target_ids_by_conditions_result(
         sentence_hit_tokens_df=_empty_condition_hit_tokens_df(),
         target_paragraph_ids=target_paragraph_ids,
         target_sentence_ids=target_sentence_ids,
+        text_unit_frames=text_unit_frames,
     )

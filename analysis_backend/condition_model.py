@@ -5,6 +5,8 @@ from typing import Literal
 
 import polars as pl
 
+from .text_unit_frames import TextUnitFrames
+
 
 DistanceMatchingMode = Literal["strict", "auto-approx", "approx"]
 ConfigIssueSeverity = Literal["warning", "error"]
@@ -130,3 +132,4 @@ class TargetSelectionResult:
     target_paragraph_ids: list[int]
     target_sentence_ids: list[int]
     warning_messages: list[MatchingWarning] = field(default_factory=list)
+    text_unit_frames: TextUnitFrames | None = None

@@ -15,6 +15,8 @@ __all__ = [
     "NormalizeConditionsResult",
     "NormalizedCondition",
     "TargetSelectionResult",
+    "TextUnitFrames",
+    "build_text_unit_frames",
     "build_condition_hit_result",
     "build_condition_hit_tokens_df",
     "build_reconstructed_paragraphs_export_df",
