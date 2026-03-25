@@ -9,6 +9,7 @@ from .condition_model import NormalizedFormGroup
 from .condition_model import NormalizedTextGroup
 from .condition_model import NormalizeConditionsResult
 from .condition_model import TargetSelectionResult
+from .text_unit_frames import TextUnitFrames
 from .text_unit_frames import build_text_unit_frames
 from .distance_matcher import build_condition_hit_result
 from .distance_matcher import evaluate_distance_matches_by_unit
@@ -44,6 +45,8 @@ CONDITION_EVAL_SCHEMA = {
     "distance_is_match": pl.Boolean,
     "has_base_clause": pl.Boolean,
     "has_reference_clause": pl.Boolean,
+    "has_text_clause": pl.Boolean,
+    "text_is_match": pl.Boolean,
     "token_is_match": pl.Boolean,
     "annotation_is_match": pl.Boolean,
     "base_is_match": pl.Boolean,
@@ -1017,18 +1020,183 @@ def _normalize_text_groups(
 def _build_global_candidate_paragraphs_df(
     candidate_tokens_df: pl.DataFrame,
     normalized_paragraph_annotations_df: pl.DataFrame,
+    *,
+    sentences_df: pl.DataFrame | None = None,
+    union_all_paragraph_ids_from_sentences: bool = False,
 ) -> pl.DataFrame:
     paragraph_frames: list[pl.DataFrame] = []
     if not candidate_tokens_df.is_empty():
         paragraph_frames.append(candidate_tokens_df.select("paragraph_id").unique())
     if not normalized_paragraph_annotations_df.is_empty():
         paragraph_frames.append(normalized_paragraph_annotations_df.select("paragraph_id").unique())
+    if (
+        union_all_paragraph_ids_from_sentences
+        and sentences_df is not None
+        and not sentences_df.is_empty()
+        and "paragraph_id" in sentences_df.columns
+    ):
+        paragraph_frames.append(sentences_df.select("paragraph_id").unique())
     if not paragraph_frames:
         return empty_df({"paragraph_id": pl.Int64})
     return (
         pl.concat(paragraph_frames, how="vertical")
         .unique()
         .sort("paragraph_id")
+    )
+
+
+def _literal_text_group_match_expr(unit_text: pl.Expr, texts: list[str], match_logic: str) -> pl.Expr:
+    """Substring match on unit text (Polars literal contains; design §5.1)."""
+    if not texts:
+        return pl.lit(False)
+    if match_logic == "and":
+        expr = pl.lit(True)
+        for text in texts:
+            expr = expr & unit_text.str.contains(text, literal=True)
+        return expr
+    if match_logic == "or":
+        expr = pl.lit(False)
+        for text in texts:
+            expr = expr | unit_text.str.contains(text, literal=True)
+        return expr
+    if match_logic == "not":
+        expr = pl.lit(True)
+        for text in texts:
+            expr = expr & ~unit_text.str.contains(text, literal=True)
+        return expr
+    return pl.lit(False)
+
+
+def _build_text_group_matched_units_df(
+    *,
+    text_unit_frames: TextUnitFrames,
+    global_candidate_paragraphs_df: pl.DataFrame,
+    text_group: NormalizedTextGroup,
+) -> pl.DataFrame:
+    search_scope = text_group.search_scope
+    if text_group.match_logic == "not":
+        unit_df = _build_group_unit_universe_df(
+            global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+            sentences_df=text_unit_frames.sentence_frame,
+            search_scope=search_scope,
+        )
+        if unit_df.is_empty():
+            return _empty_group_matched_units_df()
+        if search_scope == "sentence":
+            unit_df = unit_df.join(
+                text_unit_frames.sentence_frame.select(
+                    ["paragraph_id", pl.col("sentence_id").alias("unit_id"), "sentence_text"]
+                ),
+                on=["paragraph_id", "unit_id"],
+                how="left",
+            ).with_columns(pl.col("sentence_text").fill_null("").alias("unit_text"))
+        else:
+            unit_df = unit_df.join(
+                text_unit_frames.paragraph_frame.select(["paragraph_id", "paragraph_text"]),
+                on="paragraph_id",
+                how="left",
+            ).with_columns(pl.col("paragraph_text").fill_null("").alias("unit_text"))
+        match_expr = _literal_text_group_match_expr(
+            pl.col("unit_text"), text_group.texts, "not"
+        )
+        return (
+            unit_df.filter(match_expr)
+            .drop("unit_text")
+            .with_columns([
+                pl.lit(search_scope).alias("unit_scope"),
+                pl.lit(len(text_group.texts)).cast(pl.UInt32).alias("matched_form_count"),
+                pl.lit(True).alias("distance_is_match"),
+            ])
+            .select(list(GROUP_MATCHED_UNIT_SCHEMA.keys()))
+        )
+
+    if search_scope == "sentence":
+        base_df = text_unit_frames.sentence_frame.join(
+            global_candidate_paragraphs_df, on="paragraph_id", how="inner"
+        )
+        if base_df.is_empty():
+            return _empty_group_matched_units_df()
+        unit_df = base_df.select(
+            [
+                "paragraph_id",
+                pl.col("sentence_id").alias("unit_id"),
+                pl.lit("sentence").alias("unit_scope"),
+                pl.col("sentence_text").alias("unit_text"),
+            ]
+        )
+    else:
+        base_df = text_unit_frames.paragraph_frame.join(
+            global_candidate_paragraphs_df, on="paragraph_id", how="inner"
+        )
+        if base_df.is_empty():
+            return _empty_group_matched_units_df()
+        unit_df = base_df.select(
+            [
+                "paragraph_id",
+                pl.col("paragraph_id").alias("unit_id"),
+                pl.lit("paragraph").alias("unit_scope"),
+                pl.col("paragraph_text").alias("unit_text"),
+            ]
+        )
+
+    match_expr = _literal_text_group_match_expr(
+        pl.col("unit_text"), text_group.texts, text_group.match_logic
+    )
+    return (
+        unit_df.filter(match_expr)
+        .drop("unit_text")
+        .with_columns([
+            pl.lit(len(text_group.texts)).cast(pl.UInt32).alias("matched_form_count"),
+            pl.lit(True).alias("distance_is_match"),
+        ])
+        .select(list(GROUP_MATCHED_UNIT_SCHEMA.keys()))
+    )
+
+
+def _build_text_groups_paragraph_eval_df(
+    *,
+    text_unit_frames: TextUnitFrames,
+    global_candidate_paragraphs_df: pl.DataFrame,
+    condition: NormalizedCondition,
+) -> pl.DataFrame:
+    base_keys = global_candidate_paragraphs_df.select("paragraph_id").unique()
+    if base_keys.is_empty():
+        return empty_df({"paragraph_id": pl.Int64, "text_is_match": pl.Boolean})
+
+    if not condition.text_groups:
+        return base_keys.with_columns(pl.lit(True).alias("text_is_match"))
+
+    first_group = condition.text_groups[0]
+    current_matches_df = _build_text_group_matched_units_df(
+        text_unit_frames=text_unit_frames,
+        global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+        text_group=first_group,
+    )
+    current_scope = first_group.search_scope
+    for text_group in condition.text_groups[1:]:
+        next_matches_df = _build_text_group_matched_units_df(
+            text_unit_frames=text_unit_frames,
+            global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+            text_group=text_group,
+        )
+        current_matches_df, current_scope = _combine_group_matches_df(
+            left_matches_df=current_matches_df,
+            left_scope=current_scope,
+            right_matches_df=next_matches_df,
+            right_scope=text_group.search_scope,
+            combine_logic=text_group.combine_logic or "and",
+        )
+
+    if current_matches_df.is_empty():
+        return base_keys.with_columns(pl.lit(False).alias("text_is_match"))
+
+    matched_paragraphs_df = current_matches_df.select("paragraph_id").unique().with_columns(
+        pl.lit(True).alias("_text_hit")
+    )
+    return (
+        base_keys.join(matched_paragraphs_df, on="paragraph_id", how="left")
+        .with_columns(pl.col("_text_hit").fill_null(False).alias("text_is_match"))
+        .drop("_text_hit")
     )
 
 
@@ -1651,6 +1819,7 @@ def _build_base_condition_eval_df(
     global_candidate_paragraphs_df: pl.DataFrame,
     token_paragraph_eval_df: pl.DataFrame,
     annotation_paragraph_eval_df: pl.DataFrame,
+    text_paragraph_eval_df: pl.DataFrame,
     condition: NormalizedCondition,
 ) -> pl.DataFrame:
     required_form_count = len(condition.forms)
@@ -1658,7 +1827,10 @@ def _build_base_condition_eval_df(
     required_category_all_count = len(condition.required_categories_all)
     required_category_any_count = len(condition.required_categories_any)
     distance_check_applied = condition.effective_max_token_distance is not None
-    has_base_clause = bool(condition.forms or condition.annotation_filters)
+    has_token_clause = bool(condition.forms)
+    has_text_clause = bool(condition.text_groups)
+    has_annotation_clause = bool(condition.annotation_filters)
+    has_base_clause = bool(has_token_clause or has_annotation_clause or has_text_clause)
     has_reference_clause = bool(
         condition.required_categories_all or condition.required_categories_any
     )
@@ -1666,22 +1838,35 @@ def _build_base_condition_eval_df(
         global_candidate_paragraphs_df
         .join(token_paragraph_eval_df, on="paragraph_id", how="left")
         .join(annotation_paragraph_eval_df, on="paragraph_id", how="left")
+        .join(text_paragraph_eval_df, on="paragraph_id", how="left")
         .with_columns([
             pl.col("matched_form_count").fill_null(0).cast(pl.UInt32),
             pl.col("evaluated_unit_count").fill_null(0).cast(pl.UInt32),
             pl.col("matched_unit_count").fill_null(0).cast(pl.UInt32),
             pl.col("distance_is_match").fill_null(True if not condition.forms else False),
-            pl.col("token_is_match").fill_null(True if not condition.forms else False),
+            pl.col("token_is_match").fill_null(True if not has_token_clause else False),
             pl.col("matched_annotation_filter_count").fill_null(0).cast(pl.UInt32),
-            pl.col("annotation_is_match").fill_null(True if not condition.annotation_filters else False),
+            pl.col("annotation_is_match").fill_null(True if not has_annotation_clause else False),
+            pl.col("text_is_match").fill_null(False if has_text_clause else True),
             pl.lit(0).cast(pl.UInt32).alias("matched_required_category_count"),
             pl.lit(True).alias("reference_is_match"),
         ])
         .with_columns([
             pl.lit(has_base_clause).alias("has_base_clause"),
             pl.lit(has_reference_clause).alias("has_reference_clause"),
+            pl.lit(has_text_clause).alias("has_text_clause"),
             pl.when(pl.lit(has_base_clause))
-            .then(pl.col("token_is_match") & pl.col("annotation_is_match"))
+            .then(
+                pl.when(pl.lit(has_token_clause))
+                .then(pl.col("token_is_match"))
+                .otherwise(pl.lit(True))
+                & pl.when(pl.lit(has_annotation_clause))
+                .then(pl.col("annotation_is_match"))
+                .otherwise(pl.lit(True))
+                & pl.when(pl.lit(has_text_clause))
+                .then(pl.col("text_is_match"))
+                .otherwise(pl.lit(True))
+            )
             .otherwise(pl.lit(False))
             .alias("base_is_match"),
         ])
@@ -3013,9 +3198,12 @@ def select_target_ids_by_conditions_result(
         if normalized_paragraph_annotations_df is not None and not normalized_paragraph_annotations_df.is_empty()
         else _empty_normalized_paragraph_annotations_df()
     )
+    any_condition_has_text_groups = any(bool(condition.text_groups) for condition in normalized_conditions)
     global_candidate_paragraphs_df = _build_global_candidate_paragraphs_df(
         candidate_tokens_df=candidate_tokens_df,
         normalized_paragraph_annotations_df=normalized_annotations_df,
+        sentences_df=sentences_df,
+        union_all_paragraph_ids_from_sentences=any_condition_has_text_groups,
     )
     if global_candidate_paragraphs_df.is_empty():
         return TargetSelectionResult(
@@ -3048,11 +3236,17 @@ def select_target_ids_by_conditions_result(
             normalized_paragraph_annotations_df=normalized_annotations_df,
             condition=condition,
         )
+        text_paragraph_eval_df = _build_text_groups_paragraph_eval_df(
+            text_unit_frames=text_unit_frames,
+            global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+            condition=condition,
+        )
         base_condition_eval_frames.append(
             _build_base_condition_eval_df(
                 global_candidate_paragraphs_df=global_candidate_paragraphs_df,
                 token_paragraph_eval_df=token_paragraph_eval_df,
                 annotation_paragraph_eval_df=annotation_paragraph_eval_df,
+                text_paragraph_eval_df=text_paragraph_eval_df,
                 condition=condition,
             )
         )

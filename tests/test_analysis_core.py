@@ -2367,6 +2367,106 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(result.target_paragraph_ids, [2])
         self.assertEqual(result.condition_eval_df.get_column("condition_forms").to_list(), [""])
 
+    def test_select_target_ids_by_conditions_result_matches_text_groups_only_without_token_forms(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [9],
+                "sentence_id": [91],
+                "token_no": [0],
+                "normalized_form": ["x"],
+                "surface": ["x"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [91],
+                "paragraph_id": [9],
+                "sentence_no_in_paragraph": [1],
+                "is_table_paragraph": [0],
+                "sentence_text": ["第3条及び別表に定める。"],
+            }
+        )
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="text_only",
+                    categories=["全文"],
+                    category_text="全文",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    text_groups=[
+                        condition_model.NormalizedTextGroup(
+                            texts=["第3条", "別表"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="paragraph",
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [9])
+        eval_row = result.condition_eval_df.row(0, named=True)
+        self.assertTrue(eval_row["text_is_match"])
+        self.assertTrue(eval_row["has_text_clause"])
+        self.assertTrue(eval_row["is_match"])
+
+    def test_select_target_ids_by_conditions_result_token_and_text_groups_are_anded(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [3],
+                "sentence_id": [31],
+                "token_no": [0],
+                "normalized_form": ["届出"],
+                "surface": ["届出"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [31],
+                "paragraph_id": [3],
+                "sentence_no_in_paragraph": [1],
+                "is_table_paragraph": [0],
+                "sentence_text": ["届出に関し別表第一を参照のこと。"],
+            }
+        )
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="token_and_text",
+                    categories=["混在"],
+                    category_text="混在",
+                    forms=["届出"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    text_groups=[
+                        condition_model.NormalizedTextGroup(
+                            texts=["別表第一"],
+                            match_logic="or",
+                            combine_logic=None,
+                            search_scope="paragraph",
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [3])
+        eval_row = result.condition_eval_df.row(0, named=True)
+        self.assertTrue(eval_row["token_is_match"])
+        self.assertTrue(eval_row["text_is_match"])
+        self.assertTrue(eval_row["is_match"])
+
     def test_select_target_ids_by_conditions_result_requires_both_token_and_annotation_match_for_mixed_condition(self) -> None:
         tokens_df = pl.DataFrame(
             {
