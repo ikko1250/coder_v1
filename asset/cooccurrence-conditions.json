@@ -85,25 +85,25 @@
       "categories": [
         "抑制区域"
       ],
-      "overall_search_scope": "paragraph",
-      "form_groups": [
+      "overall_search_scope": "sentence",
+      "text_groups": [
         {
-          "forms": [
-            "抑制",
-            "区域"
+          "texts": [
+            "抑制区域",
+            "抑制地区"
           ],
-          "match_logic": "and",
-          "anchor_form": "抑制",
-          "max_token_distance": 2
-        },
-        {
-          "forms": [
-            "抑制",
-            "地区"
-          ],
-          "match_logic": "and",
-          "combine_logic": "or"
+          "match_logic": "or"
         }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
       ]
     },
     {
@@ -139,24 +139,34 @@
       "categories": [
         "抑制区域(その他)"
       ],
-      "overall_search_scope": "paragraph",
-      "form_groups": [
+      "overall_search_scope": "sentence",
+      "text_groups": [
         {
-          "forms": [
-            "特定",
-            "区域"
+          "texts": [
+            "特定区域"
           ],
-          "match_logic": "and",
-          "anchor_form": "特定",
-          "max_token_distance": 3,
-          "exclude_forms_any": [
+          "match_logic": "or"
+        },
+        {
+          "texts": [
             "景観",
             "事業",
-            "種",
             "設備",
             "施設"
-          ]
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
         }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
       ]
     },
     {
@@ -165,17 +175,23 @@
         "抑制区域(その他)"
       ],
       "overall_search_scope": "sentence",
-      "form_groups": [
+      "text_groups": [
         {
-          "forms": [
-            "設置",
-            "規制",
-            "区域"
+          "texts": [
+            "設置規制区域"
           ],
-          "match_logic": "and",
-          "anchor_form": "設置",
-          "max_token_distance": 5
+          "match_logic": "or"
         }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
       ]
     },
     {
@@ -184,15 +200,23 @@
         "抑制区域(その他)"
       ],
       "overall_search_scope": "sentence",
-      "form_groups": [
+      "text_groups": [
         {
-          "forms": [
-            "要",
-            "協定",
-            "区域"
+          "texts": [
+            "要協定区域"
           ],
-          "match_logic": "and"
+          "match_logic": "or"
         }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
       ]
     },
     {
@@ -201,16 +225,4895 @@
         "抑制区域(ポテンシャル)"
       ],
       "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_agriculture",
+      "categories": [
+        "法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "農地法",
+            "農業振興",
+            "農用地区域",
+            "農振法"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_forest",
+      "categories": [
+        "法令: 森林・保安林"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "森林法",
+            "保安林",
+            "地域森林計画"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_sabo",
+      "categories": [
+        "法令: 砂防指定地"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "砂防法",
+            "砂防指定地"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_landslide",
+      "categories": [
+        "法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "地すべり等防止法",
+            "地すべり防止区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_steep_slope",
+      "categories": [
+        "法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "急傾斜地法",
+            "急傾斜地崩壊危険区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_natural_park",
+      "categories": [
+        "法令: 自然公園"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "自然公園法",
+            "国立公園",
+            "国定公園",
+            "県立自然公園"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_natural_environment",
+      "categories": [
+        "法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "自然環境保全法",
+            "自然環境保全地域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_wildlife",
+      "categories": [
+        "法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "鳥獣保護",
+            "鳥獣捕獲"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_cultural_property",
+      "categories": [
+        "法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "文化財保護",
+            "指定文化財",
+            "登録文化財",
+            "埋蔵文化財",
+            "史跡",
+            "名勝",
+            "天然記念物"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_city_planning",
+      "categories": [
+        "法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "都市計画法",
+            "風致地区",
+            "市街化調整区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_urban_green",
+      "categories": [
+        "法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "都市緑地法",
+            "緑地保全地域",
+            "特別緑地保全地区"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_productive_green",
+      "categories": [
+        "法令: 生産緑地法"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "生産緑地法",
+            "生産緑地地区"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_landscape",
+      "categories": [
+        "法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "景観法",
+            "景観計画",
+            "景観地区"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_river",
+      "categories": [
+        "法令: 河川法"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "河川法",
+            "河川区域",
+            "河川保全区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_flood",
+      "categories": [
+        "法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "水防法",
+            "浸水想定区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_land_development",
+      "categories": [
+        "法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "宅地造成"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_tsunami",
+      "categories": [
+        "法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "津波防災地域づくり",
+            "津波災害警戒区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_specific_urban_river",
+      "categories": [
+        "法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "特定都市河川浸水被害対策法"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_sediment_disaster",
+      "categories": [
+        "法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "土砂災害防止法",
+            "土砂災害警戒区域",
+            "土砂災害特別警戒区域"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_water_resource",
+      "categories": [
+        "法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "水資源保全",
+            "水環境保全"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "law_other_statute",
+      "categories": [
+        "法令: その他/特定法令"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "法第",
+            "法律第",
+            "県条例",
+            "市条例",
+            "町条例",
+            "村条例"
+          ],
+          "match_logic": "or"
+        }
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ]
+    },
+    {
+      "condition_id": "exclude_lead",
+      "categories": [
+        "除外: リード文・条文番号"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "市長は",
+            "次に掲げる",
+            "抑制区域とする",
+            "禁止区域とする",
+            "指定する区域",
+            "指定することができる",
+            "事業を行わないよう",
+            "事業を実施してはならない",
+            "含めてはならない",
+            "同意を得なければ",
+            "別表第",
+            "定義する",
+            "次のとおりとする",
+            "いずれかの区域とする",
+            "次の各号",
+            "事業区域としてはならない"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_procedure",
+      "categories": [
+        "除外: 手続き・適用範囲条文"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "許可を受けなければ",
+            "許可の申請",
+            "申請があったとき",
+            "届け出なければ",
+            "届出の受理",
+            "届け出ることはできない",
+            "同意しないものとする",
+            "同意しないこと",
+            "協議しなければならない",
+            "協議を行う",
+            "勧告することができる",
+            "命ずることができる",
+            "違反し",
+            "罰則",
+            "公表する",
+            "施行日",
+            "附則",
+            "経過措置",
+            "キロワット未満",
+            "キロワット以上",
+            "平方メートル",
+            "建築物の屋根又は屋上",
+            "抑制区域とみなす",
+            "面積の縮小",
+            "面積の拡大",
+            "工事施工者の変更",
+            "設計者の変更",
+            "事業着手の変更",
+            "完了の変更",
+            "規則で定めるところにより",
+            "総合計画に適合",
+            "都市計画に適合",
+            "措置が講じられている",
+            "関係町内会等の同意",
+            "説明会",
+            "協議を適切に",
+            "虚偽の届出",
+            "虚偽の協議",
+            "聴取を要さない",
+            "該当しないもの"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_reference_only",
+      "categories": [
+        "除外: 別図・別表参照"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "別図",
+            "別表に掲げる区域",
+            "規則で定める区域",
+            "一体的な区域として別図"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_definition",
+      "categories": [
+        "除外: 定義条文"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "をいう。",
+            "をいう",
+            "再生可能エネルギー",
+            "事業者をいう",
+            "事業区域をいう",
+            "住民等をいう",
+            "行政区をいう"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_sanction",
+      "categories": [
+        "除外: 罰則・許可基準"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "着手したとき",
+            "従わなかったとき",
+            "講じなかったとき",
+            "怠り",
+            "拒み",
+            "妨げ",
+            "忌避",
+            "答弁",
+            "被害を与えたとき",
+            "被害を与えるおそれ",
+            "禁止区域を含まないこと",
+            "を設置したとき",
+            "営牧場",
+            "事前確認を行わなければ",
+            "努めなければならない"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_approval_criteria",
+      "categories": [
+        "除外: 許可基準・書類"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "基準に適合していること",
+            "写し",
+            "現況",
+            "土地利用",
+            "雨水",
+            "排水",
+            "求積"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_zone_definition",
+      "categories": [
+        "除外: 区域定義・確認"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "禁止区域を除く区域",
+            "禁止区域・抑制区域の確認",
+            "事業禁止区域",
+            "禁止区域の確認",
+            "抑制区域の確認"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "exclude_catch_all",
+      "categories": [
+        "除外: 包括条項・その他"
+      ],
+      "overall_search_scope": "sentence",
+      "text_groups": [
+        {
+          "texts": [
+            "前各号",
+            "前号",
+            "その他市長",
+            "その他規則",
+            "必要と認め",
+            "準ずる",
+            "配慮が必要",
+            "著しい影響",
+            "その他の区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__agriculture",
+      "categories": [
+        "抽出:表(抑制区域):法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_agriculture"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
       "form_groups": [
         {
           "forms": [
-            "設置",
-            "適当",
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
             "区域"
           ],
           "match_logic": "and",
-          "anchor_form": "設置",
-          "max_token_distance": 6
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__forest",
+      "categories": [
+        "抽出:表(抑制区域):法令: 森林・保安林"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_forest"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__sabo",
+      "categories": [
+        "抽出:表(抑制区域):法令: 砂防指定地"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_sabo"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__landslide",
+      "categories": [
+        "抽出:表(抑制区域):法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_landslide"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__steep_slope",
+      "categories": [
+        "抽出:表(抑制区域):法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_steep_slope"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__natural_park",
+      "categories": [
+        "抽出:表(抑制区域):法令: 自然公園"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_natural_park"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__natural_environment",
+      "categories": [
+        "抽出:表(抑制区域):法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_natural_environment"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__wildlife",
+      "categories": [
+        "抽出:表(抑制区域):法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_wildlife"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__cultural_property",
+      "categories": [
+        "抽出:表(抑制区域):法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_cultural_property"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__city_planning",
+      "categories": [
+        "抽出:表(抑制区域):法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_city_planning"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__urban_green",
+      "categories": [
+        "抽出:表(抑制区域):法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_urban_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__productive_green",
+      "categories": [
+        "抽出:表(抑制区域):法令: 生産緑地法"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_productive_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__landscape",
+      "categories": [
+        "抽出:表(抑制区域):法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_landscape"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__river",
+      "categories": [
+        "抽出:表(抑制区域):法令: 河川法"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__flood",
+      "categories": [
+        "抽出:表(抑制区域):法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_flood"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__land_development",
+      "categories": [
+        "抽出:表(抑制区域):法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_land_development"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__tsunami",
+      "categories": [
+        "抽出:表(抑制区域):法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_tsunami"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__specific_urban_river",
+      "categories": [
+        "抽出:表(抑制区域):法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_specific_urban_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__sediment_disaster",
+      "categories": [
+        "抽出:表(抑制区域):法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_sediment_disaster"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__water_resource",
+      "categories": [
+        "抽出:表(抑制区域):法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_water_resource"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_table__other_statute",
+      "categories": [
+        "抽出:表(抑制区域):法令: その他/特定法令"
+      ],
+      "overall_search_scope": "paragraph",
+      "required_condition_ids_all": [
+        "table",
+        "law_other_statute"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_procedure",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "form_groups": [
+        {
+          "forms": [
+            "|"
+          ],
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
+          "combine_logic": "and",
+          "max_token_distance": 2
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__agriculture",
+      "categories": [
+        "抽出:抑制区域:法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_agriculture"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__forest",
+      "categories": [
+        "抽出:抑制区域:法令: 森林・保安林"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_forest"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__sabo",
+      "categories": [
+        "抽出:抑制区域:法令: 砂防指定地"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_sabo"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__landslide",
+      "categories": [
+        "抽出:抑制区域:法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_landslide"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__steep_slope",
+      "categories": [
+        "抽出:抑制区域:法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_steep_slope"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__natural_park",
+      "categories": [
+        "抽出:抑制区域:法令: 自然公園"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_natural_park"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__natural_environment",
+      "categories": [
+        "抽出:抑制区域:法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_natural_environment"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__wildlife",
+      "categories": [
+        "抽出:抑制区域:法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_wildlife"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__cultural_property",
+      "categories": [
+        "抽出:抑制区域:法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_cultural_property"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__city_planning",
+      "categories": [
+        "抽出:抑制区域:法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_city_planning"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__urban_green",
+      "categories": [
+        "抽出:抑制区域:法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_urban_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__productive_green",
+      "categories": [
+        "抽出:抑制区域:法令: 生産緑地法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_productive_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__landscape",
+      "categories": [
+        "抽出:抑制区域:法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_landscape"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__river",
+      "categories": [
+        "抽出:抑制区域:法令: 河川法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__flood",
+      "categories": [
+        "抽出:抑制区域:法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_flood"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__land_development",
+      "categories": [
+        "抽出:抑制区域:法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_land_development"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__tsunami",
+      "categories": [
+        "抽出:抑制区域:法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_tsunami"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__specific_urban_river",
+      "categories": [
+        "抽出:抑制区域:法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_specific_urban_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__sediment_disaster",
+      "categories": [
+        "抽出:抑制区域:法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_sediment_disaster"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__water_resource",
+      "categories": [
+        "抽出:抑制区域:法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_water_resource"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_area_lv1__other_statute",
+      "categories": [
+        "抽出:抑制区域:法令: その他/特定法令"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "area_lv1",
+        "law_other_statute"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "抑制区域",
+            "抑制地区"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__agriculture",
+      "categories": [
+        "抽出:特定区域:法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_agriculture"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__forest",
+      "categories": [
+        "抽出:特定区域:法令: 森林・保安林"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_forest"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__sabo",
+      "categories": [
+        "抽出:特定区域:法令: 砂防指定地"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_sabo"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__landslide",
+      "categories": [
+        "抽出:特定区域:法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_landslide"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__steep_slope",
+      "categories": [
+        "抽出:特定区域:法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_steep_slope"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__natural_park",
+      "categories": [
+        "抽出:特定区域:法令: 自然公園"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_natural_park"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__natural_environment",
+      "categories": [
+        "抽出:特定区域:法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_natural_environment"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__wildlife",
+      "categories": [
+        "抽出:特定区域:法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_wildlife"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__cultural_property",
+      "categories": [
+        "抽出:特定区域:法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_cultural_property"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__city_planning",
+      "categories": [
+        "抽出:特定区域:法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_city_planning"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__urban_green",
+      "categories": [
+        "抽出:特定区域:法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_urban_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__productive_green",
+      "categories": [
+        "抽出:特定区域:法令: 生産緑地法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_productive_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__landscape",
+      "categories": [
+        "抽出:特定区域:法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_landscape"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__river",
+      "categories": [
+        "抽出:特定区域:法令: 河川法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__flood",
+      "categories": [
+        "抽出:特定区域:法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_flood"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__land_development",
+      "categories": [
+        "抽出:特定区域:法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_land_development"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__tsunami",
+      "categories": [
+        "抽出:特定区域:法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_tsunami"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__specific_urban_river",
+      "categories": [
+        "抽出:特定区域:法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_specific_urban_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__sediment_disaster",
+      "categories": [
+        "抽出:特定区域:法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_sediment_disaster"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__water_resource",
+      "categories": [
+        "抽出:特定区域:法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_water_resource"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_tokutei__other_statute",
+      "categories": [
+        "抽出:特定区域:法令: その他/特定法令"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "特定区域",
+        "law_other_statute"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "特定区域"
+          ],
+          "match_logic": "or"
+        },
+        {
+          "texts": [
+            "景観",
+            "事業",
+            "設備",
+            "施設"
+          ],
+          "match_logic": "not",
+          "combine_logic": "and"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__agriculture",
+      "categories": [
+        "抽出:設置規制区域:法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_agriculture"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__forest",
+      "categories": [
+        "抽出:設置規制区域:法令: 森林・保安林"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_forest"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__sabo",
+      "categories": [
+        "抽出:設置規制区域:法令: 砂防指定地"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_sabo"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__landslide",
+      "categories": [
+        "抽出:設置規制区域:法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_landslide"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__steep_slope",
+      "categories": [
+        "抽出:設置規制区域:法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_steep_slope"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__natural_park",
+      "categories": [
+        "抽出:設置規制区域:法令: 自然公園"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_natural_park"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__natural_environment",
+      "categories": [
+        "抽出:設置規制区域:法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_natural_environment"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__wildlife",
+      "categories": [
+        "抽出:設置規制区域:法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_wildlife"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__cultural_property",
+      "categories": [
+        "抽出:設置規制区域:法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_cultural_property"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__city_planning",
+      "categories": [
+        "抽出:設置規制区域:法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_city_planning"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__urban_green",
+      "categories": [
+        "抽出:設置規制区域:法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_urban_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__productive_green",
+      "categories": [
+        "抽出:設置規制区域:法令: 生産緑地法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_productive_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__landscape",
+      "categories": [
+        "抽出:設置規制区域:法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_landscape"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__river",
+      "categories": [
+        "抽出:設置規制区域:法令: 河川法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__flood",
+      "categories": [
+        "抽出:設置規制区域:法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_flood"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__land_development",
+      "categories": [
+        "抽出:設置規制区域:法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_land_development"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__tsunami",
+      "categories": [
+        "抽出:設置規制区域:法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_tsunami"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__specific_urban_river",
+      "categories": [
+        "抽出:設置規制区域:法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_specific_urban_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__sediment_disaster",
+      "categories": [
+        "抽出:設置規制区域:法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_sediment_disaster"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__water_resource",
+      "categories": [
+        "抽出:設置規制区域:法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_water_resource"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_kisei__other_statute",
+      "categories": [
+        "抽出:設置規制区域:法令: その他/特定法令"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置規制区域",
+        "law_other_statute"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置規制区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__agriculture",
+      "categories": [
+        "抽出:要協定区域:法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_agriculture"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__forest",
+      "categories": [
+        "抽出:要協定区域:法令: 森林・保安林"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_forest"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__sabo",
+      "categories": [
+        "抽出:要協定区域:法令: 砂防指定地"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_sabo"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__landslide",
+      "categories": [
+        "抽出:要協定区域:法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_landslide"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__steep_slope",
+      "categories": [
+        "抽出:要協定区域:法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_steep_slope"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__natural_park",
+      "categories": [
+        "抽出:要協定区域:法令: 自然公園"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_natural_park"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__natural_environment",
+      "categories": [
+        "抽出:要協定区域:法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_natural_environment"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__wildlife",
+      "categories": [
+        "抽出:要協定区域:法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_wildlife"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__cultural_property",
+      "categories": [
+        "抽出:要協定区域:法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_cultural_property"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__city_planning",
+      "categories": [
+        "抽出:要協定区域:法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_city_planning"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__urban_green",
+      "categories": [
+        "抽出:要協定区域:法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_urban_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__productive_green",
+      "categories": [
+        "抽出:要協定区域:法令: 生産緑地法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_productive_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__landscape",
+      "categories": [
+        "抽出:要協定区域:法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_landscape"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__river",
+      "categories": [
+        "抽出:要協定区域:法令: 河川法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__flood",
+      "categories": [
+        "抽出:要協定区域:法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_flood"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__land_development",
+      "categories": [
+        "抽出:要協定区域:法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_land_development"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__tsunami",
+      "categories": [
+        "抽出:要協定区域:法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_tsunami"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__specific_urban_river",
+      "categories": [
+        "抽出:要協定区域:法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_specific_urban_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__sediment_disaster",
+      "categories": [
+        "抽出:要協定区域:法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_sediment_disaster"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__water_resource",
+      "categories": [
+        "抽出:要協定区域:法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_water_resource"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_yo_kyotei__other_statute",
+      "categories": [
+        "抽出:要協定区域:法令: その他/特定法令"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "要協定区域",
+        "law_other_statute"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "要協定区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__agriculture",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 農地・農業振興"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_agriculture"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__forest",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 森林・保安林"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_forest"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__sabo",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 砂防指定地"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_sabo"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__landslide",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 地すべり防止区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_landslide"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__steep_slope",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 急傾斜地崩壊危険区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_steep_slope"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__natural_park",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 自然公園"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_natural_park"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__natural_environment",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 自然環境保全法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_natural_environment"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__wildlife",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 鳥獣保護区"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_wildlife"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__cultural_property",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 文化財・史跡"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_cultural_property"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__city_planning",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 都市計画(風致・調整区域等)"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_city_planning"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__urban_green",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 都市緑地法・緑地保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_urban_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__productive_green",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 生産緑地法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_productive_green"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__landscape",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 景観法・景観計画"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_landscape"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__river",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 河川法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__flood",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 水防法・浸水想定"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_flood"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__land_development",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 宅地造成規制区域"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_land_development"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__tsunami",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 津波防災・津波災害"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_tsunami"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__specific_urban_river",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 特定都市河川浸水被害対策法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_specific_urban_river"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__sediment_disaster",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 土砂災害防止法"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_sediment_disaster"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__water_resource",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: 水資源・水環境保全"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_water_resource"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
+        }
+      ]
+    },
+    {
+      "condition_id": "extract_setchi_futekito__other_statute",
+      "categories": [
+        "抽出:設置が適当でない区域:法令: その他/特定法令"
+      ],
+      "overall_search_scope": "sentence",
+      "required_condition_ids_all": [
+        "設置が適当でない区域",
+        "law_other_statute"
+      ],
+      "excluded_condition_ids_any": [
+        "exclude_lead",
+        "exclude_procedure",
+        "exclude_reference_only",
+        "exclude_definition",
+        "exclude_sanction",
+        "exclude_approval_criteria",
+        "exclude_zone_definition",
+        "exclude_catch_all"
+      ],
+      "text_groups": [
+        {
+          "texts": [
+            "設置が適当でない区域"
+          ],
+          "match_logic": "or"
         }
       ]
     }
