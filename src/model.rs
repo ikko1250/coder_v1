@@ -48,6 +48,7 @@ pub(crate) struct AnalysisRecord {
     pub(crate) matched_form_group_ids_text: String,
     pub(crate) matched_form_group_logics_text: String,
     pub(crate) form_group_explanations_text: String,
+    pub(crate) text_groups_explanations_text: String,
     pub(crate) mixed_scope_warning_text: String,
     pub(crate) match_group_ids_text: String,
     pub(crate) match_group_count: String,

@@ -1398,6 +1398,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text": [""],
                 "matched_form_group_logics_text": [""],
                 "form_group_explanations_text": [""],
+                "text_groups_explanations_text": [""],
                 "mixed_scope_warning_text": [""],
             }
         )
@@ -1474,6 +1475,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text": [""],
                 "matched_form_group_logics_text": [""],
                 "form_group_explanations_text": [""],
+                "text_groups_explanations_text": [""],
                 "mixed_scope_warning_text": [""],
             }
         )
@@ -2464,6 +2466,10 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertTrue(eval_row["text_is_match"])
         self.assertTrue(eval_row["has_text_clause"])
         self.assertTrue(eval_row["is_match"])
+        summary_row = result.paragraph_match_summary_df.row(0, named=True)
+        self.assertIn("[text_only]", summary_row["text_groups_explanations_text"])
+        self.assertIn("tg1:", summary_row["text_groups_explanations_text"])
+        self.assertIn("第3条", summary_row["text_groups_explanations_text"])
 
     def test_select_target_ids_by_conditions_result_token_and_text_groups_are_anded(self) -> None:
         tokens_df = pl.DataFrame(
@@ -2718,6 +2724,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text": ["manual_zone:g1"],
                 "matched_form_group_logics_text": ["manual_zone:g1=and"],
                 "form_group_explanations_text": ["[manual_zone]\ng1: and forms=[区域] scope=paragraph"],
+                "text_groups_explanations_text": [""],
                 "mixed_scope_warning_text": [""],
             }
         )
@@ -2803,6 +2810,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text": ["para:g1"],
                 "matched_form_group_logics_text": ["para:g1=and"],
                 "form_group_explanations_text": ["[para]\ng1: and forms=[抑制区域] scope=paragraph"],
+                "text_groups_explanations_text": [""],
                 "mixed_scope_warning_text": ["paragraph 条件を sentence 表示へ昇格"],
             }
         )
@@ -2819,6 +2827,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(row["matched_form_group_ids_text"], "para:g1")
         self.assertEqual(row["matched_form_group_logics_text"], "para:g1=and")
         self.assertIn("g1: and forms=[抑制区域] scope=paragraph", row["form_group_explanations_text"])
+        self.assertEqual(row["text_groups_explanations_text"], "")
         self.assertEqual(row["mixed_scope_warning_text"], "paragraph 条件を sentence 表示へ昇格")
 
     def test_build_reconstructed_paragraphs_export_df_keeps_required_columns(self) -> None:
@@ -2840,6 +2849,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text": ["a:g1"],
                 "matched_form_group_logics_text": ["a:g1=and"],
                 "form_group_explanations_text": ["[a]\ng1: and forms=[抑制区域] scope=paragraph"],
+                "text_groups_explanations_text": [""],
                 "mixed_scope_warning_text": [""],
                 "match_group_ids": [["c", "d"]],
                 "match_group_count": [2],
@@ -2868,6 +2878,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text",
                 "matched_form_group_logics_text",
                 "form_group_explanations_text",
+                "text_groups_explanations_text",
                 "mixed_scope_warning_text",
                 "match_group_ids_text",
                 "match_group_count",
@@ -2899,6 +2910,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                 "matched_form_group_ids_text": pl.String,
                 "matched_form_group_logics_text": pl.String,
                 "form_group_explanations_text": pl.String,
+                "text_groups_explanations_text": pl.String,
                 "mixed_scope_warning_text": pl.String,
                 "match_group_ids": pl.List(pl.String),
                 "match_group_count": pl.UInt32,
@@ -2923,6 +2935,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
                     "a:g1=and",
                     "[a]\ng1: and forms=[抑制区域] scope=paragraph",
                     "",
+                    "",
                     ["c", "d"],
                     2,
                     1,
@@ -2943,6 +2956,7 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(export_df.schema["matched_form_group_ids_text"], pl.String)
         self.assertEqual(export_df.schema["matched_form_group_logics_text"], pl.String)
         self.assertEqual(export_df.schema["form_group_explanations_text"], pl.String)
+        self.assertEqual(export_df.schema["text_groups_explanations_text"], pl.String)
         self.assertEqual(export_df.schema["mixed_scope_warning_text"], pl.String)
         self.assertEqual(export_df.schema["match_group_ids_text"], pl.String)
         self.assertEqual(export_df.schema["manual_annotation_count"], pl.UInt32)

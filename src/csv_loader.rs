@@ -89,6 +89,7 @@ pub(crate) fn load_records(path: &PathBuf) -> Result<Vec<AnalysisRecord>, String
             matched_form_group_ids_text: get(&row, "matched_form_group_ids_text"),
             matched_form_group_logics_text: get(&row, "matched_form_group_logics_text"),
             form_group_explanations_text: get(&row, "form_group_explanations_text"),
+            text_groups_explanations_text: get(&row, "text_groups_explanations_text"),
             mixed_scope_warning_text: get(&row, "mixed_scope_warning_text"),
             match_group_ids_text: get(&row, "match_group_ids_text"),
             match_group_count: get(&row, "match_group_count"),

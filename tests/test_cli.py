@@ -282,6 +282,78 @@ def build_table_paragraph_test_db(db_path: Path) -> None:
         connection.close()
 
 
+def build_sentence_unit_empty_sentence_test_db(db_path: Path) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE analysis_tokens (
+                paragraph_id INTEGER,
+                sentence_id INTEGER,
+                token_no INTEGER,
+                normalized_form TEXT,
+                surface TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_sentences (
+                sentence_id INTEGER,
+                paragraph_id INTEGER,
+                sentence_no_in_paragraph INTEGER
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_paragraphs (
+                paragraph_id INTEGER,
+                document_id INTEGER
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE analysis_documents (
+                document_id INTEGER,
+                municipality_name TEXT,
+                doc_type TEXT
+            )
+            """
+        )
+
+        cursor.executemany(
+            "INSERT INTO analysis_tokens VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, 11, 0, "その他", "その他"),
+                (1, 11, 1, "規定", "規定"),
+            ],
+        )
+        cursor.executemany(
+            "INSERT INTO analysis_sentences VALUES (?, ?, ?)",
+            [
+                (11, 1, 1),
+                (21, 2, 1),
+            ],
+        )
+        cursor.executemany(
+            "INSERT INTO analysis_paragraphs VALUES (?, ?)",
+            [
+                (1, 100),
+                (2, 100),
+            ],
+        )
+        cursor.execute(
+            "INSERT INTO analysis_documents VALUES (?, ?, ?)",
+            (100, "テスト市", "条例"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def build_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "any",
@@ -376,6 +448,33 @@ def build_sentence_unit_paragraph_scope_filter_config(filter_config_path: Path) 
     )
 
 
+def build_sentence_unit_annotation_only_filter_config(filter_config_path: Path) -> None:
+    payload = {
+        "analysis_unit": "sentence",
+        "condition_match_logic": "any",
+        "max_reconstructed_paragraphs": 10,
+        "cooccurrence_conditions": [
+            {
+                "condition_id": "manual_zone",
+                "categories": ["区域類型:抑制"],
+                "forms": [],
+                "search_scope": "paragraph",
+                "annotation_filters": [
+                    {
+                        "namespace": "zoning",
+                        "key": "zone_strength",
+                        "value": "suppression",
+                    }
+                ],
+            }
+        ],
+    }
+    filter_config_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def build_warning_filter_config(filter_config_path: Path) -> None:
     payload = {
         "condition_match_logic": "unexpected",
@@ -454,6 +553,18 @@ def build_manual_annotations_csv(annotation_csv_path: Path) -> None:
                 "paragraph,1,zoning,zone_strength,suppression,alice,2026-03-17,high,first",
                 "paragraph,1,zoning,zone_strength,suppression,alice,2026-03-17,high,duplicate",
                 "paragraph,1,procedure,requires_prior_consultation,true,alice,2026-03-17,high,second",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def build_manual_annotations_for_empty_sentence_csv(annotation_csv_path: Path) -> None:
+    annotation_csv_path.write_text(
+        "\n".join(
+            [
+                "target_type,target_id,label_namespace,label_key,label_value,tagged_by,tagged_at,confidence,note",
+                "paragraph,2,zoning,zone_strength,suppression,alice,2026-03-17,high,empty-sentence",
             ]
         ),
         encoding="utf-8",
@@ -712,6 +823,7 @@ class CliContractTests(unittest.TestCase):
                     "matched_form_group_ids_text",
                     "matched_form_group_logics_text",
                     "form_group_explanations_text",
+                    "text_groups_explanations_text",
                     "mixed_scope_warning_text",
                     "match_group_ids_text",
                     "match_group_count",
@@ -957,6 +1069,11 @@ class CliContractTests(unittest.TestCase):
                     "sentence_text_highlight_html",
                     "matched_condition_ids_text",
                     "matched_categories_text",
+                    "matched_form_group_ids_text",
+                    "matched_form_group_logics_text",
+                    "form_group_explanations_text",
+                    "text_groups_explanations_text",
+                    "mixed_scope_warning_text",
                     "match_group_ids_text",
                     "match_group_count",
                     "annotated_token_count",
@@ -1091,6 +1208,43 @@ class CliContractTests(unittest.TestCase):
                 "suppress_area_paragraph",
             )
             self.assertNotIn("[[HIT ", rows_by_sentence["12"]["sentence_text_tagged"])
+
+    def test_run_analysis_job_sentence_unit_prunes_meta_when_selected_paragraph_has_no_displayable_sentences(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / "analysis.db"
+            filter_config_path = temp_path / "conditions.json"
+            annotation_csv_path = temp_path / "manual-annotations.csv"
+            output_dir = temp_path / "job"
+            build_sentence_unit_empty_sentence_test_db(db_path)
+            build_sentence_unit_annotation_only_filter_config(filter_config_path)
+            build_manual_annotations_for_empty_sentence_csv(annotation_csv_path)
+            args = Namespace(
+                job_id="sentence-empty-paragraph-job",
+                db_path=str(db_path),
+                filter_config_path=str(filter_config_path),
+                annotation_csv_path=str(annotation_csv_path),
+                output_dir=str(output_dir),
+                output_csv_path=None,
+                output_meta_json_path=None,
+                limit_rows=None,
+                output_format="json",
+            )
+
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                return_code = run_analysis_job(args)
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(stderr_buffer.getvalue(), "")
+
+            payload = json.loads(stdout_buffer.getvalue())
+            self.assertEqual(payload["meta"]["analysisUnit"], "sentence")
+            self.assertEqual(payload["meta"]["targetParagraphCount"], 1)
+            self.assertEqual(payload["meta"]["selectedParagraphCount"], 0)
+            self.assertEqual(payload["meta"]["selectedSentenceCount"], 0)
+            self.assertEqual(payload["records"], [])
 
     def test_run_analysis_job_emits_sentence_records_for_json_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

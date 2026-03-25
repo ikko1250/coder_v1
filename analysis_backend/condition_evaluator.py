@@ -65,6 +65,7 @@ PARAGRAPH_SUMMARY_SCHEMA = {
     "matched_form_group_ids_text": pl.String,
     "matched_form_group_logics_text": pl.String,
     "form_group_explanations_text": pl.String,
+    "text_groups_explanations_text": pl.String,
     "mixed_scope_warning_text": pl.String,
 }
 NORMALIZED_PARAGRAPH_ANNOTATION_SCHEMA = {
@@ -543,6 +544,125 @@ def _build_form_group_summary_df(
                 "matched_form_group_logics_text": " | ".join(row["matched_form_group_logics_text"]),
                 "form_group_explanations_text": "\n\n".join(row["form_group_explanations_text"]),
                 "mixed_scope_warning_text": "\n".join(row["mixed_scope_warning_text"]),
+            }
+        )
+    return (
+        pl.DataFrame(rows, schema=summary_schema)
+        .sort("paragraph_id")
+    )
+
+
+def _text_group_logic_text(text_group: NormalizedTextGroup, group_index: int) -> str:
+    if group_index == 1:
+        return text_group.match_logic
+    return f"{text_group.combine_logic or 'and'} {text_group.match_logic}"
+
+
+def _build_text_group_explanation_lines(
+    *,
+    condition: NormalizedCondition,
+    eval_row: dict[str, object],
+) -> list[str]:
+    explanation_lines: list[str] = []
+    evaluated_unit_count = int(eval_row.get("evaluated_unit_count", 0) or 0)
+    for group_index, text_group in enumerate(condition.text_groups, start=1):
+        logic_text = _text_group_logic_text(text_group, group_index)
+        line_parts = [f"tg{group_index}: {logic_text}"]
+        if text_group.match_logic == "not":
+            line_parts.append(
+                f"absent_texts=[{', '.join(text_group.texts)}] in "
+                f"{_format_scope_unit_label(text_group.search_scope, evaluated_unit_count)}"
+            )
+        else:
+            line_parts.append(f"texts=[{', '.join(text_group.texts)}]")
+            line_parts.append(f"scope={text_group.search_scope}")
+        explanation_lines.append(" ".join(line_parts))
+    return explanation_lines
+
+
+def _merge_paragraph_mixed_scope_warning_exprs(
+    form_warnings: pl.Expr,
+    text_warnings: pl.Expr,
+) -> pl.Expr:
+    form_f = form_warnings.fill_null("")
+    text_f = text_warnings.fill_null("")
+    return (
+        pl.when((form_f != "") & (text_f != ""))
+        .then(pl.concat_str([form_f, text_f], separator="\n"))
+        .when(form_f != "")
+        .then(form_f)
+        .when(text_f != "")
+        .then(text_f)
+        .otherwise(pl.lit(""))
+    )
+
+
+def _build_text_group_summary_df(
+    *,
+    condition_eval_df: pl.DataFrame,
+    normalized_conditions: list[NormalizedCondition],
+    match_column: str,
+) -> pl.DataFrame:
+    summary_schema = {
+        "paragraph_id": pl.Int64,
+        "text_groups_explanations_text": pl.String,
+        "text_mixed_scope_warning_text": pl.String,
+    }
+    if condition_eval_df.is_empty():
+        return empty_df(summary_schema)
+
+    condition_lookup = {
+        condition.condition_id: condition
+        for condition in normalized_conditions
+        if condition.text_groups
+    }
+    if not condition_lookup:
+        return empty_df(summary_schema)
+
+    paragraph_rows: dict[int, dict[str, object]] = {}
+    matched_rows = (
+        condition_eval_df
+        .filter(pl.col(match_column))
+        .sort(["paragraph_id", "condition_id"])
+        .iter_rows(named=True)
+    )
+    for eval_row in matched_rows:
+        condition_id = str(eval_row["condition_id"])
+        condition = condition_lookup.get(condition_id)
+        if condition is None:
+            continue
+        paragraph_id = int(eval_row["paragraph_id"])
+        paragraph_row = paragraph_rows.setdefault(
+            paragraph_id,
+            {
+                "paragraph_id": paragraph_id,
+                "text_groups_explanations_text": [],
+                "mixed_scope_warning_text": [],
+            },
+        )
+        scope_values = sorted({text_group.search_scope for text_group in condition.text_groups})
+        explanation_lines = _build_text_group_explanation_lines(
+            condition=condition,
+            eval_row=eval_row,
+        )
+        condition_block_lines = [f"[{condition_id}]"]
+        condition_block_lines.extend(explanation_lines)
+        paragraph_row["text_groups_explanations_text"].append("\n".join(condition_block_lines))
+        if len(scope_values) >= 2:
+            paragraph_row["mixed_scope_warning_text"].append(
+                f"{condition_id}: text_groups mixed-scope promoted to paragraph ({' + '.join(scope_values)})"
+            )
+
+    if not paragraph_rows:
+        return empty_df(summary_schema)
+
+    rows: list[dict[str, object]] = []
+    for row in paragraph_rows.values():
+        rows.append(
+            {
+                "paragraph_id": row["paragraph_id"],
+                "text_groups_explanations_text": "\n\n".join(row["text_groups_explanations_text"]),
+                "text_mixed_scope_warning_text": "\n".join(row["mixed_scope_warning_text"]),
             }
         )
     return (
@@ -2016,11 +2136,17 @@ def _build_paragraph_match_summary_df(
         normalized_conditions=normalized_conditions,
         match_column=match_column,
     )
+    text_group_summary_df = _build_text_group_summary_df(
+        condition_eval_df=sorted_eval_df,
+        normalized_conditions=normalized_conditions,
+        match_column=match_column,
+    )
     return (
         base_summary_df
         .join(matched_condition_ids_df, on="paragraph_id", how="left")
         .join(matched_categories_df, on="paragraph_id", how="left")
         .join(form_group_summary_df, on="paragraph_id", how="left")
+        .join(text_group_summary_df, on="paragraph_id", how="left")
         .with_columns([
             pl.when(pl.col("matched_condition_ids").is_null())
             .then(pl.lit([], dtype=pl.List(pl.String)))
@@ -2037,8 +2163,15 @@ def _build_paragraph_match_summary_df(
             pl.col("matched_form_group_ids_text").fill_null(""),
             pl.col("matched_form_group_logics_text").fill_null(""),
             pl.col("form_group_explanations_text").fill_null(""),
-            pl.col("mixed_scope_warning_text").fill_null(""),
+            pl.col("text_groups_explanations_text").fill_null(""),
         ])
+        .with_columns(
+            _merge_paragraph_mixed_scope_warning_exprs(
+                pl.col("mixed_scope_warning_text"),
+                pl.col("text_mixed_scope_warning_text"),
+            ).alias("mixed_scope_warning_text"),
+        )
+        .drop("text_mixed_scope_warning_text")
         .select(list(PARAGRAPH_SUMMARY_SCHEMA.keys()))
         .sort("paragraph_id")
     )
@@ -2163,6 +2296,7 @@ def _build_paragraph_match_summary_from_sentence_summary_df(
             pl.lit("").alias("matched_form_group_ids_text"),
             pl.lit("").alias("matched_form_group_logics_text"),
             pl.lit("").alias("form_group_explanations_text"),
+            pl.lit("").alias("text_groups_explanations_text"),
             pl.lit("").alias("mixed_scope_warning_text"),
         ])
         .select(list(PARAGRAPH_SUMMARY_SCHEMA.keys()))
@@ -3136,6 +3270,7 @@ def select_target_ids_by_conditions_result(
                     "matched_form_group_ids_text": "",
                     "matched_form_group_logics_text": "",
                     "form_group_explanations_text": "",
+                    "text_groups_explanations_text": "",
                     "mixed_scope_warning_text": "",
                 }
             )
@@ -3159,6 +3294,7 @@ def select_target_ids_by_conditions_result(
                     "matched_form_group_ids_text",
                     "matched_form_group_logics_text",
                     "form_group_explanations_text",
+                    "text_groups_explanations_text",
                     "mixed_scope_warning_text",
                 ]
             ).iter_rows(named=True):
@@ -3169,6 +3305,7 @@ def select_target_ids_by_conditions_result(
                         "matched_form_group_ids_text": "",
                         "matched_form_group_logics_text": "",
                         "form_group_explanations_text": "",
+                        "text_groups_explanations_text": "",
                         "mixed_scope_warning_text": "",
                     },
                 )
@@ -3176,6 +3313,7 @@ def select_target_ids_by_conditions_result(
                     "matched_form_group_ids_text",
                     "matched_form_group_logics_text",
                     "form_group_explanations_text",
+                    "text_groups_explanations_text",
                     "mixed_scope_warning_text",
                 ]:
                     value = str(row[key] or "").strip()
@@ -3208,6 +3346,10 @@ def select_target_ids_by_conditions_result(
                         .then(pl.col("form_group_explanations_text_detail"))
                         .otherwise(pl.col("form_group_explanations_text"))
                         .alias("form_group_explanations_text"),
+                        pl.when(pl.col("text_groups_explanations_text_detail").is_not_null())
+                        .then(pl.col("text_groups_explanations_text_detail"))
+                        .otherwise(pl.col("text_groups_explanations_text"))
+                        .alias("text_groups_explanations_text"),
                         pl.when(pl.col("mixed_scope_warning_text_detail").is_not_null())
                         .then(pl.col("mixed_scope_warning_text_detail"))
                         .otherwise(pl.col("mixed_scope_warning_text"))
