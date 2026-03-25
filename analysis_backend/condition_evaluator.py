@@ -2235,6 +2235,7 @@ def _build_paragraph_categories_from_sentence_hits(
             schema={
                 "paragraph_id": pl.Int64,
                 "matched_categories": pl.List(pl.String),
+                "matched_condition_ids": pl.List(pl.String),
             }
         )
 
@@ -2246,15 +2247,29 @@ def _build_paragraph_categories_from_sentence_hits(
         .group_by("paragraph_id")
         .agg(pl.col("categories").sort().unique().alias("matched_categories"))
     )
+    matched_condition_ids_df = (
+        condition_hit_tokens_df
+        .select(["paragraph_id", "condition_id"])
+        .filter(pl.col("condition_id").is_not_null() & (pl.col("condition_id") != ""))
+        .group_by("paragraph_id")
+        .agg(pl.col("condition_id").sort().unique().alias("matched_condition_ids"))
+    )
     paragraph_ids_df = condition_hit_tokens_df.select("paragraph_id").unique().sort("paragraph_id")
     return (
         paragraph_ids_df
         .join(matched_categories_df, on="paragraph_id", how="left")
+        .join(matched_condition_ids_df, on="paragraph_id", how="left")
         .with_columns(
-            pl.when(pl.col("matched_categories").is_null())
-            .then(pl.lit([], dtype=pl.List(pl.String)))
-            .otherwise(pl.col("matched_categories"))
-            .alias("matched_categories")
+            [
+                pl.when(pl.col("matched_categories").is_null())
+                .then(pl.lit([], dtype=pl.List(pl.String)))
+                .otherwise(pl.col("matched_categories"))
+                .alias("matched_categories"),
+                pl.when(pl.col("matched_condition_ids").is_null())
+                .then(pl.lit([], dtype=pl.List(pl.String)))
+                .otherwise(pl.col("matched_condition_ids"))
+                .alias("matched_condition_ids"),
+            ]
         )
     )
 
