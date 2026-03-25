@@ -9,7 +9,7 @@ from .condition_model import DataAccessResult
 from .condition_model import DistanceMatchingMode
 from .condition_model import FilterConfig
 from .condition_model import LoadFilterConfigResult
-from .condition_model import NormalizedCondition
+from .condition_evaluator import _normalized_conditions_to_dicts
 from .condition_evaluator import normalize_cooccurrence_conditions as _normalize_cooccurrence_conditions_impl
 from .condition_evaluator import select_target_ids_by_conditions_result as _select_target_ids_by_conditions_result_impl
 from .data_access import read_analysis_sentences as _read_analysis_sentences_impl
@@ -158,49 +158,6 @@ def render_tagged_token(
     annotation: dict[str, object] | None,
 ) -> tuple[str, str, list[str], list[str], list[str], int]:
     return _render_tagged_token_impl(surface=surface, annotation=annotation)
-
-def _normalized_conditions_to_dicts(
-    normalized_conditions: list[NormalizedCondition],
-) -> list[dict[str, object]]:
-    return [
-        {
-            "condition_id": condition.condition_id,
-            "categories": condition.categories,
-            "category_text": condition.category_text,
-            "overall_search_scope": condition.overall_search_scope,
-            "forms": condition.forms,
-            "form_groups": [
-                {
-                    "forms": form_group.forms,
-                    "match_logic": form_group.match_logic,
-                    "combine_logic": form_group.combine_logic,
-                    "search_scope": form_group.search_scope,
-                    "requested_max_token_distance": form_group.requested_max_token_distance,
-                    "effective_max_token_distance": form_group.effective_max_token_distance,
-                    "anchor_form": form_group.anchor_form,
-                    "exclude_forms_any": form_group.exclude_forms_any,
-                }
-                for form_group in condition.form_groups
-            ],
-            "annotation_filters": [
-                {
-                    "namespace": annotation_filter.label_namespace,
-                    "key": annotation_filter.label_key,
-                    "value": annotation_filter.label_value,
-                    "operator": annotation_filter.operator,
-                }
-                for annotation_filter in condition.annotation_filters
-            ],
-            "required_categories_all": condition.required_categories_all,
-            "required_categories_any": condition.required_categories_any,
-            "search_scope": condition.search_scope,
-            "form_match_logic": condition.form_match_logic,
-            "requested_max_token_distance": condition.requested_max_token_distance,
-            "effective_max_token_distance": condition.effective_max_token_distance,
-        }
-        for condition in normalized_conditions
-    ]
-
 
 def build_condition_hit_tokens_df(
     tokens_with_position_df: pl.DataFrame,

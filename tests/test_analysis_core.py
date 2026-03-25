@@ -71,6 +71,43 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertIs(data_access.PARAGRAPH_METADATA_SCHEMA, frame_schema.PARAGRAPH_METADATA_SCHEMA)
         self.assertTrue(frame_schema.empty_df(frame_schema.POSITIONED_TOKEN_SCHEMA).is_empty())
 
+    def test_analysis_core_uses_evaluator_normalized_conditions_to_dicts_including_text_groups(self) -> None:
+        self.assertIs(
+            analysis_core._normalized_conditions_to_dicts,
+            condition_evaluator._normalized_conditions_to_dicts,
+        )
+        condition = condition_model.NormalizedCondition(
+            condition_id="with_text",
+            categories=["c"],
+            category_text="c",
+            forms=[],
+            search_scope="paragraph",
+            form_match_logic="all",
+            requested_max_token_distance=None,
+            effective_max_token_distance=None,
+            text_groups=[
+                condition_model.NormalizedTextGroup(
+                    texts=["条文", "別表"],
+                    match_logic="and",
+                    combine_logic=None,
+                    search_scope="paragraph",
+                ),
+            ],
+        )
+        dicts = analysis_core._normalized_conditions_to_dicts([condition])
+        self.assertEqual(len(dicts), 1)
+        self.assertEqual(
+            dicts[0]["text_groups"],
+            [
+                {
+                    "texts": ["条文", "別表"],
+                    "match_logic": "and",
+                    "combine_logic": None,
+                    "search_scope": "paragraph",
+                },
+            ],
+        )
+
     def test_analysis_core_keeps_legacy_facade_function_symbols(self) -> None:
         self.assertEqual(analysis_core.load_filter_config.__module__, "analysis_backend.analysis_core")
         self.assertEqual(analysis_core.read_analysis_tokens.__module__, "analysis_backend.analysis_core")
