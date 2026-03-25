@@ -1153,19 +1153,14 @@ def _build_text_group_matched_units_df(
     )
 
 
-def _build_text_groups_paragraph_eval_df(
+def _combine_condition_text_groups_to_matched_units_df(
     *,
     text_unit_frames: TextUnitFrames,
     global_candidate_paragraphs_df: pl.DataFrame,
     condition: NormalizedCondition,
 ) -> pl.DataFrame:
-    base_keys = global_candidate_paragraphs_df.select("paragraph_id").unique()
-    if base_keys.is_empty():
-        return empty_df({"paragraph_id": pl.Int64, "text_is_match": pl.Boolean})
-
     if not condition.text_groups:
-        return base_keys.with_columns(pl.lit(True).alias("text_is_match"))
-
+        return _empty_group_matched_units_df()
     first_group = condition.text_groups[0]
     current_matches_df = _build_text_group_matched_units_df(
         text_unit_frames=text_unit_frames,
@@ -1186,6 +1181,89 @@ def _build_text_groups_paragraph_eval_df(
             right_scope=text_group.search_scope,
             combine_logic=text_group.combine_logic or "and",
         )
+    return current_matches_df
+
+
+def _build_sentence_grain_text_ok_df(
+    *,
+    sentence_universe_df: pl.DataFrame,
+    text_unit_frames: TextUnitFrames,
+    global_candidate_paragraphs_df: pl.DataFrame,
+    condition: NormalizedCondition,
+) -> pl.DataFrame:
+    """Per (sentence_id, paragraph_id) whether `condition.text_groups` holds at sentence display grain."""
+    universe = sentence_universe_df.select(["sentence_id", "paragraph_id"]).unique()
+    if universe.is_empty() or not condition.text_groups:
+        return universe.with_columns(
+            [
+                pl.lit(condition.condition_id).alias("condition_id"),
+                pl.lit(True).alias("text_ok"),
+            ]
+        )
+
+    matched_units_df = _combine_condition_text_groups_to_matched_units_df(
+        text_unit_frames=text_unit_frames,
+        global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+        condition=condition,
+    )
+    if matched_units_df.is_empty():
+        return universe.with_columns(
+            [
+                pl.lit(condition.condition_id).alias("condition_id"),
+                pl.lit(False).alias("text_ok"),
+            ]
+        )
+
+    sentence_unit_hits_df = (
+        matched_units_df.filter(pl.col("unit_scope") == "sentence")
+        .select(
+            [
+                "paragraph_id",
+                pl.col("unit_id").alias("sentence_id"),
+            ]
+        )
+        .unique()
+        .with_columns(pl.lit(True).alias("_sentence_unit_hit"))
+    )
+    paragraph_unit_hits_df = (
+        matched_units_df.filter(pl.col("unit_scope") == "paragraph")
+        .select(pl.col("unit_id").alias("paragraph_id"))
+        .unique()
+        .with_columns(pl.lit(True).alias("_paragraph_unit_hit"))
+    )
+    return (
+        universe.join(paragraph_unit_hits_df, on="paragraph_id", how="left")
+        .join(sentence_unit_hits_df, on=["paragraph_id", "sentence_id"], how="left")
+        .with_columns(
+            (
+                pl.col("_paragraph_unit_hit").is_not_null()
+                | pl.col("_sentence_unit_hit").is_not_null()
+            ).alias("text_ok")
+        )
+        .drop(["_paragraph_unit_hit", "_sentence_unit_hit"])
+        .with_columns(pl.lit(condition.condition_id).alias("condition_id"))
+        .select(["sentence_id", "paragraph_id", "condition_id", "text_ok"])
+    )
+
+
+def _build_text_groups_paragraph_eval_df(
+    *,
+    text_unit_frames: TextUnitFrames,
+    global_candidate_paragraphs_df: pl.DataFrame,
+    condition: NormalizedCondition,
+) -> pl.DataFrame:
+    base_keys = global_candidate_paragraphs_df.select("paragraph_id").unique()
+    if base_keys.is_empty():
+        return empty_df({"paragraph_id": pl.Int64, "text_is_match": pl.Boolean})
+
+    if not condition.text_groups:
+        return base_keys.with_columns(pl.lit(True).alias("text_is_match"))
+
+    current_matches_df = _combine_condition_text_groups_to_matched_units_df(
+        text_unit_frames=text_unit_frames,
+        global_candidate_paragraphs_df=global_candidate_paragraphs_df,
+        condition=condition,
+    )
 
     if current_matches_df.is_empty():
         return base_keys.with_columns(pl.lit(False).alias("text_is_match"))
@@ -2099,6 +2177,7 @@ def _build_sentence_condition_truth_df(
     normalized_conditions: list[NormalizedCondition],
     sentence_match_summary_df: pl.DataFrame,
     paragraph_match_summary_df: pl.DataFrame,
+    text_unit_frames: TextUnitFrames | None = None,
 ) -> pl.DataFrame:
     truth_schema = {
         "sentence_id": pl.Int64,
@@ -2164,14 +2243,60 @@ def _build_sentence_condition_truth_df(
         else empty_df({"sentence_id": pl.Int64, "paragraph_id": pl.Int64, "condition_id": pl.String})
     )
     matched_pairs_df = pl.concat([sentence_hits_df, paragraph_hits_df], how="vertical").unique()
-    return (
+    truth_df = (
         condition_universe_df
         .join(
-            matched_pairs_df.with_columns(pl.lit(True).alias("is_match")),
+            matched_pairs_df.with_columns(pl.lit(True).alias("is_match_hit")),
             on=["sentence_id", "paragraph_id", "condition_id"],
             how="left",
         )
-        .with_columns(pl.col("is_match").fill_null(False))
+        .with_columns(pl.col("is_match_hit").fill_null(False))
+    )
+
+    if text_unit_frames is None or not any(condition.text_groups for condition in normalized_conditions):
+        return (
+            truth_df
+            .with_columns(pl.col("is_match_hit").alias("is_match"))
+            .select(list(truth_schema.keys()))
+            .sort(["paragraph_id", "sentence_id", "condition_id"])
+        )
+
+    global_para_for_text_df = sentence_universe_df.select("paragraph_id").unique()
+    text_ok_frames: list[pl.DataFrame] = []
+    for condition in normalized_conditions:
+        text_ok_frames.append(
+            _build_sentence_grain_text_ok_df(
+                sentence_universe_df=sentence_universe_df,
+                text_unit_frames=text_unit_frames,
+                global_candidate_paragraphs_df=global_para_for_text_df,
+                condition=condition,
+            )
+        )
+    text_ok_df = pl.concat(text_ok_frames, how="vertical")
+
+    clause_meta_df = pl.DataFrame(
+        [
+            {
+                "condition_id": condition.condition_id,
+                "has_token_clause": bool(condition.forms),
+                "has_text_clause": bool(condition.text_groups),
+            }
+            for condition in normalized_conditions
+        ]
+    )
+    return (
+        truth_df
+        .join(text_ok_df, on=["sentence_id", "paragraph_id", "condition_id"], how="left")
+        .join(clause_meta_df, on="condition_id", how="left")
+        .with_columns(pl.col("text_ok").fill_null(True))
+        .with_columns(
+            pl.when(pl.col("has_text_clause") & pl.col("has_token_clause"))
+            .then(pl.col("is_match_hit") & pl.col("text_ok"))
+            .when(pl.col("has_text_clause") & pl.col("has_token_clause").not_())
+            .then(pl.col("text_ok"))
+            .otherwise(pl.col("is_match_hit"))
+            .alias("is_match")
+        )
         .select(list(truth_schema.keys()))
         .sort(["paragraph_id", "sentence_id", "condition_id"])
     )
@@ -2926,6 +3051,7 @@ def select_target_ids_by_conditions_result(
             normalized_conditions=normalized_conditions,
             sentence_match_summary_df=sentence_match_summary_df_sentence_scope,
             paragraph_match_summary_df=paragraph_match_summary_df_paragraph_scope,
+            text_unit_frames=text_unit_frames,
         )
         if sentence_truth_df.is_empty():
             return TargetSelectionResult(

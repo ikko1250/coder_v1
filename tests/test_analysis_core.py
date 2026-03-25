@@ -1317,6 +1317,54 @@ class AnalysisCoreContractTests(unittest.TestCase):
             [11, 11, 21, 21],
         )
 
+    def test_select_target_sentence_unit_text_groups_only_selects_matching_sentence(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [11, 12],
+                "token_no": [0, 0],
+                "normalized_form": ["a", "b"],
+                "surface": ["a", "b"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12],
+                "paragraph_id": [1, 1],
+                "sentence_no_in_paragraph": [1, 2],
+                "is_table_paragraph": [0, 0],
+                "sentence_text": ["前文のみです。", "別表による。"],
+            }
+        )
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="text_hit",
+                    categories=["t"],
+                    category_text="t",
+                    forms=[],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    text_groups=[
+                        condition_model.NormalizedTextGroup(
+                            texts=["別表"],
+                            match_logic="or",
+                            combine_logic=None,
+                            search_scope="sentence",
+                        ),
+                    ],
+                )
+            ],
+            analysis_unit="sentence",
+        )
+
+        self.assertEqual(result.target_sentence_ids, [12])
+        self.assertEqual(result.target_paragraph_ids, [1])
+
     def test_phase1_build_sentence_condition_truth_df_propagates_paragraph_matches(self) -> None:
         sentence_universe_df = pl.DataFrame(
             {
