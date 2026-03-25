@@ -40,6 +40,14 @@ SENTENCE_METADATA_SCHEMA = {
     "sentence_text": pl.String,
     "is_table_paragraph": pl.Int64,
 }
+# Full-table read from `read_analysis_sentences` / `read_analysis_sentences_result` (FT-01).
+ANALYSIS_SENTENCES_READ_SCHEMA = {
+    "sentence_id": pl.Int64,
+    "paragraph_id": pl.Int64,
+    "sentence_no_in_paragraph": pl.Int64,
+    "is_table_paragraph": pl.Int64,
+    "sentence_text": pl.String,
+}
 
 
 def empty_df(schema: dict[str, pl.DataType]) -> pl.DataFrame:
