@@ -6,6 +6,7 @@ from .condition_model import AnnotationFilter
 from .condition_model import ConfigIssue
 from .condition_model import NormalizedCondition
 from .condition_model import NormalizedFormGroup
+from .condition_model import NormalizedTextGroup
 from .condition_model import NormalizeConditionsResult
 from .condition_model import TargetSelectionResult
 from .text_unit_frames import build_text_unit_frames
@@ -185,6 +186,15 @@ def _normalized_conditions_to_dicts(
                     "exclude_forms_any": form_group.exclude_forms_any,
                 }
                 for form_group in condition.form_groups
+            ],
+            "text_groups": [
+                {
+                    "texts": text_group.texts,
+                    "match_logic": text_group.match_logic,
+                    "combine_logic": text_group.combine_logic,
+                    "search_scope": text_group.search_scope,
+                }
+                for text_group in condition.text_groups
             ],
             "annotation_filters": [
                 {
@@ -832,6 +842,172 @@ def _normalize_form_groups(
                 effective_max_token_distance=effective_max_token_distance,
                 anchor_form=anchor_form,
                 exclude_forms_any=exclude_forms_any,
+            )
+        )
+
+    return normalized_groups, issues, invalid_condition
+
+
+def _normalize_text_groups(
+    raw_text_groups: object,
+    *,
+    condition_index: int,
+    condition_id: str,
+    default_search_scope: str,
+) -> tuple[list[NormalizedTextGroup], list[ConfigIssue], bool]:
+    if raw_text_groups is None:
+        return [], [], False
+    if not isinstance(raw_text_groups, list):
+        return (
+            [],
+            [
+                _build_condition_issue(
+                    code="text_groups_not_list",
+                    severity="error",
+                    message="'text_groups' must be a list.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            ],
+            True,
+        )
+
+    issues: list[ConfigIssue] = []
+    normalized_groups: list[NormalizedTextGroup] = []
+    invalid_condition = False
+
+    for group_index, raw_group in enumerate(raw_text_groups, start=1):
+        if not isinstance(raw_group, dict):
+            issues.append(
+                _build_condition_issue(
+                    code="text_group_not_object",
+                    severity="error",
+                    message="Each text group must be an object.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_texts = raw_group.get("texts", [])
+        if not isinstance(raw_texts, list):
+            issues.append(
+                _build_condition_issue(
+                    code="text_group_texts_not_list",
+                    severity="error",
+                    message="'text_groups[].texts' must be a list.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+        texts = [str(raw_text).strip() for raw_text in raw_texts if str(raw_text).strip()]
+        unique_texts = list(dict.fromkeys(texts))
+        if not unique_texts:
+            issues.append(
+                _build_condition_issue(
+                    code="text_group_texts_empty",
+                    severity="error",
+                    message="Each text group must contain at least one non-empty text.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_match_logic = str(raw_group.get("match_logic", "and")).strip().lower()
+        if raw_match_logic not in {"and", "or", "not"}:
+            issues.append(
+                _build_condition_issue(
+                    code="text_group_match_logic_invalid",
+                    severity="error",
+                    message="text_groups[].match_logic must be one of: and, or, not.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_combine_logic_value = raw_group.get("combine_logic")
+        raw_combine_logic = (
+            str(raw_combine_logic_value).strip().lower()
+            if raw_combine_logic_value is not None
+            else None
+        )
+        if group_index == 1:
+            if raw_combine_logic is not None:
+                issues.append(
+                    _build_condition_issue(
+                        code="text_group_combine_logic_invalid",
+                        severity="error",
+                        message="text group 1 must not define combine_logic.",
+                        condition_index=condition_index,
+                        condition_id=condition_id,
+                        field_name="text_groups",
+                    )
+                )
+                invalid_condition = True
+                continue
+            if raw_match_logic == "not":
+                issues.append(
+                    _build_condition_issue(
+                        code="text_group1_not_disallowed",
+                        severity="error",
+                        message="text group 1 does not support match_logic='not'.",
+                        condition_index=condition_index,
+                        condition_id=condition_id,
+                        field_name="text_groups",
+                    )
+                )
+                invalid_condition = True
+                continue
+        elif raw_combine_logic not in {"and", "or"}:
+            issues.append(
+                _build_condition_issue(
+                    code="text_group_combine_logic_invalid",
+                    severity="error",
+                    message="text group 2+ must define combine_logic as 'and' or 'or'.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            )
+            invalid_condition = True
+            continue
+
+        raw_group_search_scope = str(raw_group.get("search_scope", default_search_scope)).strip().lower()
+        group_search_scope = (
+            raw_group_search_scope
+            if raw_group_search_scope in {"paragraph", "sentence"}
+            else default_search_scope
+        )
+        if raw_group_search_scope not in {"paragraph", "sentence"}:
+            issues.append(
+                _build_condition_issue(
+                    code="search_scope_defaulted",
+                    severity="warning",
+                    message="Unknown text_groups[].search_scope was replaced with the condition default.",
+                    condition_index=condition_index,
+                    condition_id=condition_id,
+                    field_name="text_groups",
+                )
+            )
+
+        normalized_groups.append(
+            NormalizedTextGroup(
+                texts=unique_texts,
+                match_logic=raw_match_logic,
+                combine_logic=raw_combine_logic,
+                search_scope=group_search_scope,
             )
         )
 
@@ -2173,6 +2349,16 @@ def normalize_cooccurrence_conditions_result(
         if invalid_required_categories_any:
             continue
 
+        normalized_text_groups, text_group_issues, invalid_text_groups = _normalize_text_groups(
+            raw_condition.get("text_groups"),
+            condition_index=idx,
+            condition_id=provisional_condition_id,
+            default_search_scope=overall_search_scope,
+        )
+        issues.extend(text_group_issues)
+        if invalid_text_groups:
+            continue
+
         if normalized_form_groups:
             unique_forms = list(
                 dict.fromkeys(
@@ -2201,14 +2387,20 @@ def normalize_cooccurrence_conditions_result(
             effective_max_token_distance = None
 
         has_reference_clause = bool(required_categories_all or required_categories_any)
-        if not unique_forms and not normalized_annotation_filters and not has_reference_clause:
+        has_text_clause = bool(normalized_text_groups)
+        if (
+            not unique_forms
+            and not normalized_annotation_filters
+            and not has_reference_clause
+            and not has_text_clause
+        ):
             issues.append(
                 _build_condition_issue(
                     code="forms_empty",
                     severity="error",
                     message=(
-                        "Condition must define at least one clause: forms, annotation_filters, "
-                        "required_categories_all, or required_categories_any."
+                        "Condition must define at least one clause: forms, form_groups, text_groups, "
+                        "annotation_filters, required_categories_all, or required_categories_any."
                     ),
                     condition_index=idx,
                     condition_id=provisional_condition_id,
@@ -2385,6 +2577,7 @@ def normalize_cooccurrence_conditions_result(
                 requested_max_token_distance=requested_max_token_distance,
                 effective_max_token_distance=effective_max_token_distance,
                 form_groups=normalized_form_groups,
+                text_groups=normalized_text_groups,
                 annotation_filters=normalized_annotation_filters,
                 required_categories_all=required_categories_all,
                 required_categories_any=required_categories_any,

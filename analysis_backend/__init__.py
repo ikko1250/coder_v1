@@ -14,6 +14,7 @@ __all__ = [
     "MatchingWarning",
     "NormalizeConditionsResult",
     "NormalizedCondition",
+    "NormalizedTextGroup",
     "TargetSelectionResult",
     "TextUnitFrames",
     "build_text_unit_frames",
@@ -53,6 +54,7 @@ def __getattr__(name: str):
             "MatchingWarning",
             "NormalizeConditionsResult",
             "NormalizedCondition",
+            "NormalizedTextGroup",
             "TargetSelectionResult",
         } else ".filter_config" if name in {"load_filter_config", "load_filter_config_result"} else ".data_access" if name in {
             "read_analysis_sentences_result",
