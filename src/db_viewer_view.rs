@@ -15,16 +15,21 @@ pub(crate) fn render_db_viewer_contents(
         .db_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("ordinance_analysis3.db");
+        .unwrap_or("ordinance_analysis5.db");
     let source_text = state.source_paragraph_text.clone().unwrap_or_default();
-    let comparison_label = match state.context.as_ref() {
-        Some(context) if context.center.paragraph_text != source_text => {
-            RichText::new("表示中テキスト と DB 中心段落は不一致")
-                .color(Color32::from_rgb(200, 64, 64))
+    let comparison_label = if state.skip_paragraph_compare {
+        RichText::new("文モード: 親 paragraph_id の DB 段落前後のみ表示（CSV 段落本文との比較は行いません）")
+            .color(Color32::from_rgb(100, 100, 120))
+    } else {
+        match state.context.as_ref() {
+            Some(context) if context.center.paragraph_text != source_text => {
+                RichText::new("表示中テキスト と DB 中心段落は不一致")
+                    .color(Color32::from_rgb(200, 64, 64))
+            }
+            Some(_) => RichText::new("表示中テキスト と DB 中心段落は一致")
+                .color(Color32::from_rgb(70, 130, 70)),
+            None => RichText::new("DB 中心段落未取得").italics(),
         }
-        Some(_) => RichText::new("表示中テキスト と DB 中心段落は一致")
-            .color(Color32::from_rgb(70, 130, 70)),
-        None => RichText::new("DB 中心段落未取得").italics(),
     };
     let body_scroll_id = state
         .context
@@ -90,14 +95,19 @@ pub(crate) fn render_db_viewer_contents(
             });
 
             ui.add_space(6.0);
-            egui::CollapsingHeader::new("表示中テキスト/DB 比較")
+            egui::CollapsingHeader::new(if state.skip_paragraph_compare {
+                "DB 中心段落（参考）"
+            } else {
+                "表示中テキスト/DB 比較"
+            })
                 .id_salt("db_viewer_comparison_header")
                 .default_open(false)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("表示中テキスト").strong());
-                    ui.label(&source_text);
-
-                    ui.add_space(6.0);
+                    if !state.skip_paragraph_compare {
+                        ui.label(RichText::new("表示中テキスト").strong());
+                        ui.label(&source_text);
+                        ui.add_space(6.0);
+                    }
                     ui.label(RichText::new("DB 中心段落").strong());
                     if let Some(context) = &state.context {
                         ui.group(|ui| {
