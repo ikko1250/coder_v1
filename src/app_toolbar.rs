@@ -74,9 +74,30 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
 
             if ui
                 .add_enabled(can_start, egui::Button::new("分析実行"))
+                .on_hover_text("同一条件・同一DBならセッション内で結果を再利用します")
                 .clicked()
             {
                 if let Err(error) = app.start_analysis_job() {
+                    app.error_message = Some(error);
+                }
+            }
+
+            if ui
+                .add_enabled(can_start, egui::Button::new("再分析"))
+                .on_hover_text("セッションキャッシュを使わず worker を実行（Python 側DBフレームキャッシュは従来通り）")
+                .clicked()
+            {
+                if let Err(error) = app.start_analysis_job_force_rerun() {
+                    app.error_message = Some(error);
+                }
+            }
+
+            if ui
+                .add_enabled(can_start, egui::Button::new("再読込分析"))
+                .on_hover_text("セッションキャッシュを無視し、worker の DB 読込も再実行します")
+                .clicked()
+            {
+                if let Err(error) = app.start_analysis_job_force_reload() {
                     app.error_message = Some(error);
                 }
             }

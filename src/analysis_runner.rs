@@ -42,6 +42,8 @@ pub(crate) struct AnalysisRuntimeConfig {
 pub(crate) struct AnalysisJobRequest {
     pub(crate) db_path: PathBuf,
     pub(crate) runtime: AnalysisRuntimeConfig,
+    /// Python worker の DB フレーム読み込みキャッシュを破棄して再読込する（設計書の「再読込分析」レベル B）。
+    pub(crate) force_reload_db_frames: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -478,7 +480,7 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
         filter_config_path: request.runtime.filter_config_path.display().to_string(),
         annotation_csv_path: request.runtime.annotation_csv_path.display().to_string(),
         limit_rows: None,
-        force_reload: false,
+        force_reload: request.force_reload_db_frames,
     };
     let worker_handle_for_request = worker_handle.clone();
     let (sender, receiver) = mpsc::channel();
