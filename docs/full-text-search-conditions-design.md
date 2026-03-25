@@ -407,6 +407,43 @@
 
 - `_normalized_conditions_to_dicts` 等、**条件 dict を複製している経路**には `text_groups` を**同じ形で**通す。selection と hit rebuild / export で schema が食い違わないようにする。
 
+## 15. 細分タスク（実装用チェックリスト）
+
+前提: **§14.1 の先決事項**を満たす順で進める（並列可能なものは ID を参照）。
+
+| ID | タスク | 主な変更箇所 | 依存 | 完了条件（受け入れ基準の要約） |
+|----|--------|----------------|------|--------------------------------|
+| **FT-00** | **canonical 本文**の決定メモを本書 §6.2 / §8.1 に 1 段落で確定（DB 文 vs 再構成のどちらを正とするか、または変換方針） | 本書のみ | なし | 実装者が迷わず同一ルールで evaluator・renderer・export を揃えられる文言になっている |
+| **FT-01** | `analysis_sentences` から **文本文列**を読む SQL と **`frame_schema`（または専用 schema）**の列定義を追加 | `data_access.py`, `frame_schema.py` | FT-00 | `read_analysis_sentences_result` が設計で決めた列名の本文を返す。既存呼び出しが壊れない（後方互換または段階移行方針つき） |
+| **FT-02** | `NormalizedTextGroup` / `NormalizedCondition.text_groups` の dataclass 追加 | `condition_model.py` | なし | フィールドが §3.2 と一致し、frozen/immutable 方針が既存に揃う |
+| **FT-03** | `_normalize_text_groups`（バリデーション・issue コード・空 `texts` 排除・ユニーク化） | `condition_evaluator.py` | FT-02 | 不正 JSON は error issue、正常系は `NormalizedCondition` に載る |
+| **FT-04** | **clause 必須**ロジック更新（`text_groups` のみでも条件として有効） | `condition_evaluator.py` | FT-03 | text-only が正規化で落ちない。既存条件の挙動不変 |
+| **FT-05** | **リテラル** `str.contains` 用のエスケープヘルパー（正規表現メタ無効化）と単体テスト | 新規小モジュール or `condition_evaluator` 内 | なし | `.` `(` 等を含むクエリで意図しない regex 化が起きない |
+| **FT-06** | `_build_text_group_matched_units_df` 相当: 1 グループの paragraph/sentence 単位の真偽 | `condition_evaluator.py` | FT-01, FT-03, FT-05 | `and` / `or` / `not` が §3.3 どおり |
+| **FT-07** | 複数 `text_groups` の **`combine_logic` 畳み込み**（`_combine_group_matches_df` と同型） | `condition_evaluator.py` | FT-06 | form_groups と同じ結合意味で段落キーに揃う |
+| **FT-08** | `text_paragraph_eval_df` 生成と **`global_candidate_paragraphs_df` 拡張**（text 条件あり時に universe 非空） | `condition_evaluator.py` | FT-01, FT-07 | text-only でも候補段落 0 件にならない |
+| **FT-09** | `_build_base_condition_eval_df` 拡張: `text_is_match`, `has_text_clause`, **`base_is_match` = token ∧ text ∧ annot** | `condition_evaluator.py` | FT-08 | §7.2 の式どおり。token / text / annot の片方欠けでも破綻しない |
+| **FT-10** | **`CONDITION_EVAL_SCHEMA`**（および必要なら説明列）更新 | `condition_evaluator.py` | FT-09 | 出力 DataFrame が schema 一致。既存列の意味が変わらない |
+| **FT-11** | **`analysis_unit == "sentence"`** 分岐: text truth を `sentence_truth_df` / 要約へ合流（token hit 非依存） | `condition_evaluator.py` | FT-07, FT-09 | text-only が sentence モードで偽固定にならない（§7.4） |
+| **FT-12** | **参照 clause**（`required_categories_*`）が text-only の categories を paragraph / sentence 両方で一貫参照 | `condition_evaluator.py` | FT-09, FT-11 | §13 の懸念が再現しない回帰テスト付き |
+| **FT-13** | `_normalized_conditions_to_dicts`（`condition_evaluator` / **`analysis_core` 両方**）に `text_groups` を反映 | `condition_evaluator.py`, `analysis_core.py` | FT-03 | 複製経路でキー欠落なし（§14.4） |
+| **FT-14** | **`cli`**: text-only 選択後の **件数検証**・空トークン描画・`limit_rows` 時の universe 説明 or warning | `cli.py` | FT-08, FT-11 | `selected*Count mismatch` が出ない。利用者が検索範囲を誤解しない |
+| **FT-15** | **`rendering` / `export_formatter`**: canonical 本文に合わせた表示または注記 | `rendering.py`, `export_formatter.py` | FT-00, FT-01 | ヒット語句と画面/CSV 本文の説明がつじつま合う（§8.1） |
+| **FT-16** | **Rust** `sanitize_document_for_save` に `text_groups` を clause 判定へ追加 | `condition_editor.rs` | FT-03（仕様同期） | text-only 条件が保存可能 |
+| **FT-17** | **Rust** 一覧ラベル・詳細に `text_groups` セクション（折りたたみ推奨） | `condition_editor_view.rs` | FT-16 | 「groups:0」と誤認されない（§13） |
+| **FT-18** | **アプリ本体**（必要なら）: text-only 時の説明バッジ・`app_main_layout` 周辺の注意文整合 | `app_main_layout.rs` 等 | FT-15 | 強調ゼロでも理由が分かる |
+| **FT-19** | **Python テスト**: `tests/test_analysis_core.py` 等に §13 チェックリスト相当を追加 | `tests/` | FT-04–FT-14 | CI でカバー。既存スナップショット破壊なしまたは意図的更新のみ |
+| **FT-20** | （任意）**Rust テスト**またはスモーク: 条件 JSON に `text_groups` を含めた round-trip | `tests/` or 手動手順書 | FT-16, FT-17 | editor 保存→再読込で `text_groups` 保持 |
+
+### 15.1 推奨フェーズ分け
+
+1. **フェーズ A（データ契約）**: FT-00, FT-01, FT-05  
+2. **フェーズ B（正規化・段落評価）**: FT-02–FT-10  
+3. **フェーズ C（sentence・参照・CLI）**: FT-11, FT-12, FT-14  
+4. **フェーズ D（表示・editor・テスト）**: FT-13, FT-15–FT-20  
+
+`distance_matcher.py` は初版 **変更不要**（§8）だが、FT-19 で「token hit 空でも selection 真」系の結合テストを入れる。
+
 ---
 
 ## 改訂履歴
@@ -415,3 +452,4 @@
 |------|------|
 | 2026-03-25 | 初版 |
 | 2026-03-25 | セカンドオピニオン（§13）追記、設計反映（§14）、本文 §6・§7・§8・§12 の補強 |
+| 2026-03-25 | §15 細分タスク（FT-00〜FT-20）追記 |
