@@ -409,40 +409,169 @@
 
 ## 15. 細分タスク（実装用チェックリスト）
 
-前提: **§14.1 の先決事項**を満たす順で進める（並列可能なものは ID を参照）。
+前提: **§14.1 の先決事項**を満たす順で進める（並列可能なものは ID を参照）。**§16** のレビュー内容は **§17** に取り込み要約あり（表は本節で更新済み）。
 
 | ID | タスク | 主な変更箇所 | 依存 | 完了条件（受け入れ基準の要約） |
 |----|--------|----------------|------|--------------------------------|
 | **FT-00** | **canonical 本文**の決定メモを本書 §6.2 / §8.1 に 1 段落で確定（DB 文 vs 再構成のどちらを正とするか、または変換方針） | 本書のみ | なし | 実装者が迷わず同一ルールで evaluator・renderer・export を揃えられる文言になっている |
-| **FT-01** | `analysis_sentences` から **文本文列**を読む SQL と **`frame_schema`（または専用 schema）**の列定義を追加 | `data_access.py`, `frame_schema.py` | FT-00 | `read_analysis_sentences_result` が設計で決めた列名の本文を返す。既存呼び出しが壊れない（後方互換または段階移行方針つき） |
+| **FT-01** | `analysis_sentences` から **文本文列**を読む SQL と **`frame_schema`（または専用 schema）**の列定義。**段落側**は「`sentence_text` を canonical に 1 回だけ連結して `paragraph_text` を作る」か「別 reader で `paragraph_text` を取る」かを FT-00 で決め、本タスクで実装方針を明示する（§16.2） | `data_access.py`, `frame_schema.py` | FT-00 | `read_analysis_sentences_result`（および必要なら段落用 reader）が本文を返す。**selection / rendering / export が同じ canonical 本文ルールを参照**する（reader 間で別ルールにならない） |
+| **FT-01a** | **`text_unit_frame` 前計算**: 評価ループの外で 1 回だけ、sentence 用・paragraph 用の本文フレームを生成（`is_table_paragraph` に基づく連結規則をここに集約。condition ごとの重複 concat を禁止）（§16.5） | `condition_evaluator.py` または専用モジュール | FT-01 | sentence scope 用・paragraph scope 用の本文列を持つ DataFrame が 1 経路で得られる。FT-06〜FT-09 はこれを入力にする |
 | **FT-02** | `NormalizedTextGroup` / `NormalizedCondition.text_groups` の dataclass 追加 | `condition_model.py` | なし | フィールドが §3.2 と一致し、frozen/immutable 方針が既存に揃う |
 | **FT-03** | `_normalize_text_groups`（バリデーション・issue コード・空 `texts` 排除・ユニーク化） | `condition_evaluator.py` | FT-02 | 不正 JSON は error issue、正常系は `NormalizedCondition` に載る |
 | **FT-04** | **clause 必須**ロジック更新（`text_groups` のみでも条件として有効） | `condition_evaluator.py` | FT-03 | text-only が正規化で落ちない。既存条件の挙動不変 |
 | **FT-05** | **リテラル** `str.contains` 用のエスケープヘルパー（正規表現メタ無効化）と単体テスト | 新規小モジュール or `condition_evaluator` 内 | なし | `.` `(` 等を含むクエリで意図しない regex 化が起きない |
-| **FT-06** | `_build_text_group_matched_units_df` 相当: 1 グループの paragraph/sentence 単位の真偽 | `condition_evaluator.py` | FT-01, FT-03, FT-05 | `and` / `or` / `not` が §3.3 どおり |
+| **FT-06** | `_build_text_group_matched_units_df` 相当: 1 グループの paragraph/sentence 単位の真偽（**FT-01a のフレームのみ**を参照。ループ内で本文を再 join しない） | `condition_evaluator.py` | FT-01a, FT-03, FT-05 | `and` / `or` / `not` が §3.3 どおり |
 | **FT-07** | 複数 `text_groups` の **`combine_logic` 畳み込み**（`_combine_group_matches_df` と同型） | `condition_evaluator.py` | FT-06 | form_groups と同じ結合意味で段落キーに揃う |
-| **FT-08** | `text_paragraph_eval_df` 生成と **`global_candidate_paragraphs_df` 拡張**（text 条件あり時に universe 非空） | `condition_evaluator.py` | FT-01, FT-07 | text-only でも候補段落 0 件にならない |
+| **FT-08** | `text_paragraph_eval_df` 生成と **`global_candidate_paragraphs_df` 拡張**（text 条件あり時に universe 非空） | `condition_evaluator.py` | FT-01a, FT-07 | text-only でも候補段落 0 件にならない |
 | **FT-09** | `_build_base_condition_eval_df` 拡張: `text_is_match`, `has_text_clause`, **`base_is_match` = token ∧ text ∧ annot** | `condition_evaluator.py` | FT-08 | §7.2 の式どおり。token / text / annot の片方欠けでも破綻しない |
-| **FT-10** | **`CONDITION_EVAL_SCHEMA`**（および必要なら説明列）更新 | `condition_evaluator.py` | FT-09 | 出力 DataFrame が schema 一致。既存列の意味が変わらない |
+| **FT-10** | **`CONDITION_EVAL_SCHEMA`**（および必要なら `text_group_explanations_text` / `matched_text_group_ids_text` 等）更新 | `condition_evaluator.py` | FT-09 | 出力 DataFrame が schema 一致。説明列を増やす場合は **FT-15a と同時**に Rust/CSV へ伝播 |
 | **FT-11** | **`analysis_unit == "sentence"`** 分岐: text truth を `sentence_truth_df` / 要約へ合流（token hit 非依存） | `condition_evaluator.py` | FT-07, FT-09 | text-only が sentence モードで偽固定にならない（§7.4） |
-| **FT-12** | **参照 clause**（`required_categories_*`）が text-only の categories を paragraph / sentence 両方で一貫参照 | `condition_evaluator.py` | FT-09, FT-11 | §13 の懸念が再現しない回帰テスト付き |
+| **FT-12** | **参照 clause**: `required_categories_*` が text-only の categories を paragraph / sentence で一貫参照。**category reference eval の正は unified truth summary**（token hit 由来と別経路を混在させない）に固定する（§16.6） | `condition_evaluator.py` | FT-09, FT-11 | §13 の懸念が再現しない回帰テスト。どの summary を参照の source of truth としたかがコード上明示されている |
 | **FT-13** | `_normalized_conditions_to_dicts`（`condition_evaluator` / **`analysis_core` 両方**）に `text_groups` を反映 | `condition_evaluator.py`, `analysis_core.py` | FT-03 | 複製経路でキー欠落なし（§14.4） |
-| **FT-14** | **`cli`**: text-only 選択後の **件数検証**・空トークン描画・`limit_rows` 時の universe 説明 or warning | `cli.py` | FT-08, FT-11 | `selected*Count mismatch` が出ない。利用者が検索範囲を誤解しない |
-| **FT-15** | **`rendering` / `export_formatter`**: canonical 本文に合わせた表示または注記 | `rendering.py`, `export_formatter.py` | FT-00, FT-01 | ヒット語句と画面/CSV 本文の説明がつじつま合う（§8.1） |
-| **FT-16** | **Rust** `sanitize_document_for_save` に `text_groups` を clause 判定へ追加 | `condition_editor.rs` | FT-03（仕様同期） | text-only 条件が保存可能 |
-| **FT-17** | **Rust** 一覧ラベル・詳細に `text_groups` セクション（折りたたみ推奨） | `condition_editor_view.rs` | FT-16 | 「groups:0」と誤認されない（§13） |
-| **FT-18** | **アプリ本体**（必要なら）: text-only 時の説明バッジ・`app_main_layout` 周辺の注意文整合 | `app_main_layout.rs` 等 | FT-15 | 強調ゼロでも理由が分かる |
-| **FT-19** | **Python テスト**: `tests/test_analysis_core.py` 等に §13 チェックリスト相当を追加 | `tests/` | FT-04–FT-14 | CI でカバー。既存スナップショット破壊なしまたは意図的更新のみ |
-| **FT-20** | （任意）**Rust テスト**またはスモーク: 条件 JSON に `text_groups` を含めた round-trip | `tests/` or 手動手順書 | FT-16, FT-17 | editor 保存→再読込で `text_groups` 保持 |
+| **FT-14a** | **`cli`**: **selected count** の定義修正・検証（text-only / token 無し unit を数えても mismatch にならない）、`limit_rows` 時の universe 説明 or warning（§16.3） | `cli.py` | FT-08, FT-11 | `selected*Count mismatch` が出ない |
+| **FT-14b** | **token なし row**の **rendering / export** 経路（本文・カテゴリ・condition_id・強調ゼロの見え方を仕様固定。静かに row 落ちしない）（§16.3） | `rendering.py`, `export_formatter.py`, 必要なら `cli.py` | FT-01a, FT-00, FT-14a | token 行が無い選択結果でも出力行が期待どおり残る |
+| **FT-15** | **`rendering` / `export_formatter`**: canonical 本文に合わせた表示または注記（FT-14b と密接） | `rendering.py`, `export_formatter.py` | FT-00, FT-01 | ヒット語句と画面/CSV 本文の説明がつじつま合う（§8.1） |
+| **FT-15a** | **Rust 側列伝播**: `model.rs` / `csv_loader.rs` / `analysis_runner.rs` / `viewer_core.rs` 等で、Python 出力に追加した列（説明列含む）を **受け取り・表示・CSV 互換方針**まで同期（§16.4） | `src/*.rs` | FT-10（列追加時は必須） | 新列がエグレス全体で欠落しない |
+| **FT-16a** | **Rust editor 型と sanitize**: `ConditionEditorItem` に `text_groups`、`TextGroupEditorItem` の serde、`sanitize_text_groups`、`remove_condition_schema_keys_from_extra_fields` / `build_default_condition_item` 更新。**`sanitize_document_for_save` の clause 判定**に `text_groups` を含める（§16.1） | `condition_editor.rs` | FT-03（仕様同期） | typed field と `extra_fields` の二重保持が起きない設計。text-only が保存可能 |
+| **FT-16b** | **Rust 必須テスト**: load →（軽微な）edit → save → reload で **`text_groups` が 1 回だけ正しく残る** round-trip（§16.1, §16.7） | `tests/`（Rust） | FT-16a | `serde(flatten)` と typed field の競合・sanitize による落としを検出 |
+| **FT-17** | **Rust** 一覧ラベル・詳細に `text_groups` セクション（折りたたみ推奨）。**`form_groups` の UI を単純複製しない**（text は group1 でも `not` 可など仕様差がある）（§16.1） | `condition_editor_view.rs` | FT-16a | 「groups:0」と誤認されない |
+| **FT-18** | **アプリ本体**（必要なら）: text-only 時の説明バッジ・`app_main_layout` 周辺の注意文整合。説明列を増やす場合は **FT-15a** とセット | `app_main_layout.rs` 等 | FT-15, FT-15a | 強調ゼロでも理由が分かる |
+| **FT-19** | **Python テスト**: `tests/test_analysis_core.py` 等に §13 / §16 チェックリスト相当を追加 | `tests/` | FT-04–FT-14b | CI でカバー。token hit 空でも selection 真の結合テストを含む |
+| **FT-20** | **必須寄り**: editor **UI 回帰**（`text_groups` 不可視化・保存時に落ちる）の防止。自動が難しければ **手動チェックリストをリリースゲートに固定**（§16.7）。FT-16b と補完関係 | `condition_editor_view.rs`, 手順書 | FT-16a, FT-17 | 回帰時に検知できる |
 
 ### 15.1 推奨フェーズ分け
 
-1. **フェーズ A（データ契約）**: FT-00, FT-01, FT-05  
+1. **フェーズ A（データ契約・本文フレーム）**: FT-00, FT-01, FT-01a, FT-05  
 2. **フェーズ B（正規化・段落評価）**: FT-02–FT-10  
-3. **フェーズ C（sentence・参照・CLI）**: FT-11, FT-12, FT-14  
-4. **フェーズ D（表示・editor・テスト）**: FT-13, FT-15–FT-20  
+3. **フェーズ C（sentence・参照・CLI 件数）**: FT-11, FT-12, FT-14a  
+4. **フェーズ D（token なし描画・export・Rust 伝播）**: FT-14b, FT-15, FT-15a  
+5. **フェーズ E（editor・テスト）**: FT-13, FT-16a, FT-16b, FT-17, FT-18, FT-19, FT-20  
 
 `distance_matcher.py` は初版 **変更不要**（§8）だが、FT-19 で「token hit 空でも selection 真」系の結合テストを入れる。
+
+---
+
+## 16. 細分タスクへのセカンドオピニオン（実装確認ベース）
+
+総評:
+
+- §15 の細分化は前回の懸念をかなり吸収しており、**実装順序を意識したタスク分解としては良くなっている**。
+- ただし、現状コードを前提に見ると、**Rust 側のスキーマ定義**, **token なし描画の責務分担**, **export / Rust モデルへの列伝播**, **paragraph 側 canonical text の取得経路**がまだ過少に見積もられている。
+- 特に FT-16 / FT-17 / FT-14 は、いまの記述だと「直せる箇所」より「実際に触る必要がある箇所」の方が広い。
+
+### 16.1 重大: FT-16 / FT-17 はまだ under-scoped
+
+- [重大] **`sanitize_document_for_save` だけを直しても、Rust editor 側は `text_groups` を型付きで扱えない。**  
+  現在の `src/condition_editor.rs` には `ConditionEditorItem.text_groups` も `TextGroupEditorItem` も存在しない。  
+  そのため FT-16 / FT-17 には少なくとも次を含めた方がよい。
+  - `ConditionEditorItem` への `text_groups` フィールド追加
+  - `TextGroupEditorItem` の serde 定義
+  - `sanitize_text_groups(...)` 相当の追加
+  - `build_default_condition_item()` / 初期値ロジックの見直し
+  - `remove_condition_schema_keys_from_extra_fields(...)` の更新
+
+- [重大] **UI 実装だけでなく、保存時の round-trip 契約を task に明記した方がよい。**  
+  現状は unknown key を `extra_fields` に保持しているだけなので、typed field 化の途中段階で `text_groups` を二重保持・重複 serialize する事故が起きやすい。  
+  FT-16/17 の受け入れ条件に、**load -> edit -> save -> reload で `text_groups` が 1 回だけ正しく残ること**を入れるべき。
+
+- [中] **`text_groups` の UI は、`form_groups` のロジック UI をそのまま流用できない。**  
+  `src/condition_editor_view.rs` の group1 logic option は現状 `and` / `or` しか出しておらず、form 側の「group 1 not 不可」前提が UI に埋め込まれている。  
+  設計どおり text 側で group1 `not` を許すなら、FT-17 には **form UI の単純複製では駄目**という注意を入れた方がよい。
+
+### 16.2 重大: FT-01 は paragraph 側の text source も明示した方がよい
+
+- [重大] FT-01 は `analysis_sentences` の本文列取得にフォーカスしているが、**paragraph 側 canonical text を DB 由来にする場合の取得経路が task 化されていない。**  
+  現在の backend 側で paragraph 表示は token 再構成が中心で、`read_paragraph_document_metadata_result` も `paragraph_text` を返していない。  
+  したがって FT-01 は次のどちらかを明示すべき。
+  - **sentence_text だけを取り、paragraph_text はその canonical sentence_text を 1 回だけ連結して作る**
+  - **paragraph_text 列も別 reader で取得する**
+
+- [中] `analysis_sentences` reader と `sentence metadata` reader に `sentence_text` が分散しているため、**selection 用 reader と export 用 reader が別ルールになる危険**がある。  
+  FT-01 の完了条件に、**selection / rendering / export が同じ canonical text を参照する**ことを含めた方がよい。
+
+### 16.3 重大: FT-14 は CLI 単独タスクでは済まない可能性が高い
+
+- [重大] **「空トークン描画」は CLI ではなく rendering/export の責務も大きい。**  
+  現在の `build_rendered_paragraphs_df` / `build_rendered_sentences_df` は token rows から本文とタグを組み立てる設計で、token が無いと実質 row を作れない。  
+  そのため FT-14 の「空トークン描画」は、実際には FT-15 と分離しにくい。  
+  推奨は、FT-14 を次の 2 つに分けること。
+  - **選択件数検証の定義修正**
+  - **token なし row をどう生成するかの描画経路追加**
+
+- [中] 受け入れ条件も「mismatch が出ない」だけでは弱い。  
+  **token なし row の本文・カテゴリ・condition_id・強調ゼロ表示**がどう出るかまで固定しないと、後で UI が静かに空 row を落とす可能性がある。
+
+### 16.4 重大: export / Rust モデル側の列伝播タスクが不足
+
+- [重大] **説明列や text 側 reason 列を増やすなら、Python 側だけでは完結しない。**  
+  現状の Rust 側には `src/model.rs`, `src/csv_loader.rs`, `src/analysis_runner.rs`, `src/viewer_core.rs` などの固定 schema があり、paragraph/sentence レコードの列名は既に明示的に並んでいる。  
+  FT-15 / FT-18 では UI と export に触れる意図はあるが、**Rust モデル同期**が task 表に明示されていない。
+
+- [中] もし `text_group_explanations_text` や `matched_text_group_ids_text` のような列を追加するなら、FT-15 か FT-18 に次を含める方がよい。
+  - Rust record model の列追加
+  - CSV loader / JSON runner の受け渡し更新
+  - 既存 CSV との互換方針
+
+### 16.5 中: evaluator 側は「本文フレームの前計算」を 1 task 持った方がよい
+
+- [中] FT-06〜FT-09 だと、実装者が condition ごとに sentence/paragraph text を都度 join / concat する恐れがある。  
+  現在の evaluator は condition loop を回しているため、本文再構成をその内側でやると **性能悪化**だけでなく、group ごとに paragraph 連結規則がズレるバグも起きやすい。  
+  FT-01 と FT-06 の間に、たとえば **`text_unit_frame` を 1 回だけ作る task** を置く方が安全。
+
+- [中] その task の完了条件には、少なくとも次を入れた方がよい。
+  - sentence scope 用本文 frame
+  - paragraph scope 用本文 frame
+  - `is_table_paragraph` を踏まえた連結規則の固定
+  - canonical source に沿った 1 か所集中の生成
+
+### 16.6 中: FT-12 は unified truth summary を前提にした方がよい
+
+- [中] `required_categories_*` を安定させるには、paragraph / sentence / token hit を別々に集計するより、**condition truth を一度そろえた summary** を source of truth にした方がよい。  
+  いまの sentence モードは token hit summary 由来の経路が残っているので、FT-12 の受け入れ条件を満たすには「どの summary を category reference の正とするか」を 1 段明示した方がよい。
+
+- [中] つまり FT-12 は、現在の書き方よりも
+  - **truth summary の canonical 化**
+  - **reference eval がそれだけを見る**
+  
+  という形に寄せた方が、analysis_unit 差分の再発を防ぎやすい。
+
+### 16.7 中: テスト計画は Rust 側を optional にしない方がよい
+
+- [中] FT-20 が optional になっているが、今回もっとも壊れやすいのは **condition editor の load/save/round-trip** である。  
+  前回指摘した「保存不能・誤認」は Rust 側が本丸なので、**Rust 側の round-trip / save validation テストは必須寄り**に上げた方がよい。
+
+- [中] Python テストだけでは拾えないもの:
+  - `serde(flatten)` と typed field の競合
+  - editor UI が `text_groups` を不可視化する回帰
+  - 保存時 sanitize が `text_groups` を落とす回帰
+
+### 16.8 推奨する task 表の補強
+
+- `FT-01a`: canonical sentence/paragraph text frame の前計算経路
+- `FT-16a`: Rust `ConditionEditorItem` / `TextGroupEditorItem` 型追加と sanitize
+- `FT-16b`: load-save-reload round-trip テスト
+- `FT-14a`: selected count の定義修正
+- `FT-14b`: token なし row の rendering/export 経路追加
+- `FT-15a`: Rust model / CSV loader / analysis runner の列同期
+
+結論:
+
+- §15 の細分タスクは**良い骨格**になっているが、現状コードに対しては **「Rust editor の型追加」「token なし row の描画経路」「Rust 側 schema 伝播」** を明示しないと、実装中に task 外の work が大量に発生する。
+- 特に FT-16 / FT-17 / FT-14 は、現状のままだと「直すべき責務の境界」が曖昧なので、もう一段だけ分解しておく方が安全。
+
+## 17. §16（細分タスクセカンドオピニオン）の取り込み要約
+
+§16 の本文は **レビュー原文として維持**。実装タスク表（§15）は次の対応で更新した。
+
+| §16 の論点 | §15 での対応 |
+|------------|----------------|
+| FT-16/17 が sanitize のみでは不足（型・extra_fields・初期値） | **FT-16a**（型と sanitize 一式）、**FT-16b**（round-trip 必須テスト）に分割。旧 **FT-16** は廃止 |
+| FT-01 が paragraph 取得経路を含まない | **FT-01** 説明を拡張し **FT-01a** で本文フレーム前計算をタスク化 |
+| FT-14 が CLI 単独に見える | **FT-14a**（件数・limit）と **FT-14b**（rendering/export の token なし row）に分割。旧 **FT-14** は廃止 |
+| Rust 列伝播が表に無い | **FT-15a** を追加 |
+| evaluator 内での重複 concat リスク | **FT-01a** と **FT-06** の依存・完了条件で禁止 |
+| FT-12 が別 summary 経路と混在しうる | **FT-12** に unified truth summary を明記 |
+| FT-20 を optional にしたこと | **FT-20** を必須寄り（UI 回帰）に変更し **FT-16b** と役割分担 |
 
 ---
 
@@ -453,3 +582,5 @@
 | 2026-03-25 | 初版 |
 | 2026-03-25 | セカンドオピニオン（§13）追記、設計反映（§14）、本文 §6・§7・§8・§12 の補強 |
 | 2026-03-25 | §15 細分タスク（FT-00〜FT-20）追記 |
+| 2026-03-25 | §16 細分タスクへのセカンドオピニオン追記 |
+| 2026-03-25 | §16 反映: §15 を FT-01a/14a/14b/15a/16a/16b に再編、§17 要約追加 |
