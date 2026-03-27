@@ -597,26 +597,6 @@ def _build_positive_group_candidates(
         if form_group.get("anchor_form") is not None
         else ""
     )
-    if match_logic == "not":
-        relevant_rows = [
-            dict(row)
-            for row in unit_df
-            .filter(pl.col("normalized_form").is_in(forms))
-            .sort(position_column)
-            .iter_rows(named=True)
-        ]
-        if relevant_rows:
-            return []
-        return [
-            _build_candidate(
-                paragraph_id=paragraph_id,
-                unit_scope=unit_scope,
-                unit_id=unit_id,
-                hit_rows=[],
-                position_column=position_column,
-            )
-        ]
-
     target_forms = list(dict.fromkeys(forms + exclude_forms_any))
     relevant_rows = [
         dict(row)
@@ -645,8 +625,6 @@ def _build_positive_group_candidates(
             for row in selected_rows
         ]
 
-<<<<<<< HEAD
-=======
     if match_logic == "not":
         matched_form_count = sum(1 for form in forms if positions_by_form.get(form))
         if matched_form_count == 0:
@@ -664,7 +642,6 @@ def _build_positive_group_candidates(
     if not relevant_rows:
         return []
 
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     if effective_max_token_distance is not None:
         max_token_distance = int(effective_max_token_distance)
         if match_logic == "and":

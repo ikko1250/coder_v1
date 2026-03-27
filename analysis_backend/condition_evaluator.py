@@ -456,8 +456,6 @@ def _condition_has_reference_only_clause(condition: NormalizedCondition) -> bool
     return _condition_has_reference_clause(condition) and not _condition_has_base_clause(condition)
 
 
-<<<<<<< HEAD
-=======
 def _topologically_sort_conditions_by_references(
     normalized_conditions: list[NormalizedCondition],
 ) -> list[NormalizedCondition]:
@@ -513,7 +511,6 @@ def _partition_condition_id_references_by_scope(
             paragraph_scoped_ids.append(condition_id)
     return sentence_scoped_ids, paragraph_scoped_ids
 
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 def _form_group_logic_text(form_group: NormalizedFormGroup, group_index: int) -> str:
     if group_index == 1:
         return form_group.match_logic
@@ -2111,30 +2108,11 @@ def _build_base_condition_eval_df(
     required_category_all_count = len(condition.required_categories_all)
     required_category_any_count = len(condition.required_categories_any)
     distance_check_applied = condition.effective_max_token_distance is not None
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-    has_base_clause = bool(condition.forms or condition.annotation_filters)
-=======
-    has_token_clause = bool(condition.forms)
-    has_text_clause = bool(condition.text_groups)
-    has_annotation_clause = bool(condition.annotation_filters)
-<<<<<<< HEAD
-    has_base_clause = bool(has_token_clause or has_annotation_clause or has_text_clause)
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-    has_reference_clause = bool(
-        condition.required_categories_all or condition.required_categories_any
-    )
-=======
     has_token_clause = bool(condition.forms)
     has_text_clause = bool(condition.text_groups)
     has_annotation_clause = bool(condition.annotation_filters)
     has_base_clause = _condition_has_base_clause(condition)
     has_reference_clause = _condition_has_reference_clause(condition)
->>>>>>> Stashed changes
-=======
-    has_base_clause = _condition_has_base_clause(condition)
-    has_reference_clause = _condition_has_reference_clause(condition)
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     return (
         global_candidate_paragraphs_df
         .join(token_paragraph_eval_df, on="paragraph_id", how="left")
@@ -2603,12 +2581,6 @@ def _build_paragraph_match_summary_from_sentence_summary_df(
     return summary_df
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 def _build_sentence_reference_source_df(
     *,
     truth_df: pl.DataFrame,
@@ -2632,10 +2604,6 @@ def _build_sentence_reference_source_df(
         .filter(pl.col("is_match"))
         .group_by(group_keys)
         .agg(pl.col("condition_id").unique().sort().alias("matched_condition_ids"))
-<<<<<<< HEAD
-        .sort(group_keys)
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     )
     rows: list[dict[str, object]] = []
     for row in matched_ids_df.iter_rows(named=True):
@@ -2656,130 +2624,16 @@ def _build_sentence_reference_source_df(
                 "matched_categories": matched_categories,
             }
         )
-<<<<<<< HEAD
-    return pl.DataFrame(rows).cast(
-        {
-            **{key: pl.Int64 for key in group_keys},
-            "matched_condition_ids": pl.List(pl.String),
-            "matched_categories": pl.List(pl.String),
-        }
-    ) if rows else pl.DataFrame(
-=======
     return pl.DataFrame(
         rows,
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         schema={
             **{key: pl.Int64 for key in group_keys},
             "matched_condition_ids": pl.List(pl.String),
             "matched_categories": pl.List(pl.String),
-<<<<<<< HEAD
-        }
-    )
-
-
-def _build_paragraph_reference_source_df(
-    condition_eval_df: pl.DataFrame,
-) -> pl.DataFrame:
-    reference_schema = {
-        "paragraph_id": pl.Int64,
-        "matched_condition_ids": pl.List(pl.String),
-        "matched_categories": pl.List(pl.String),
-    }
-    if condition_eval_df.is_empty():
-        return pl.DataFrame(schema=reference_schema)
-
-    matched_condition_ids_df = (
-        condition_eval_df
-        .filter(pl.col("is_match"))
-        .group_by("paragraph_id")
-        .agg(pl.col("condition_id").unique().sort().alias("matched_condition_ids"))
-    )
-    matched_categories_df = (
-        condition_eval_df
-        .filter(pl.col("is_match"))
-        .explode("categories")
-        .filter(pl.col("categories").is_not_null() & (pl.col("categories") != ""))
-        .group_by("paragraph_id")
-        .agg(pl.col("categories").unique().sort().alias("matched_categories"))
-    )
-    return (
-        condition_eval_df
-        .select("paragraph_id")
-        .unique()
-        .join(matched_condition_ids_df, on="paragraph_id", how="left")
-        .join(matched_categories_df, on="paragraph_id", how="left")
-        .with_columns([
-            pl.when(pl.col("matched_condition_ids").is_null())
-            .then(pl.lit([], dtype=pl.List(pl.String)))
-            .otherwise(pl.col("matched_condition_ids"))
-            .alias("matched_condition_ids"),
-            pl.when(pl.col("matched_categories").is_null())
-            .then(pl.lit([], dtype=pl.List(pl.String)))
-            .otherwise(pl.col("matched_categories"))
-            .alias("matched_categories"),
-        ])
-        .sort("paragraph_id")
-        .cast(reference_schema)
-    )
-
-
-def _topologically_sort_conditions_by_references(
-    normalized_conditions: list[NormalizedCondition],
-) -> list[NormalizedCondition]:
-    if len(normalized_conditions) <= 1:
-        return normalized_conditions
-
-    ordered_condition_ids = [condition.condition_id for condition in normalized_conditions]
-    condition_lookup = {
-        condition.condition_id: condition for condition in normalized_conditions
-    }
-    dependency_sets = {
-        condition.condition_id: set(
-            condition.required_condition_ids_all
-            + condition.required_condition_ids_any
-            + condition.excluded_condition_ids_any
-        )
-        for condition in normalized_conditions
-    }
-    resolved_condition_ids: set[str] = set()
-    ordered_conditions: list[NormalizedCondition] = []
-
-    while len(ordered_conditions) < len(normalized_conditions):
-        ready_conditions = [
-            condition_lookup[condition_id]
-            for condition_id in ordered_condition_ids
-            if condition_id not in resolved_condition_ids
-            and dependency_sets[condition_id].issubset(resolved_condition_ids)
-        ]
-        if not ready_conditions:
-            return normalized_conditions
-        for condition in ready_conditions:
-            ordered_conditions.append(condition)
-            resolved_condition_ids.add(condition.condition_id)
-    return ordered_conditions
-
-
-def _partition_condition_id_references_by_scope(
-    condition_ids: list[str],
-    *,
-    condition_scope_lookup: dict[str, str],
-) -> tuple[list[str], list[str]]:
-    sentence_scoped_ids: list[str] = []
-    paragraph_scoped_ids: list[str] = []
-    for condition_id in condition_ids:
-        if condition_scope_lookup.get(condition_id) == "sentence":
-            sentence_scoped_ids.append(condition_id)
-        else:
-            paragraph_scoped_ids.append(condition_id)
-    return sentence_scoped_ids, paragraph_scoped_ids
-
-
-=======
         },
     )
 
 
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 def _apply_sentence_reference_clauses(
     *,
     sentence_truth_df: pl.DataFrame,
@@ -3044,11 +2898,6 @@ def _apply_sentence_reference_clauses(
     )
 
 
-<<<<<<< HEAD
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 def _build_sentence_condition_truth_df(
     *,
     sentence_universe_df: pl.DataFrame,
@@ -3131,10 +2980,6 @@ def _build_sentence_condition_truth_df(
         .with_columns(pl.col("is_match_hit").fill_null(False))
     )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     if text_unit_frames is not None and any(condition.text_groups for condition in normalized_conditions):
         global_para_for_text_df = sentence_universe_df.select("paragraph_id").unique()
         text_ok_frames: list[pl.DataFrame] = []
@@ -3146,62 +2991,23 @@ def _build_sentence_condition_truth_df(
                     global_candidate_paragraphs_df=global_para_for_text_df,
                     condition=condition,
                 )
-<<<<<<< HEAD
             )
         text_ok_df = pl.concat(text_ok_frames, how="vertical")
         truth_df = truth_df.join(text_ok_df, on=["sentence_id", "paragraph_id", "condition_id"], how="left")
     else:
         truth_df = truth_df.with_columns(pl.lit(True).alias("text_ok"))
-=======
-    if text_unit_frames is None or not any(condition.text_groups for condition in normalized_conditions):
-        return (
-            truth_df
-            .with_columns(pl.col("is_match_hit").alias("is_match"))
-            .select(list(truth_schema.keys()))
-            .sort(["paragraph_id", "sentence_id", "condition_id"])
-        )
-
-    global_para_for_text_df = sentence_universe_df.select("paragraph_id").unique()
-    text_ok_frames: list[pl.DataFrame] = []
-    for condition in normalized_conditions:
-        text_ok_frames.append(
-            _build_sentence_grain_text_ok_df(
-                sentence_universe_df=sentence_universe_df,
-                text_unit_frames=text_unit_frames,
-                global_candidate_paragraphs_df=global_para_for_text_df,
-                condition=condition,
-            )
-        )
-    text_ok_df = pl.concat(text_ok_frames, how="vertical")
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-            )
-        text_ok_df = pl.concat(text_ok_frames, how="vertical")
-        truth_df = truth_df.join(text_ok_df, on=["sentence_id", "paragraph_id", "condition_id"], how="left")
-    else:
-        truth_df = truth_df.with_columns(pl.lit(True).alias("text_ok"))
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 
     clause_meta_df = pl.DataFrame(
         [
             {
                 "condition_id": condition.condition_id,
-<<<<<<< HEAD
-<<<<<<< HEAD
                 "has_base_clause": _condition_has_base_clause(condition),
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-                "has_base_clause": _condition_has_base_clause(condition),
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
                 "has_token_clause": bool(condition.forms),
                 "has_text_clause": bool(condition.text_groups),
             }
             for condition in normalized_conditions
         ]
     )
-<<<<<<< HEAD
-<<<<<<< HEAD
     truth_df = (
         truth_df
         .join(clause_meta_df, on="condition_id", how="left")
@@ -3210,55 +3016,19 @@ def _build_sentence_condition_truth_df(
             pl.when(pl.col("has_base_clause").not_())
             .then(pl.lit(True))
             .when(pl.col("has_text_clause") & pl.col("has_token_clause"))
-=======
-    return (
-=======
-    truth_df = (
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
-        truth_df
-        .join(clause_meta_df, on="condition_id", how="left")
-        .with_columns(pl.col("text_ok").fill_null(True))
-        .with_columns(
-<<<<<<< HEAD
-            pl.when(pl.col("has_text_clause") & pl.col("has_token_clause"))
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-            pl.when(pl.col("has_base_clause").not_())
-            .then(pl.lit(True))
-            .when(pl.col("has_text_clause") & pl.col("has_token_clause"))
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
             .then(pl.col("is_match_hit") & pl.col("text_ok"))
             .when(pl.col("has_text_clause") & pl.col("has_token_clause").not_())
             .then(pl.col("text_ok"))
             .otherwise(pl.col("is_match_hit"))
-<<<<<<< HEAD
-<<<<<<< HEAD
             .alias("base_is_match")
-        )
-        .select(["sentence_id", "paragraph_id", "condition_id", "base_is_match"])
-        .sort(["paragraph_id", "sentence_id", "condition_id"])
-    )
-    return _apply_sentence_reference_clauses(
-        sentence_truth_df=truth_df,
-        normalized_conditions=normalized_conditions,
-    )
-=======
-            .alias("is_match")
-=======
-            .alias("base_is_match")
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         )
         .select(list(truth_schema.keys()))
         .sort(["paragraph_id", "sentence_id", "condition_id"])
     )
-<<<<<<< HEAD
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
     return _apply_sentence_reference_clauses(
         sentence_truth_df=truth_df,
         normalized_conditions=normalized_conditions,
     )
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 
 
 def _inherit_paragraph_summary_to_sentence_summary(
@@ -3354,10 +3124,6 @@ def _inherit_paragraph_summary_to_sentence_summary(
     return merged_df
 
 
-<<<<<<< HEAD
->>>>>>> Stashed changes
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
 def _filter_sentence_hit_tokens_by_reference_clauses(
     *,
     condition_hit_tokens_df: pl.DataFrame,
@@ -3424,8 +3190,6 @@ def _filter_condition_hit_tokens_by_sentence_truth(
     )
 
 
-<<<<<<< HEAD
-=======
 def _build_paragraph_reference_source_df(
     condition_eval_df: pl.DataFrame,
 ) -> pl.DataFrame:
@@ -3438,7 +3202,6 @@ def _build_paragraph_reference_source_df(
     )
 
 
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 def _build_category_reference_eval_df(
     *,
     global_candidate_paragraphs_df: pl.DataFrame,
@@ -3470,18 +3233,6 @@ def _build_category_reference_eval_df(
             on="paragraph_id",
             how="left",
         )
-<<<<<<< HEAD
-        .with_columns([
-            pl.when(pl.col("matched_categories").is_null())
-            .then(pl.lit([], dtype=pl.List(pl.String)))
-            .otherwise(pl.col("matched_categories"))
-            .alias("matched_categories"),
-            pl.when(pl.col("matched_condition_ids").is_null())
-            .then(pl.lit([], dtype=pl.List(pl.String)))
-            .otherwise(pl.col("matched_condition_ids"))
-            .alias("matched_condition_ids"),
-        ])
-=======
         .with_columns(
             [
                 pl.when(pl.col("matched_categories").is_null())
@@ -3494,7 +3245,6 @@ def _build_category_reference_eval_df(
                 .alias("matched_condition_ids"),
             ]
         )
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     )
     if all_required_categories or all_required_condition_ids:
         available_categories_df = available_categories_df.with_columns(
@@ -3606,119 +3356,6 @@ def _apply_category_reference_eval(
         )
         .select(list(CONDITION_EVAL_SCHEMA.keys()))
     )
-
-
-def _find_condition_id_reference_cycle_nodes(
-    graph: dict[str, list[str]],
-) -> set[str]:
-    state: dict[str, int] = {}
-    active_stack: list[str] = []
-    cycle_nodes: set[str] = set()
-
-    def visit(node: str) -> None:
-        node_state = state.get(node, 0)
-        if node_state == 1:
-            if node in active_stack:
-                start_index = active_stack.index(node)
-                cycle_nodes.update(active_stack[start_index:])
-            return
-        if node_state == 2:
-            return
-
-        state[node] = 1
-        active_stack.append(node)
-        for neighbor in graph.get(node, []):
-            visit(neighbor)
-        active_stack.pop()
-        state[node] = 2
-
-    for node in graph:
-        visit(node)
-    return cycle_nodes
-
-
-def _validate_condition_id_references(
-    normalized_conditions: list[NormalizedCondition],
-) -> tuple[list[NormalizedCondition], list[ConfigIssue]]:
-    known_condition_ids = {condition.condition_id for condition in normalized_conditions}
-    condition_index_lookup = {
-        condition.condition_id: index
-        for index, condition in enumerate(normalized_conditions, start=1)
-    }
-    issues: list[ConfigIssue] = []
-    locally_invalid_ids: set[str] = set()
-
-    for condition_index, condition in enumerate(normalized_conditions, start=1):
-        for field_name, referenced_ids in [
-            ("required_condition_ids_all", condition.required_condition_ids_all),
-            ("required_condition_ids_any", condition.required_condition_ids_any),
-            ("excluded_condition_ids_any", condition.excluded_condition_ids_any),
-        ]:
-            for referenced_id in referenced_ids:
-                if referenced_id == condition.condition_id:
-                    issues.append(
-                        _build_condition_issue(
-                            code="condition_id_reference_self",
-                            severity="error",
-                            message=f"'{field_name}' must not reference the condition itself.",
-                            condition_index=condition_index,
-                            condition_id=condition.condition_id,
-                            field_name=field_name,
-                        )
-                    )
-                    locally_invalid_ids.add(condition.condition_id)
-                elif referenced_id not in known_condition_ids:
-                    issues.append(
-                        _build_condition_issue(
-                            code="condition_id_reference_unknown",
-                            severity="error",
-                            message=f"Unknown condition_id reference: {referenced_id}",
-                            condition_index=condition_index,
-                            condition_id=condition.condition_id,
-                            field_name=field_name,
-                        )
-                    )
-                    locally_invalid_ids.add(condition.condition_id)
-
-    valid_conditions = [
-        condition
-        for condition in normalized_conditions
-        if condition.condition_id not in locally_invalid_ids
-    ]
-    valid_condition_ids = {condition.condition_id for condition in valid_conditions}
-    reference_graph = {
-        condition.condition_id: [
-            referenced_id
-            for referenced_id in dict.fromkeys(
-                condition.required_condition_ids_all
-                + condition.required_condition_ids_any
-                + condition.excluded_condition_ids_any
-            )
-            if referenced_id in valid_condition_ids
-        ]
-        for condition in valid_conditions
-    }
-    cyclic_condition_ids = _find_condition_id_reference_cycle_nodes(reference_graph)
-    if cyclic_condition_ids:
-        cycle_text = ", ".join(sorted(cyclic_condition_ids))
-        for condition_id in sorted(cyclic_condition_ids, key=condition_index_lookup.get):
-            issues.append(
-                _build_condition_issue(
-                    code="condition_id_reference_cycle",
-                    severity="error",
-                    message=f"condition-id references must be acyclic: {cycle_text}",
-                    condition_index=condition_index_lookup[condition_id],
-                    condition_id=condition_id,
-                    field_name="required_condition_ids_all",
-                )
-            )
-        valid_conditions = [
-            condition
-            for condition in valid_conditions
-            if condition.condition_id not in cyclic_condition_ids
-        ]
-
-    return valid_conditions, issues
 
 
 def normalize_cooccurrence_conditions_result(
@@ -3843,12 +3480,6 @@ def normalize_cooccurrence_conditions_result(
         if invalid_required_categories_any:
             continue
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         required_condition_ids_all, required_condition_ids_all_issues, invalid_required_condition_ids_all = (
             _normalize_string_clause_list(
                 raw_condition.get("required_condition_ids_all"),
@@ -3888,11 +3519,6 @@ def normalize_cooccurrence_conditions_result(
         if invalid_excluded_condition_ids_any:
             continue
 
-<<<<<<< HEAD
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         normalized_text_groups, text_group_issues, invalid_text_groups = _normalize_text_groups(
             raw_condition.get("text_groups"),
             condition_index=idx,
@@ -3903,10 +3529,6 @@ def normalize_cooccurrence_conditions_result(
         if invalid_text_groups:
             continue
 
-<<<<<<< HEAD
->>>>>>> Stashed changes
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
         if normalized_form_groups:
             unique_forms = list(
                 dict.fromkeys(
@@ -3934,14 +3556,6 @@ def normalize_cooccurrence_conditions_result(
             requested_max_token_distance = None
             effective_max_token_distance = None
 
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-        has_reference_clause = bool(required_categories_all or required_categories_any)
-<<<<<<< HEAD
-        if not unique_forms and not normalized_annotation_filters and not has_reference_clause:
-=======
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         has_reference_clause = bool(
             required_categories_all
             or required_categories_any
@@ -3949,11 +3563,6 @@ def normalize_cooccurrence_conditions_result(
             or required_condition_ids_any
             or excluded_condition_ids_any
         )
-<<<<<<< HEAD
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         has_text_clause = bool(normalized_text_groups)
         if (
             not unique_forms
@@ -3961,33 +3570,14 @@ def normalize_cooccurrence_conditions_result(
             and not has_reference_clause
             and not has_text_clause
         ):
-<<<<<<< HEAD
->>>>>>> Stashed changes
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
             issues.append(
                 _build_condition_issue(
                     code="forms_empty",
                     severity="error",
                     message=(
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-                        "Condition must define at least one clause: forms, annotation_filters, "
-                        "required_categories_all, or required_categories_any."
-=======
                         "Condition must define at least one clause: forms, form_groups, text_groups, "
                         "annotation_filters, required_categories_all, required_categories_any, "
                         "required_condition_ids_all, required_condition_ids_any, or excluded_condition_ids_any."
->>>>>>> Stashed changes
-=======
-                        "Condition must define at least one clause: forms, form_groups, text_groups, "
-<<<<<<< HEAD
-                        "annotation_filters, required_categories_all, or required_categories_any."
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-                        "annotation_filters, required_categories_all, required_categories_any, "
-                        "required_condition_ids_all, required_condition_ids_any, or excluded_condition_ids_any."
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
                     ),
                     condition_index=idx,
                     condition_id=provisional_condition_id,
@@ -4174,12 +3764,6 @@ def normalize_cooccurrence_conditions_result(
             )
         )
 
-<<<<<<< HEAD
-    cleaned_conditions, condition_id_reference_issues = _validate_condition_id_references(
-        cleaned_conditions
-    )
-    issues.extend(condition_id_reference_issues)
-=======
     condition_id_lookup = {
         condition.condition_id: condition for condition in cleaned_conditions
     }
@@ -4237,7 +3821,6 @@ def normalize_cooccurrence_conditions_result(
             for condition in cleaned_conditions
             if condition.condition_id not in cycle_condition_ids
         ]
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
 
     return NormalizeConditionsResult(
         normalized_conditions=cleaned_conditions,
@@ -4311,101 +3894,6 @@ def select_target_ids_by_conditions_result(
             tokens_df=tokens_df,
             sentences_df=sentence_universe_df,
         )
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-        filtered_sentence_hit_tokens_df = _filter_sentence_hit_tokens_by_reference_clauses(
-            condition_hit_tokens_df=condition_hit_result.condition_hit_tokens_df,
-            normalized_conditions=sentence_conditions,
-        )
-        sentence_match_summary_df = _build_sentence_match_summary_df(
-            condition_hit_tokens_df=filtered_sentence_hit_tokens_df,
-            condition_match_logic=condition_match_logic,
-            normalized_conditions=sentence_conditions,
-=======
-        warning_messages: list[MatchingWarning] = []
-
-        sentence_hit_tokens_df = _empty_condition_hit_tokens_df()
-        sentence_match_summary_df_sentence_scope = _empty_sentence_summary_df()
-        paragraph_match_summary_df_sentence_scope = _empty_paragraph_summary_df()
-        if sentence_scoped_conditions:
-            sentence_forms = sorted({
-                form
-                for condition in sentence_scoped_conditions
-                for form in (
-                    condition.forms
-                    + [
-                        exclude_form
-                        for form_group in condition.form_groups
-                        for exclude_form in form_group.exclude_forms_any
-                    ]
-                )
-            })
-            sentence_candidate_tokens_df = (
-                build_candidate_tokens_with_position_df(
-                    tokens_df=tokens_df,
-                    sentences_df=sentences_df,
-                    target_forms=sentence_forms,
-                )
-                if sentence_forms
-                else _empty_candidate_tokens_df()
-            )
-            sentence_hit_result = build_condition_hit_result(
-                tokens_with_position_df=sentence_candidate_tokens_df,
-                cooccurrence_conditions=_normalized_conditions_to_dicts(sentence_scoped_conditions),
-                distance_matching_mode=distance_matching_mode,
-                distance_match_combination_cap=distance_match_combination_cap,
-                distance_match_strict_safety_limit=distance_match_strict_safety_limit,
-            )
-            warning_messages.extend(sentence_hit_result.warning_messages)
-            sentence_hit_tokens_df = sentence_hit_result.condition_hit_tokens_df
-            sentence_match_summary_df_sentence_scope = _build_sentence_match_summary_df(
-                condition_hit_tokens_df=sentence_hit_tokens_df,
-                condition_match_logic=condition_match_logic,
-                normalized_conditions=sentence_scoped_conditions,
-            )
-            paragraph_match_summary_df_sentence_scope = _build_paragraph_match_summary_from_sentence_summary_df(
-                sentence_match_summary_df=sentence_match_summary_df_sentence_scope,
-                condition_match_logic=condition_match_logic,
-                normalized_conditions=sentence_scoped_conditions,
-            )
-
-        paragraph_match_summary_df_paragraph_scope = _empty_paragraph_summary_df()
-        paragraph_match_details_df_paragraph_scope = _empty_paragraph_summary_df()
-        paragraph_hit_tokens_df = _empty_condition_hit_tokens_df()
-        paragraph_base_condition_eval_df = _empty_condition_eval_df()
-        if paragraph_scoped_conditions:
-            _, paragraph_base_condition_eval_df = _build_paragraph_base_condition_eval_context(
-                candidate_tokens_df=candidate_tokens_df,
-                sentences_df=sentences_df,
-                normalized_conditions=paragraph_scoped_conditions,
-                normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
-                text_unit_frames=text_unit_frames,
-            )
-            if not paragraph_base_condition_eval_df.is_empty():
-                paragraph_match_summary_df_paragraph_scope = _build_paragraph_match_summary_df(
-                    condition_eval_df=paragraph_base_condition_eval_df,
-                    condition_match_logic=condition_match_logic,
-                    normalized_conditions=paragraph_scoped_conditions,
-                    match_column="base_is_match",
-                )
-            paragraph_hit_result = build_condition_hit_result(
-                tokens_with_position_df=candidate_tokens_df,
-                cooccurrence_conditions=_normalized_conditions_to_dicts(paragraph_scoped_conditions),
-                distance_matching_mode=distance_matching_mode,
-                distance_match_combination_cap=distance_match_combination_cap,
-                distance_match_strict_safety_limit=distance_match_strict_safety_limit,
-            )
-            warning_messages.extend(paragraph_hit_result.warning_messages)
-            paragraph_hit_tokens_df = paragraph_hit_result.condition_hit_tokens_df
-
-        sentence_truth_df = _build_sentence_condition_truth_df(
-            sentence_universe_df=sentence_universe_df,
-            normalized_conditions=normalized_conditions,
-            sentence_match_summary_df=sentence_match_summary_df_sentence_scope,
-            paragraph_match_summary_df=paragraph_match_summary_df_paragraph_scope,
-            text_unit_frames=text_unit_frames,
-        )
-=======
         warning_messages: list[MatchingWarning] = []
 
         sentence_hit_tokens_df = _empty_condition_hit_tokens_df()
@@ -4495,7 +3983,6 @@ def select_target_ids_by_conditions_result(
             paragraph_match_summary_df=paragraph_match_summary_df_paragraph_scope,
             text_unit_frames=text_unit_frames,
         )
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
         if sentence_truth_df.is_empty():
             return TargetSelectionResult(
                 candidate_tokens_df=candidate_tokens_df,
@@ -4509,10 +3996,6 @@ def select_target_ids_by_conditions_result(
                 text_unit_frames=text_unit_frames,
             )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         sentence_hit_tokens_df = _filter_condition_hit_tokens_by_sentence_truth(
             condition_hit_tokens_df=sentence_hit_tokens_df,
             sentence_truth_df=sentence_truth_df,
@@ -4543,11 +4026,6 @@ def select_target_ids_by_conditions_result(
                 condition_match_logic=condition_match_logic,
             )
 
-<<<<<<< HEAD
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         normalized_match_logic = condition_match_logic.strip().lower()
         condition_count = len(normalized_conditions)
         sentence_selection_df = (
@@ -4565,10 +4043,6 @@ def select_target_ids_by_conditions_result(
                 ]
             )
             .sort(["paragraph_id", "sentence_id"])
-<<<<<<< HEAD
->>>>>>> Stashed changes
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
         )
         selected_displayable_sentence_keys_df = (
             sentence_selection_df
@@ -4586,11 +4060,6 @@ def select_target_ids_by_conditions_result(
             .select(["sentence_id", "paragraph_id"])
             .sort(["paragraph_id", "sentence_id"])
         )
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
 
         condition_categories = {
             condition.condition_id: condition.categories for condition in normalized_conditions
@@ -4639,15 +4108,7 @@ def select_target_ids_by_conditions_result(
         )
         details_sources = [
             paragraph_match_summary_df_sentence_scope,
-<<<<<<< HEAD
-<<<<<<< HEAD
             paragraph_match_details_df_paragraph_scope,
-=======
-            paragraph_match_summary_df_paragraph_scope,
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-            paragraph_match_details_df_paragraph_scope,
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         ]
         details_rows: dict[int, dict[str, str]] = {}
         for details_source_df in details_sources:
@@ -4725,10 +4186,6 @@ def select_target_ids_by_conditions_result(
                 .sort("paragraph_id")
             )
 
-<<<<<<< HEAD
->>>>>>> Stashed changes
-=======
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
         target_paragraph_ids = (
             paragraph_match_summary_df
             .filter(pl.col("is_selected"))
@@ -4759,17 +4216,7 @@ def select_target_ids_by_conditions_result(
             if target_paragraph_ids
             else []
         )
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-=======
         sentence_match_summary_df = _build_sentence_match_summary_from_truth_df(
-=======
-        sentence_match_summary_df = _inherit_paragraph_summary_to_sentence_summary(
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-        sentence_match_summary_df = _build_sentence_match_summary_from_truth_df(
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
             sentence_universe_df=(
                 selected_displayable_sentence_keys_df.filter(
                     pl.col("paragraph_id").is_in(target_paragraph_ids)
@@ -4777,38 +4224,10 @@ def select_target_ids_by_conditions_result(
                 if target_paragraph_ids
                 else selected_displayable_sentence_keys_df.clear()
             ),
-<<<<<<< HEAD
-<<<<<<< HEAD
             sentence_truth_df=sentence_truth_df,
             normalized_conditions=normalized_conditions,
             condition_match_logic=condition_match_logic,
         )
->>>>>>> Stashed changes
-=======
-            sentence_match_summary_df=sentence_match_summary_df_sentence_scope,
-            paragraph_match_summary_df=paragraph_match_summary_df_paragraph_scope,
-        )
-        sentence_match_summary_df = (
-            sentence_match_summary_df
-            .join(
-                sentence_selection_df.select(["sentence_id", "paragraph_id", "is_selected"]).rename(
-                    {"is_selected": "is_selected_truth"}
-                ),
-                on=["sentence_id", "paragraph_id"],
-                how="left",
-            )
-            .with_columns(
-                pl.col("is_selected_truth").fill_null(False).alias("is_selected")
-            )
-            .select(list(SENTENCE_SUMMARY_SCHEMA.keys()))
-            .sort(["paragraph_id", "sentence_id"])
-=======
-            sentence_truth_df=sentence_truth_df,
-            normalized_conditions=normalized_conditions,
-            condition_match_logic=condition_match_logic,
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
-        )
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
         return TargetSelectionResult(
             candidate_tokens_df=candidate_tokens_df,
             condition_eval_df=_empty_condition_eval_df(),
@@ -4854,38 +4273,12 @@ def select_target_ids_by_conditions_result(
         if all_forms
         else _empty_candidate_tokens_df()
     )
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-    normalized_annotations_df = (
-        normalized_paragraph_annotations_df.select(list(NORMALIZED_PARAGRAPH_ANNOTATION_SCHEMA.keys()))
-        if normalized_paragraph_annotations_df is not None and not normalized_paragraph_annotations_df.is_empty()
-        else _empty_normalized_paragraph_annotations_df()
-    )
-    any_condition_has_text_groups = any(bool(condition.text_groups) for condition in normalized_conditions)
-    global_candidate_paragraphs_df = _build_global_candidate_paragraphs_df(
-        candidate_tokens_df=candidate_tokens_df,
-        normalized_paragraph_annotations_df=normalized_annotations_df,
-<<<<<<< HEAD
-=======
     global_candidate_paragraphs_df, base_condition_eval_df = _build_paragraph_base_condition_eval_context(
         candidate_tokens_df=candidate_tokens_df,
         sentences_df=sentences_df,
         normalized_conditions=normalized_conditions,
         normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
         text_unit_frames=text_unit_frames,
->>>>>>> Stashed changes
-=======
-        sentences_df=sentences_df,
-        union_all_paragraph_ids_from_sentences=any_condition_has_text_groups,
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
-=======
-    global_candidate_paragraphs_df, base_condition_eval_df = _build_paragraph_base_condition_eval_context(
-        candidate_tokens_df=candidate_tokens_df,
-        sentences_df=sentences_df,
-        normalized_conditions=normalized_conditions,
-        normalized_paragraph_annotations_df=normalized_paragraph_annotations_df,
-        text_unit_frames=text_unit_frames,
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     )
     if global_candidate_paragraphs_df.is_empty():
         return TargetSelectionResult(
@@ -4898,50 +4291,7 @@ def select_target_ids_by_conditions_result(
             target_sentence_ids=[],
             text_unit_frames=text_unit_frames,
         )
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-
-    base_condition_eval_frames: list[pl.DataFrame] = []
-    for condition in normalized_conditions:
-        token_paragraph_eval_df = (
-            _build_form_group_token_paragraph_eval_df(
-                candidate_tokens_df=candidate_tokens_df,
-                sentences_df=sentences_df,
-                global_candidate_paragraphs_df=global_candidate_paragraphs_df,
-                condition=condition,
-            )
-            if _uses_group_evaluator(condition)
-            else _build_token_paragraph_eval_df(
-                candidate_tokens_df=candidate_tokens_df,
-                condition=condition,
-            )
-        )
-        annotation_paragraph_eval_df = _build_annotation_paragraph_eval_df(
-            normalized_paragraph_annotations_df=normalized_annotations_df,
-            condition=condition,
-        )
-        text_paragraph_eval_df = _build_text_groups_paragraph_eval_df(
-            text_unit_frames=text_unit_frames,
-            global_candidate_paragraphs_df=global_candidate_paragraphs_df,
-            condition=condition,
-        )
-        base_condition_eval_frames.append(
-            _build_base_condition_eval_df(
-                global_candidate_paragraphs_df=global_candidate_paragraphs_df,
-                token_paragraph_eval_df=token_paragraph_eval_df,
-                annotation_paragraph_eval_df=annotation_paragraph_eval_df,
-                text_paragraph_eval_df=text_paragraph_eval_df,
-                condition=condition,
-            )
-        )
-
-    if not base_condition_eval_frames:
-=======
     if base_condition_eval_df.is_empty():
->>>>>>> Stashed changes
-=======
-    if base_condition_eval_df.is_empty():
->>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
         return TargetSelectionResult(
             candidate_tokens_df=candidate_tokens_df,
             condition_eval_df=_empty_condition_eval_df(),

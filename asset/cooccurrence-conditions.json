@@ -4,90 +4,33 @@
   "max_reconstructed_paragraphs": 10000,
   "cooccurrence_conditions": [
     {
-      "condition_id": "kakunin_gou",
+      "condition_id": "table",
       "categories": [
-        "確認_号"
+        "表(抑制区域)"
       ],
       "overall_search_scope": "paragraph",
       "form_groups": [
         {
           "forms": [
-            "(",
-            "1",
-            ")"
-          ],
-          "match_logic": "and",
-          "anchor_form": "(",
-          "search_scope": "sentence",
-          "max_token_distance": 3,
-          "exclude_forms_any": [
-            "様式"
-          ]
-        },
-        {
-          "forms": [
-            "(",
-            "2",
-            ")"
-          ],
-          "match_logic": "and",
-          "anchor_form": "(",
-          "combine_logic": "and",
-          "search_scope": "sentence",
-          "max_token_distance": 3,
-          "exclude_forms_any": [
-            "様式"
-          ]
-        }
-      ]
-    },
-    {
-      "condition_id": "kakunin_gou_hyou",
-      "categories": [
-        "確認_号_表"
-      ],
-      "overall_search_scope": "sentence",
-      "form_groups": [
-        {
-          "forms": [
-            "(",
-            "1",
-            ")"
-          ],
-          "match_logic": "and",
-          "anchor_form": "(",
-          "search_scope": "sentence",
-          "max_token_distance": 3,
-          "exclude_forms_any": [
-            "様式"
-          ]
-        },
-        {
-          "forms": [
-            "(",
-            "2",
-            ")"
-          ],
-          "match_logic": "and",
-          "anchor_form": "(",
-          "combine_logic": "and",
-          "max_token_distance": 3,
-          "exclude_forms_any": [
-            "様式"
-          ]
-        },
-        {
-          "forms": [
             "|"
           ],
-          "match_logic": "not",
+          "match_logic": "and",
+          "anchor_form": "|",
+          "max_token_distance": 3
+        },
+        {
+          "forms": [
+            "抑制",
+            "区域"
+          ],
+          "match_logic": "and",
+          "anchor_form": "抑制",
           "combine_logic": "and",
-          "search_scope": "sentence"
+          "max_token_distance": 2
         }
       ]
     },
     {
-<<<<<<< Updated upstream
       "condition_id": "table2",
       "categories": [
         "表(区域の名称)"
@@ -139,9 +82,6 @@
     },
     {
       "condition_id": "area_lv1",
-=======
-      "condition_id": "yokusei",
->>>>>>> Stashed changes
       "categories": [
         "抑制区域"
       ],
@@ -1116,11 +1056,7 @@
           ],
           "match_logic": "and",
           "anchor_form": "抑制",
-<<<<<<< HEAD
-<<<<<<< Updated upstream
-=======
           "combine_logic": "and",
->>>>>>> c10fffb0712708b164fba1a17ecd4e82f6419dc7
           "max_token_distance": 2
         }
       ]
@@ -5179,13 +5115,6 @@
           ],
           "match_logic": "or"
         }
-=======
-          "max_token_distance": 3
-        }
-      ],
-      "required_condition_ids_all": [
-        "kakunin_gou_hyou"
->>>>>>> Stashed changes
       ]
     }
   ]
