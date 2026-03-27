@@ -2,6 +2,7 @@
 
 mod analysis_process_host;
 mod analysis_runner;
+mod analysis_session_cache;
 mod app;
 mod app_host;
 mod app_logger;

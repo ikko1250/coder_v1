@@ -220,6 +220,7 @@ mod tests {
             matched_form_group_ids_text: String::new(),
             matched_form_group_logics_text: String::new(),
             form_group_explanations_text: String::new(),
+            text_groups_explanations_text: String::new(),
             mixed_scope_warning_text: String::new(),
             match_group_ids_text: String::new(),
             match_group_count: String::new(),

@@ -9,7 +9,7 @@ from .condition_model import DataAccessResult
 from .condition_model import DistanceMatchingMode
 from .condition_model import FilterConfig
 from .condition_model import LoadFilterConfigResult
-from .condition_model import NormalizedCondition
+from .condition_evaluator import _normalized_conditions_to_dicts
 from .condition_evaluator import normalize_cooccurrence_conditions as _normalize_cooccurrence_conditions_impl
 from .condition_evaluator import select_target_ids_by_conditions_result as _select_target_ids_by_conditions_result_impl
 from .data_access import read_analysis_sentences as _read_analysis_sentences_impl
@@ -36,8 +36,12 @@ from .rendering import build_rendered_sentences_df as _build_rendered_sentences_
 from .rendering import build_token_annotations_df as _build_token_annotations_df_impl
 from .rendering import render_tagged_token as _render_tagged_token_impl
 from .token_position import build_tokens_with_position_df as _build_tokens_with_position_df_impl
+from .text_unit_frames import TextUnitFrames
+from .text_unit_frames import build_text_unit_frames as _build_text_unit_frames_impl
 
 __all__ = [
+    "TextUnitFrames",
+    "build_text_unit_frames",
     "build_condition_hit_tokens_df",
     "build_condition_hit_result",
     "build_reconstructed_paragraphs_export_df",
@@ -99,6 +103,10 @@ def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None)
     return _read_analysis_sentences_result_impl(db_path=db_path, limit_rows=limit_rows)
 
 
+def build_text_unit_frames(sentences_df: pl.DataFrame) -> TextUnitFrames:
+    return _build_text_unit_frames_impl(sentences_df)
+
+
 def read_paragraph_document_metadata(db_path: Path, paragraph_ids: list[int]) -> pl.DataFrame:
     return _read_paragraph_document_metadata_impl(db_path=db_path, paragraph_ids=paragraph_ids)
 
@@ -150,49 +158,6 @@ def render_tagged_token(
     annotation: dict[str, object] | None,
 ) -> tuple[str, str, list[str], list[str], list[str], int]:
     return _render_tagged_token_impl(surface=surface, annotation=annotation)
-
-def _normalized_conditions_to_dicts(
-    normalized_conditions: list[NormalizedCondition],
-) -> list[dict[str, object]]:
-    return [
-        {
-            "condition_id": condition.condition_id,
-            "categories": condition.categories,
-            "category_text": condition.category_text,
-            "overall_search_scope": condition.overall_search_scope,
-            "forms": condition.forms,
-            "form_groups": [
-                {
-                    "forms": form_group.forms,
-                    "match_logic": form_group.match_logic,
-                    "combine_logic": form_group.combine_logic,
-                    "search_scope": form_group.search_scope,
-                    "requested_max_token_distance": form_group.requested_max_token_distance,
-                    "effective_max_token_distance": form_group.effective_max_token_distance,
-                    "anchor_form": form_group.anchor_form,
-                    "exclude_forms_any": form_group.exclude_forms_any,
-                }
-                for form_group in condition.form_groups
-            ],
-            "annotation_filters": [
-                {
-                    "namespace": annotation_filter.label_namespace,
-                    "key": annotation_filter.label_key,
-                    "value": annotation_filter.label_value,
-                    "operator": annotation_filter.operator,
-                }
-                for annotation_filter in condition.annotation_filters
-            ],
-            "required_categories_all": condition.required_categories_all,
-            "required_categories_any": condition.required_categories_any,
-            "search_scope": condition.search_scope,
-            "form_match_logic": condition.form_match_logic,
-            "requested_max_token_distance": condition.requested_max_token_distance,
-            "effective_max_token_distance": condition.effective_max_token_distance,
-        }
-        for condition in normalized_conditions
-    ]
-
 
 def build_condition_hit_tokens_df(
     tokens_with_position_df: pl.DataFrame,
@@ -255,11 +220,13 @@ def build_rendered_sentences_df(
     tokens_with_position_df: pl.DataFrame,
     token_annotations_df: pl.DataFrame,
     sentence_match_summary_df: pl.DataFrame | None = None,
+    paragraph_match_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     return _build_rendered_sentences_df_impl(
         tokens_with_position_df=tokens_with_position_df,
         token_annotations_df=token_annotations_df,
         sentence_match_summary_df=sentence_match_summary_df,
+        paragraph_match_summary_df=paragraph_match_summary_df,
     )
 
 

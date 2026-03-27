@@ -51,6 +51,8 @@ pub(crate) struct ConditionEditorItem {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) form_groups: Vec<FormGroupEditorItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) text_groups: Vec<TextGroupEditorItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) forms: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) form_match_logic: Option<String>,
@@ -68,6 +70,12 @@ pub(crate) struct ConditionEditorItem {
     pub(crate) required_categories_all: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) required_categories_any: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) required_condition_ids_all: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) required_condition_ids_any: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) excluded_condition_ids_any: Vec<String>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
     #[serde(skip)]
@@ -94,6 +102,20 @@ pub(crate) struct FormGroupEditorItem {
     pub(crate) max_token_distance: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) exclude_forms_any: Vec<String>,
+    #[serde(default, flatten)]
+    pub(crate) extra_fields: HashMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub(crate) struct TextGroupEditorItem {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) texts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) match_logic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) combine_logic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) search_scope: Option<String>,
     #[serde(default, flatten)]
     pub(crate) extra_fields: HashMap<String, Value>,
 }
@@ -189,7 +211,11 @@ pub(crate) fn sanitize_document_for_save(
         sanitize_string_list(&mut condition.forms);
         sanitize_string_list(&mut condition.required_categories_all);
         sanitize_string_list(&mut condition.required_categories_any);
+        sanitize_string_list(&mut condition.required_condition_ids_all);
+        sanitize_string_list(&mut condition.required_condition_ids_any);
+        sanitize_string_list(&mut condition.excluded_condition_ids_any);
         sanitize_form_groups(&mut condition.form_groups);
+        sanitize_text_groups(&mut condition.text_groups);
         remove_condition_schema_keys_from_extra_fields(condition);
 
         let mut sanitized_filters = Vec::new();
@@ -213,15 +239,24 @@ pub(crate) fn sanitize_document_for_save(
             } else if condition.search_scope.as_deref() != Some("paragraph") {
                 condition.search_scope = Some("paragraph".to_string());
             }
+            if !condition.text_groups.is_empty() {
+                for group in &mut condition.text_groups {
+                    group.search_scope = Some("paragraph".to_string());
+                }
+            }
         }
 
         normalize_condition_schema_for_save(condition, index + 1)?;
 
         let has_token_clause = !condition.forms.is_empty() || !condition.form_groups.is_empty();
+        let has_text_clause = !condition.text_groups.is_empty();
         let has_annotation_clause = !condition.annotation_filters.is_empty();
         let has_reference_clause = !condition.required_categories_all.is_empty()
-            || !condition.required_categories_any.is_empty();
-        if !has_token_clause && !has_annotation_clause && !has_reference_clause {
+            || !condition.required_categories_any.is_empty()
+            || !condition.required_condition_ids_all.is_empty()
+            || !condition.required_condition_ids_any.is_empty()
+            || !condition.excluded_condition_ids_any.is_empty();
+        if !has_token_clause && !has_text_clause && !has_annotation_clause && !has_reference_clause {
             return Err(format!(
                 "condition の clause が空です: {}",
                 condition.condition_id
@@ -308,6 +343,49 @@ fn sanitize_string_list(values: &mut Vec<String>) {
         .collect();
 }
 
+fn sanitize_text_groups(groups: &mut Vec<TextGroupEditorItem>) {
+    let mut sanitized_groups = Vec::new();
+    for group in groups.iter_mut() {
+        sanitize_string_list(&mut group.texts);
+        sanitize_optional_string(&mut group.match_logic);
+        sanitize_optional_string(&mut group.combine_logic);
+        sanitize_optional_string(&mut group.search_scope);
+        if group.texts.is_empty() {
+            continue;
+        }
+        let normalized_match = match group.match_logic.as_deref() {
+            Some(raw) => {
+                let lower = raw.trim().to_lowercase();
+                if matches!(lower.as_str(), "and" | "or" | "not") {
+                    lower
+                } else {
+                    "and".to_string()
+                }
+            }
+            None => "and".to_string(),
+        };
+        group.match_logic = Some(normalized_match);
+        if let Some(ref scope) = group.search_scope {
+            let lower = scope.trim().to_lowercase();
+            if lower == "sentence" || lower == "paragraph" {
+                group.search_scope = Some(lower);
+            } else {
+                group.search_scope = None;
+            }
+        }
+        if let Some(ref combine) = group.combine_logic {
+            let lower = combine.trim().to_lowercase();
+            if matches!(lower.as_str(), "and" | "or") {
+                group.combine_logic = Some(lower);
+            } else {
+                group.combine_logic = None;
+            }
+        }
+        sanitized_groups.push(group.clone());
+    }
+    *groups = sanitized_groups;
+}
+
 fn sanitize_form_groups(groups: &mut Vec<FormGroupEditorItem>) {
     let mut sanitized_groups = Vec::new();
     for group in groups.iter_mut() {
@@ -345,6 +423,7 @@ fn project_legacy_conditions_for_editor(
         sanitize_optional_string(&mut condition.search_scope);
         sanitize_string_list(&mut condition.forms);
         sanitize_form_groups(&mut condition.form_groups);
+        sanitize_text_groups(&mut condition.text_groups);
 
         if condition.form_groups.is_empty() && legacy_token_clause_used(condition) {
             condition.form_groups = vec![FormGroupEditorItem {
@@ -383,6 +462,7 @@ fn remove_condition_schema_keys_from_extra_fields(condition: &mut ConditionEdito
     condition.extra_fields.remove("search_scope");
     condition.extra_fields.remove("max_token_distance");
     condition.extra_fields.remove("form_groups");
+    condition.extra_fields.remove("text_groups");
 }
 
 fn normalize_condition_schema_for_save(
@@ -464,6 +544,48 @@ fn normalize_condition_schema_for_save(
         }
     } else {
         condition.form_groups.clear();
+    }
+
+    for (group_index, group) in condition.text_groups.iter_mut().enumerate() {
+        if group_index == 0 {
+            group.combine_logic = None;
+        } else if group.combine_logic.is_none() {
+            group.combine_logic = Some("and".to_string());
+        }
+        let match_logic = group.match_logic.as_deref().unwrap_or("and");
+        if !matches!(match_logic, "and" | "or" | "not") {
+            return Err(format!(
+                "condition {} の text_group {} で match_logic は and / or / not のみです",
+                condition.condition_id,
+                group_index + 1
+            ));
+        }
+        if group_index > 0 {
+            let combine = group.combine_logic.as_deref().unwrap_or("and");
+            if !matches!(combine, "and" | "or") {
+                return Err(format!(
+                    "condition {} の text_group {} で combine_logic は and / or のみです",
+                    condition.condition_id,
+                    group_index + 1
+                ));
+            }
+        }
+        if group.texts.is_empty() {
+            return Err(format!(
+                "condition {} の text_group {} に texts が必要です",
+                condition.condition_id,
+                group_index + 1
+            ));
+        }
+        if let Some(scope) = group.search_scope.as_deref() {
+            if scope != "paragraph" && scope != "sentence" {
+                return Err(format!(
+                    "condition {} の text_group {} の search_scope が不正です",
+                    condition.condition_id,
+                    group_index + 1
+                ));
+            }
+        }
     }
 
     condition.projected_from_legacy = false;
@@ -606,6 +728,68 @@ mod tests {
         let (loaded_document, _load_info) =
             load_condition_document(&path).expect("document should load");
         assert_eq!(loaded_document.analysis_unit.as_deref(), Some("sentence"));
+
+        fs::remove_file(&path).expect("temp file should be removable");
+    }
+
+    #[test]
+    fn sanitize_document_accepts_text_groups_without_token_clause() {
+        let mut document = FilterConfigDocument {
+            cooccurrence_conditions: vec![ConditionEditorItem {
+                condition_id: "text_only".to_string(),
+                forms: vec![],
+                form_groups: vec![],
+                text_groups: vec![TextGroupEditorItem {
+                    texts: vec!["第1条".to_string(), "別表".to_string()],
+                    match_logic: Some("and".to_string()),
+                    search_scope: Some("paragraph".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        sanitize_document_for_save(&mut document).expect("document should sanitize");
+        let condition = &document.cooccurrence_conditions[0];
+        assert_eq!(condition.text_groups.len(), 1);
+        assert_eq!(condition.text_groups[0].texts, vec!["第1条", "別表"]);
+        assert_eq!(condition.text_groups[0].match_logic.as_deref(), Some("and"));
+    }
+
+    #[test]
+    fn text_groups_round_trip_save_and_reload() {
+        let path = std::env::temp_dir().join(format!(
+            "condition-editor-text-groups-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let document = FilterConfigDocument {
+            cooccurrence_conditions: vec![ConditionEditorItem {
+                condition_id: "tg_roundtrip".to_string(),
+                forms: vec![],
+                form_groups: vec![],
+                text_groups: vec![TextGroupEditorItem {
+                    texts: vec!["別表第一".to_string()],
+                    match_logic: Some("or".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        save_condition_document_atomic(&path, &document).expect("document should save");
+
+        let (loaded, _) = load_condition_document(&path).expect("document should load");
+        assert_eq!(loaded.cooccurrence_conditions.len(), 1);
+        let condition = &loaded.cooccurrence_conditions[0];
+        assert_eq!(condition.text_groups.len(), 1);
+        assert_eq!(condition.text_groups[0].texts, vec!["別表第一"]);
+        assert_eq!(condition.text_groups[0].match_logic.as_deref(), Some("or"));
 
         fs::remove_file(&path).expect("temp file should be removable");
     }

@@ -355,7 +355,9 @@ fn draw_record_text_panel(ui: &mut Ui, record: &AnalysisRecord, detail_job: Layo
 }
 
 fn draw_form_group_explanations_panel(ui: &mut Ui, record: &AnalysisRecord) {
-    if record.form_group_explanations_text.trim().is_empty() {
+    let has_form = !record.form_group_explanations_text.trim().is_empty();
+    let has_text_groups = !record.text_groups_explanations_text.trim().is_empty();
+    if !has_form && !has_text_groups {
         return;
     }
 
@@ -364,6 +366,11 @@ fn draw_form_group_explanations_panel(ui: &mut Ui, record: &AnalysisRecord) {
         .default_open(false)
         .show(ui, |ui| {
             ui.label(RichText::new("高度条件の説明を表示中。本文強調は一部未対応です。").italics());
+            ui.small(
+                "analysis_unit=sentence でも paragraph 条件を評価します。paragraph 一致時は同一 paragraph の sentence を表示に含めます。",
+            );
+            ui.small("本文強調は直接ヒット token のみです。paragraph 展開で含まれた sentence は非強調で表示されます。");
+            ui.small("text_groups のみ一致の段落ではトークン強調が付かないことがあります。下の text 説明を参照してください。");
             if !record.matched_form_group_ids_text.trim().is_empty() {
                 ui.label(format!("group_ids: {}", record.matched_form_group_ids_text));
             }
@@ -379,16 +386,33 @@ fn draw_form_group_explanations_panel(ui: &mut Ui, record: &AnalysisRecord) {
                     record.mixed_scope_warning_text.as_str(),
                 );
             }
-            ScrollArea::vertical()
-                .id_salt("form_group_explanations_scroll")
-                .max_height(160.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(record.form_group_explanations_text.as_str())
-                            .wrap_mode(TextWrapMode::Wrap),
-                    );
-                });
+            if has_form {
+                ui.strong("form_groups");
+                ScrollArea::vertical()
+                    .id_salt("form_group_explanations_scroll")
+                    .max_height(160.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(record.form_group_explanations_text.as_str())
+                                .wrap_mode(TextWrapMode::Wrap),
+                        );
+                    });
+            }
+            if has_text_groups {
+                ui.add_space(6.0);
+                ui.strong("text_groups");
+                ScrollArea::vertical()
+                    .id_salt("text_groups_explanations_scroll")
+                    .max_height(160.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(record.text_groups_explanations_text.as_str())
+                                .wrap_mode(TextWrapMode::Wrap),
+                        );
+                    });
+            }
         });
 }
 

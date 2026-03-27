@@ -34,6 +34,7 @@ RENDERED_PARAGRAPH_SCHEMA = {
     "matched_form_group_ids_text": pl.String,
     "matched_form_group_logics_text": pl.String,
     "form_group_explanations_text": pl.String,
+    "text_groups_explanations_text": pl.String,
     "mixed_scope_warning_text": pl.String,
     "match_group_ids": pl.List(pl.String),
     "match_group_count": pl.UInt32,
@@ -50,6 +51,11 @@ RENDERED_SENTENCE_SCHEMA = {
     "matched_condition_ids_text": pl.String,
     "matched_categories": pl.List(pl.String),
     "matched_categories_text": pl.String,
+    "matched_form_group_ids_text": pl.String,
+    "matched_form_group_logics_text": pl.String,
+    "form_group_explanations_text": pl.String,
+    "text_groups_explanations_text": pl.String,
+    "mixed_scope_warning_text": pl.String,
     "match_group_ids": pl.List(pl.String),
     "match_group_ids_text": pl.String,
     "match_group_count": pl.UInt32,
@@ -125,6 +131,7 @@ def _merge_paragraph_match_summary(
         "matched_form_group_ids_text",
         "matched_form_group_logics_text",
         "form_group_explanations_text",
+        "text_groups_explanations_text",
         "mixed_scope_warning_text",
     ]
     available_summary_columns = [
@@ -172,12 +179,76 @@ def _merge_paragraph_match_summary(
             .then(pl.col("form_group_explanations_text_summary"))
             .otherwise(pl.col("form_group_explanations_text"))
             .alias("form_group_explanations_text"),
+            pl.when(pl.col("text_groups_explanations_text_summary").is_not_null())
+            .then(pl.col("text_groups_explanations_text_summary"))
+            .otherwise(pl.col("text_groups_explanations_text"))
+            .alias("text_groups_explanations_text"),
             pl.when(pl.col("mixed_scope_warning_text_summary").is_not_null())
             .then(pl.col("mixed_scope_warning_text_summary"))
             .otherwise(pl.col("mixed_scope_warning_text"))
             .alias("mixed_scope_warning_text"),
         ])
         .select(list(RENDERED_PARAGRAPH_SCHEMA.keys()))
+    )
+
+
+def _merge_sentence_paragraph_match_summary(
+    rendered_sentences_df: pl.DataFrame,
+    paragraph_match_summary_df: pl.DataFrame | None,
+) -> pl.DataFrame:
+    if paragraph_match_summary_df is None or paragraph_match_summary_df.is_empty():
+        return rendered_sentences_df
+
+    form_group_columns = [
+        "paragraph_id",
+        "matched_form_group_ids_text",
+        "matched_form_group_logics_text",
+        "form_group_explanations_text",
+        "text_groups_explanations_text",
+        "mixed_scope_warning_text",
+    ]
+    available_columns = [
+        col for col in form_group_columns if col in paragraph_match_summary_df.columns
+    ]
+    if available_columns == ["paragraph_id"] or "paragraph_id" not in available_columns:
+        return rendered_sentences_df
+
+    merged_df = rendered_sentences_df.join(
+        paragraph_match_summary_df.select(available_columns),
+        on="paragraph_id",
+        how="left",
+        suffix="_para",
+    )
+    return (
+        merged_df
+        .with_columns([
+            pl.when(pl.col("matched_form_group_ids_text_para").is_not_null())
+            .then(pl.col("matched_form_group_ids_text_para"))
+            .otherwise(pl.col("matched_form_group_ids_text"))
+            .fill_null("")
+            .alias("matched_form_group_ids_text"),
+            pl.when(pl.col("matched_form_group_logics_text_para").is_not_null())
+            .then(pl.col("matched_form_group_logics_text_para"))
+            .otherwise(pl.col("matched_form_group_logics_text"))
+            .fill_null("")
+            .alias("matched_form_group_logics_text"),
+            pl.when(pl.col("form_group_explanations_text_para").is_not_null())
+            .then(pl.col("form_group_explanations_text_para"))
+            .otherwise(pl.col("form_group_explanations_text"))
+            .fill_null("")
+            .alias("form_group_explanations_text"),
+            pl.when(pl.col("text_groups_explanations_text_para").is_not_null())
+            .then(pl.col("text_groups_explanations_text_para"))
+            .otherwise(pl.col("text_groups_explanations_text"))
+            .fill_null("")
+            .alias("text_groups_explanations_text"),
+            pl.when(pl.col("mixed_scope_warning_text_para").is_not_null())
+            .then(pl.col("mixed_scope_warning_text_para"))
+            .otherwise(pl.col("mixed_scope_warning_text"))
+            .fill_null("")
+            .alias("mixed_scope_warning_text"),
+        ])
+        .select(list(RENDERED_SENTENCE_SCHEMA.keys()))
     )
 
 
@@ -384,6 +455,7 @@ def build_rendered_paragraphs_df(
                 "matched_form_group_ids_text": "",
                 "matched_form_group_logics_text": "",
                 "form_group_explanations_text": "",
+                "text_groups_explanations_text": "",
                 "mixed_scope_warning_text": "",
                 "match_group_ids": _unique_in_order(match_group_ids),
                 "match_group_count": len(_unique_in_order(match_group_ids)),
@@ -411,6 +483,7 @@ def build_rendered_sentences_df(
     tokens_with_position_df: pl.DataFrame,
     token_annotations_df: pl.DataFrame,
     sentence_match_summary_df: pl.DataFrame | None = None,
+    paragraph_match_summary_df: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     if tokens_with_position_df.is_empty():
         return _empty_rendered_sentences_df()
@@ -445,6 +518,11 @@ def build_rendered_sentences_df(
                 "matched_categories_text": ", ".join(
                     _unique_in_order(sentence_fragment["matched_categories"])
                 ),
+                "matched_form_group_ids_text": "",
+                "matched_form_group_logics_text": "",
+                "form_group_explanations_text": "",
+                "text_groups_explanations_text": "",
+                "mixed_scope_warning_text": "",
                 "match_group_ids": unique_match_group_ids,
                 "match_group_ids_text": ", ".join(unique_match_group_ids),
                 "match_group_count": len(unique_match_group_ids),
@@ -464,7 +542,7 @@ def build_rendered_sentences_df(
         .sort(["paragraph_id", "sentence_no_in_paragraph", "sentence_id"])
     )
     if sentence_match_summary_df is None or sentence_match_summary_df.is_empty():
-        return rendered_sentences_df
+        return _merge_sentence_paragraph_match_summary(rendered_sentences_df, paragraph_match_summary_df)
 
     summary_columns = [
         "sentence_id",
@@ -478,32 +556,53 @@ def build_rendered_sentences_df(
         column_name for column_name in summary_columns if column_name in sentence_match_summary_df.columns
     ]
     if {"sentence_id", "paragraph_id"} - set(available_summary_columns):
-        return rendered_sentences_df
+        return _merge_sentence_paragraph_match_summary(rendered_sentences_df, paragraph_match_summary_df)
     merged_df = rendered_sentences_df.join(
         sentence_match_summary_df.select(available_summary_columns),
         on=["sentence_id", "paragraph_id"],
         how="left",
         suffix="_summary",
     )
-    return (
+    merged_result = (
         merged_df
         .with_columns([
-            pl.when(pl.col("matched_condition_ids_summary").is_not_null())
-            .then(pl.col("matched_condition_ids_summary"))
-            .otherwise(pl.col("matched_condition_ids"))
+            pl.when(
+                pl.when(pl.col("matched_condition_ids_summary").is_not_null())
+                .then(pl.col("matched_condition_ids_summary"))
+                .otherwise(pl.col("matched_condition_ids"))
+                .is_null()
+            )
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(
+                pl.when(pl.col("matched_condition_ids_summary").is_not_null())
+                .then(pl.col("matched_condition_ids_summary"))
+                .otherwise(pl.col("matched_condition_ids"))
+            )
             .alias("matched_condition_ids"),
+            pl.when(
+                pl.when(pl.col("matched_categories_summary").is_not_null())
+                .then(pl.col("matched_categories_summary"))
+                .otherwise(pl.col("matched_categories"))
+                .is_null()
+            )
+            .then(pl.lit([], dtype=pl.List(pl.String)))
+            .otherwise(
+                pl.when(pl.col("matched_categories_summary").is_not_null())
+                .then(pl.col("matched_categories_summary"))
+                .otherwise(pl.col("matched_categories"))
+            )
+            .alias("matched_categories"),
             pl.when(pl.col("matched_condition_ids_text_summary").is_not_null())
             .then(pl.col("matched_condition_ids_text_summary"))
             .otherwise(pl.col("matched_condition_ids_text"))
+            .fill_null("")
             .alias("matched_condition_ids_text"),
-            pl.when(pl.col("matched_categories_summary").is_not_null())
-            .then(pl.col("matched_categories_summary"))
-            .otherwise(pl.col("matched_categories"))
-            .alias("matched_categories"),
             pl.when(pl.col("matched_categories_text_summary").is_not_null())
             .then(pl.col("matched_categories_text_summary"))
             .otherwise(pl.col("matched_categories_text"))
+            .fill_null("")
             .alias("matched_categories_text"),
         ])
         .select(list(RENDERED_SENTENCE_SCHEMA.keys()))
     )
+    return _merge_sentence_paragraph_match_summary(merged_result, paragraph_match_summary_df)

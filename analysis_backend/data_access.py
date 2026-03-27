@@ -7,12 +7,28 @@ import polars as pl
 
 from .condition_model import DataAccessIssue
 from .condition_model import DataAccessResult
+from .frame_schema import ANALYSIS_SENTENCES_READ_SCHEMA
 from .frame_schema import PARAGRAPH_METADATA_SCHEMA
 from .frame_schema import SENTENCE_METADATA_SCHEMA
 from .frame_schema import empty_df
 
 
 PARAGRAPH_METADATA_CHUNK_SIZE = 900
+
+
+def _sqlite_select_to_polars(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    empty_schema: dict[str, pl.DataType],
+) -> pl.DataFrame:
+    """Run a SELECT and build a DataFrame without Polars holding the SQLite handle (Windows-safe)."""
+    cursor = conn.execute(query.strip())
+    column_names = [str(d[0]) for d in cursor.description]
+    rows = cursor.fetchall()
+    if not rows:
+        return empty_df(empty_schema)
+    return pl.DataFrame(rows, schema=column_names, orient="row")
 
 
 def _build_data_access_issue(
@@ -82,33 +98,58 @@ def read_analysis_tokens(db_path: Path, limit_rows: int | None = None) -> pl.Dat
 def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
     try:
         with sqlite3.connect(str(db_path)) as conn:
+            sentence_columns = _read_table_columns(conn, "analysis_sentences")
             paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
+            sentence_text_joined = (
+                "COALESCE(s.sentence_text, '') AS sentence_text"
+                if "sentence_text" in sentence_columns
+                else "'' AS sentence_text"
+            )
+            sentence_text_bare = (
+                "COALESCE(sentence_text, '') AS sentence_text"
+                if "sentence_text" in sentence_columns
+                else "'' AS sentence_text"
+            )
             if "is_table_paragraph" in paragraph_columns:
-                query = """
+                query = f"""
                     SELECT
                         s.sentence_id,
                         s.paragraph_id,
                         s.sentence_no_in_paragraph,
-                        COALESCE(CAST(p.is_table_paragraph AS INTEGER), 0) AS is_table_paragraph
+                        COALESCE(CAST(p.is_table_paragraph AS INTEGER), 0) AS is_table_paragraph,
+                        {sentence_text_joined}
                     FROM analysis_sentences AS s
                     LEFT JOIN analysis_paragraphs AS p
                       ON p.paragraph_id = s.paragraph_id
                 """
             else:
-                query = """
+                query = f"""
                     SELECT
                         sentence_id,
                         paragraph_id,
                         sentence_no_in_paragraph,
-                        0 AS is_table_paragraph
+                        0 AS is_table_paragraph,
+                        {sentence_text_bare}
                     FROM analysis_sentences
                 """
             if limit_rows is not None:
                 query = f"{query} LIMIT {int(limit_rows)}"
-            return DataAccessResult(
-                data_frame=pl.read_database(query=query, connection=conn),
-                issues=[],
+            raw_df = _sqlite_select_to_polars(
+                conn,
+                query,
+                empty_schema=ANALYSIS_SENTENCES_READ_SCHEMA,
             )
+        typed_df = raw_df.with_columns([
+            pl.col("sentence_id").cast(pl.Int64),
+            pl.col("paragraph_id").cast(pl.Int64),
+            pl.col("sentence_no_in_paragraph").cast(pl.Int64),
+            pl.col("is_table_paragraph").cast(pl.Int64),
+            pl.col("sentence_text").cast(pl.String).fill_null(""),
+        ])
+        return DataAccessResult(
+            data_frame=typed_df.select(list(ANALYSIS_SENTENCES_READ_SCHEMA.keys())),
+            issues=[],
+        )
     except sqlite3.Error as exc:
         return DataAccessResult(
             data_frame=None,

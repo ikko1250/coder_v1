@@ -10,15 +10,13 @@ const VIEWPORT_ID: &str = "db_viewer_viewport";
 use super::App;
 use crate::db::{fetch_paragraph_context, fetch_paragraph_context_by_location};
 use crate::db_viewer_view::render_db_viewer_contents;
+use crate::model::AnalysisUnit;
 use eframe::egui::{self, Ui};
 
 fn selected_paragraph_id_for_db(app: &App) -> Result<i64, String> {
     let record = app
         .selected_record()
         .ok_or_else(|| "レコードが選択されていません".to_string())?;
-    if !record.supports_db_viewer() {
-        return Err("sentence 行では DB viewer は未対応です".to_string());
-    }
 
     record.paragraph_id.parse::<i64>().map_err(|error| {
         format!(
@@ -32,15 +30,14 @@ fn prepare_db_viewer_state(app: &mut App) -> Result<(), String> {
     let selected_record = app
         .selected_record()
         .ok_or_else(|| "レコードが選択されていません".to_string())?;
-    if !selected_record.supports_db_viewer() {
-        return Err("sentence 行では DB viewer は未対応です".to_string());
-    }
     let paragraph_id = selected_paragraph_id_for_db(app)?;
     let source_paragraph_text = selected_record.paragraph_text.clone();
+    let skip_paragraph_compare = selected_record.analysis_unit == AnalysisUnit::Sentence;
 
     app.db_viewer_state.is_open = true;
     app.db_viewer_state.source_paragraph_id = Some(paragraph_id);
     app.db_viewer_state.source_paragraph_text = Some(source_paragraph_text);
+    app.db_viewer_state.skip_paragraph_compare = skip_paragraph_compare;
     app.db_viewer_state.context = None;
     app.db_viewer_state.error_message = None;
     app.db_viewer_state.data_source_generation_when_prepared = Some(app.core.data_source_generation);
