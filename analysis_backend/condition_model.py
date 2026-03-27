@@ -91,6 +91,9 @@ class NormalizedCondition:
     annotation_filters: list[AnnotationFilter] = field(default_factory=list)
     required_categories_all: list[str] = field(default_factory=list)
     required_categories_any: list[str] = field(default_factory=list)
+    required_condition_ids_all: list[str] = field(default_factory=list)
+    required_condition_ids_any: list[str] = field(default_factory=list)
+    excluded_condition_ids_any: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

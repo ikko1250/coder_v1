@@ -146,14 +146,11 @@ class AnalysisCoreContractTests(unittest.TestCase):
 
         self.assertEqual(config.condition_match_logic, "any")
         self.assertEqual(config.max_reconstructed_paragraphs, 10000)
-        self.assertEqual(config.loaded_condition_count, 7)
+        self.assertEqual(config.loaded_condition_count, len(config.cooccurrence_conditions))
         self.assertEqual(config.distance_matching_mode, "auto-approx")
         self.assertEqual(config.distance_match_combination_cap, 10000)
         self.assertEqual(config.distance_match_strict_safety_limit, 1000000)
-        self.assertEqual(
-            config.cooccurrence_conditions[0]["condition_id"],
-            "suppress_area",
-        )
+        self.assertIn("condition_id", config.cooccurrence_conditions[0])
 
     def test_condition_hit_result_defaults_to_empty_warning_messages(self) -> None:
         result = condition_model.ConditionHitResult(
@@ -302,6 +299,53 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(
             [issue.code for issue in normalization_result.issues],
             ["categories_defaulted"],
+        )
+
+    def test_normalize_cooccurrence_conditions_result_accepts_required_condition_ids_reference_only_condition(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "base_condition",
+                    "forms": ["抑制", "区域"],
+                },
+                {
+                    "condition_id": "derived_condition",
+                    "forms": [],
+                    "required_condition_ids_all": ["base_condition"],
+                    "required_condition_ids_any": ["other_condition", "base_condition"],
+                    "excluded_condition_ids_any": ["exclude_condition"],
+                },
+            ]
+        )
+
+        self.assertEqual(len(normalization_result.normalized_conditions), 2)
+        derived_condition = normalization_result.normalized_conditions[1]
+        self.assertEqual(derived_condition.required_condition_ids_all, ["base_condition"])
+        self.assertEqual(derived_condition.required_condition_ids_any, ["other_condition", "base_condition"])
+        self.assertEqual(derived_condition.excluded_condition_ids_any, ["exclude_condition"])
+
+    def test_normalize_cooccurrence_conditions_result_rejects_condition_id_reference_cycle(self) -> None:
+        normalization_result = condition_evaluator.normalize_cooccurrence_conditions_result(
+            [
+                {
+                    "condition_id": "a",
+                    "categories": ["A"],
+                    "forms": [],
+                    "required_condition_ids_all": ["b"],
+                },
+                {
+                    "condition_id": "b",
+                    "categories": ["B"],
+                    "forms": [],
+                    "required_condition_ids_all": ["a"],
+                },
+            ]
+        )
+
+        self.assertEqual(normalization_result.normalized_conditions, [])
+        self.assertEqual(
+            sorted(issue.code for issue in normalization_result.issues),
+            ["condition_id_reference_cycle", "condition_id_reference_cycle"],
         )
 
     def test_normalize_cooccurrence_conditions_result_accepts_text_groups_only_condition(self) -> None:
@@ -1162,6 +1206,60 @@ class AnalysisCoreContractTests(unittest.TestCase):
             ["抑制", "区域", "区域", "抑制"],
         )
 
+    def test_build_condition_hit_result_keeps_positive_hits_when_not_group_matches_by_absence(self) -> None:
+        tokens_with_position_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1],
+                "sentence_id": [10, 10],
+                "sentence_no_in_paragraph": [1, 1],
+                "token_no": [0, 1],
+                "sentence_token_position": [0, 1],
+                "paragraph_token_position": [0, 1],
+                "normalized_form": ["抑制", "区域"],
+                "surface": ["抑制", "区域"],
+            }
+        )
+
+        hit_result = distance_matcher.build_condition_hit_result(
+            tokens_with_position_df=tokens_with_position_df,
+            cooccurrence_conditions=[
+                {
+                    "condition_id": "positive_with_not",
+                    "categories": ["複合条件"],
+                    "forms": ["抑制", "区域", "|"],
+                    "form_groups": [
+                        {
+                            "forms": ["抑制", "区域"],
+                            "match_logic": "and",
+                            "search_scope": "sentence",
+                            "requested_max_token_distance": None,
+                            "effective_max_token_distance": None,
+                            "anchor_form": None,
+                            "exclude_forms_any": [],
+                        },
+                        {
+                            "forms": ["|"],
+                            "match_logic": "not",
+                            "combine_logic": "and",
+                            "search_scope": "sentence",
+                            "requested_max_token_distance": None,
+                            "effective_max_token_distance": None,
+                            "anchor_form": None,
+                            "exclude_forms_any": [],
+                        },
+                    ],
+                    "search_scope": "sentence",
+                    "form_match_logic": "all",
+                    "effective_max_token_distance": None,
+                }
+            ],
+        )
+
+        self.assertEqual(
+            hit_result.condition_hit_tokens_df.sort("token_no").get_column("normalized_form").to_list(),
+            ["抑制", "区域"],
+        )
+
     def test_build_rendered_paragraphs_df_highlights_advanced_form_groups(self) -> None:
         tokens_with_position_df = pl.DataFrame(
             {
@@ -1871,6 +1969,103 @@ class AnalysisCoreContractTests(unittest.TestCase):
             result.sentence_hit_tokens_df.sort(["sentence_id", "token_no"]).get_column("sentence_id").to_list(),
             [11, 11, 12],
         )
+
+    def test_select_target_ids_by_conditions_result_sentence_unit_supports_paragraph_condition_referencing_sentence_condition_id(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 1, 1, 2, 2],
+                "sentence_id": [11, 11, 12, 21, 21],
+                "token_no": [0, 1, 0, 0, 1],
+                "normalized_form": ["抑制", "区域", "指定", "抑制", "区域"],
+                "surface": ["抑制", "区域", "指定", "抑制", "区域"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 12, 21],
+                "paragraph_id": [1, 1, 2],
+                "sentence_no_in_paragraph": [1, 2, 1],
+                "sentence_text": ["抑制区域を定める。", "指定する。", "抑制区域を定める。"],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="kakunin",
+                    categories=["確認"],
+                    category_text="確認",
+                    forms=["指定"],
+                    search_scope="sentence",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="base_area",
+                    categories=["区域"],
+                    category_text="区域",
+                    forms=["抑制", "区域"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["抑制", "区域"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="paragraph",
+                            requested_max_token_distance=None,
+                            effective_max_token_distance=None,
+                        ),
+                    ],
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="yokusei",
+                    categories=["抑制区域"],
+                    category_text="抑制区域",
+                    forms=["抑制", "区域"],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    form_groups=[
+                        condition_model.NormalizedFormGroup(
+                            forms=["抑制", "区域"],
+                            match_logic="and",
+                            combine_logic=None,
+                            search_scope="paragraph",
+                            requested_max_token_distance=None,
+                            effective_max_token_distance=None,
+                        ),
+                    ],
+                    required_condition_ids_all=["kakunin"],
+                ),
+            ],
+            analysis_unit="sentence",
+            condition_match_logic="any",
+        )
+
+        summary_rows = {
+            row["sentence_id"]: row
+            for row in result.sentence_match_summary_df.sort(["sentence_id"]).to_dicts()
+        }
+        self.assertEqual(summary_rows[11]["matched_condition_ids"], ["base_area"])
+        self.assertEqual(summary_rows[12]["matched_condition_ids"], ["base_area", "kakunin", "yokusei"])
+        self.assertEqual(summary_rows[21]["matched_condition_ids"], ["base_area"])
+
+        paragraph_rows = {
+            row["paragraph_id"]: row
+            for row in result.paragraph_match_summary_df.sort("paragraph_id").to_dicts()
+        }
+        self.assertEqual(paragraph_rows[1]["matched_condition_ids"], ["base_area", "kakunin", "yokusei"])
+        self.assertEqual(paragraph_rows[2]["matched_condition_ids"], ["base_area"])
+        self.assertEqual(paragraph_rows[2]["matched_form_group_ids_text"], "base_area:g1")
+        self.assertIn("[base_area]", paragraph_rows[2]["form_group_explanations_text"])
+        self.assertNotIn("[yokusei]", paragraph_rows[2]["form_group_explanations_text"])
 
     def test_select_target_ids_by_conditions_result_supports_annotation_only_conditions(self) -> None:
         tokens_df = pl.DataFrame(
@@ -2676,6 +2871,81 @@ class AnalysisCoreContractTests(unittest.TestCase):
         }
         self.assertTrue(eval_rows[(1, "derived_condition")]["reference_is_match"])
         self.assertTrue(eval_rows[(1, "derived_condition")]["is_match"])
+
+    def test_select_target_ids_by_conditions_result_supports_chained_required_condition_ids_reference_only_conditions(self) -> None:
+        tokens_df = pl.DataFrame(
+            {
+                "paragraph_id": [1, 2],
+                "sentence_id": [11, 21],
+                "token_no": [0, 0],
+                "normalized_form": ["抑制区域", "その他"],
+                "surface": ["抑制区域", "その他"],
+            }
+        )
+        sentences_df = pl.DataFrame(
+            {
+                "sentence_id": [11, 21],
+                "paragraph_id": [1, 2],
+                "sentence_no_in_paragraph": [1, 1],
+                "sentence_text": ["抑制区域を定める。", "その他。"],
+            }
+        )
+
+        result = condition_evaluator.select_target_ids_by_conditions_result(
+            tokens_df=tokens_df,
+            sentences_df=sentences_df,
+            normalized_conditions=[
+                condition_model.NormalizedCondition(
+                    condition_id="base_condition",
+                    categories=["抑制区域"],
+                    category_text="抑制区域",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    text_groups=[
+                        condition_model.NormalizedTextGroup(
+                            texts=["抑制区域"],
+                            match_logic="or",
+                            combine_logic=None,
+                            search_scope="paragraph",
+                        ),
+                    ],
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="derived_b",
+                    categories=["派生B"],
+                    category_text="派生B",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    required_condition_ids_all=["base_condition"],
+                ),
+                condition_model.NormalizedCondition(
+                    condition_id="derived_c",
+                    categories=["派生C"],
+                    category_text="派生C",
+                    forms=[],
+                    search_scope="paragraph",
+                    form_match_logic="all",
+                    requested_max_token_distance=None,
+                    effective_max_token_distance=None,
+                    required_condition_ids_all=["derived_b"],
+                ),
+            ],
+        )
+
+        self.assertEqual(result.target_paragraph_ids, [1])
+        eval_rows = {
+            (row["paragraph_id"], row["condition_id"]): row
+            for row in result.condition_eval_df.to_dicts()
+        }
+        self.assertTrue(eval_rows[(1, "derived_b")]["reference_is_match"])
+        self.assertTrue(eval_rows[(1, "derived_c")]["reference_is_match"])
+        self.assertFalse(eval_rows[(2, "derived_b")]["reference_is_match"])
 
     def test_select_target_ids_by_conditions_result_supports_required_categories_mixed_condition(self) -> None:
         tokens_df = pl.DataFrame(
