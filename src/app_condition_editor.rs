@@ -833,6 +833,12 @@ fn apply_condition_editor_command_draft(
     apply_condition_editor_add_request(app, command_draft.should_add_condition);
     apply_condition_editor_delete_request(app, command_draft.should_delete_condition);
 
+    // §12.0: モーダル応答があるフレームでは save / reload / pick と競合させない。
+    if command_draft.modal_response.is_some() {
+        apply_condition_editor_modal_response(app, ctx, viewport_id, command_draft.modal_response);
+        return None;
+    }
+
     let mut save_error = None;
     if command_draft.should_save {
         if let Err(error) = save_condition_editor_document(app) {
@@ -844,12 +850,9 @@ fn apply_condition_editor_command_draft(
         command_draft.should_reload,
         resolved_path_result,
     );
-    apply_condition_editor_modal_response(app, ctx, viewport_id, command_draft.modal_response);
 
-    let pick_exclusive = command_draft.select_clicked
-        && !command_draft.should_save
-        && !command_draft.should_reload
-        && command_draft.modal_response.is_none();
+    let pick_exclusive =
+        command_draft.select_clicked && !command_draft.should_save && !command_draft.should_reload;
     if pick_exclusive {
         handle_condition_editor_json_select_click(app, ctx);
     }

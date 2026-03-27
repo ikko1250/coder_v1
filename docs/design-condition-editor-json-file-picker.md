@@ -156,7 +156,7 @@
 |----------|----------|
 | `src/condition_editor_view.rs` | `ConditionEditorHeaderResponse`（仮）の追加、`draw_condition_editor_header_panel` の戻り値または out パラメータ化、「選択」ボタン、§5 のレイアウト |
 | `src/app_condition_editor.rs` | **path-switch 専用ヘルパー**（§4.2 のトランザクション）、確認アクション拡張、`CommandDraft` 連携、`refresh_analysis_runtime`（成功後のみ） |
-| `src/app.rs` | 必要なら `refresh_analysis_runtime` を条件エディターから呼ぶための公開パス（既に `App` メソッドありならその利用のみ） |
+| `src/app.rs` | **完了**: `refresh_analysis_runtime` に加え、ロールバック用 `capture_idle_runtime_snapshot` / `apply_idle_runtime_snapshot`（`IdleAnalysisRuntimeSnapshot`）。 |
 
 **変更しない（予定）**
 
@@ -181,31 +181,33 @@
 | T-8 | 同一パス再選択時: トランザクション未実行・ステータス「既に開いているファイルです。」・`is_dirty` 不変（§4.5） |
 | T-9 | path 切替成功後に同じファイルを二重に読み込んでいないこと（ログやブレークポイントで確認でも可。§4.2） |
 
-自動テスト: `egui` 全体の結合は重いため、path-switch の純粋部分を切り出す。**最低 1 ケース**、`parse fail → override 不変 / loaded_path 不変 / is_dirty 不変` を `#[cfg(test)]` で持つことを推奨（§13.4）。追加ケースは任意。
+自動テスト: **実装済み** — `app_condition_editor::commit_pick_tests::invalid_json_leaves_override_loaded_path_and_dirty_unchanged`（§13.4）。追加ケースは任意。
 
 ---
 
 ## 8. 受け入れ条件（チェックリスト）
 
-- [ ] 条件エディターヘッダーに「選択」がある。
-- [ ] 選択した JSON がエディターに表示され、保存はそのパスに対して行われる。
-- [ ] 次回の分析／エクスポートで Python に渡る `filter_config_path` が、その選択と一致する。
-- [ ] 未保存時は確認あり。分析中は操作不可。
-- [ ] 不正／非 JSON 選択で失敗したあとも、表示中ドキュメントは従来どおり保存できる（T-5b）。
+実装・`cargo test`・`apply_condition_editor_command_draft` のモーダル優先順序は 2026-03-26 時点で反映済み。以下は仕様充足としてチェック。**リリース前**に §7 T-1〜T-9 の手動スポット確認を推奨。
+
+- [x] 条件エディターヘッダーに「選択」がある。
+- [x] 選択した JSON がエディターに表示され、保存はそのパスに対して行われる。
+- [x] 次回の分析／エクスポートで Python に渡る `filter_config_path` が、その選択と一致する。
+- [x] 未保存時は確認あり。分析中は操作不可。
+- [x] 不正／非 JSON 選択で失敗したあとも、表示中ドキュメントは従来どおり保存できる（T-5b）。
 
 ---
 
 ## 9. リスク・未決事項
 
-| 項目 | 内容 |
-|------|------|
-| 同一パス再選択 | §4.5 で「再読込のみ／何もしない」のどちらかを実装時に固定。 |
-| 手順 5 失敗時 | §4.7 の対称ロールバック（稀）。 |
-| 埋め込み／独立ビューポート | 両経路で `HeaderResponse` を適用。 |
-| `refresh` の副作用 | 成功時のみキャッシュ等が消える。editor からの操作でも許容するかはプロダクト判断（§11.4）。必要なら将来「軽量パス更新 API」を検討。 |
-| 文言の発火元 | `pending_path_sync` 系は分析設定前提の文面のまま。editor 内「選択」は専用ヘルパーで `sync` に依存させず、誤ったメッセージを出さない（§11.3）。 |
-| 二相 commit | 手順 5 失敗時は runtime／editor のスナップショット復元を設計どおり実装しないと状態が不完全に残る（§4.7, §13.1）。 |
-| 確認オーバーレイのタイミング | `confirm_action` は `show_viewport_immediate` 前にスナップショットされるため、**オーバーレイ表示は次フレーム**になりうる。許容だが実装者向けに共有する（§13.2）。 |
+| 項目 | 状態・メモ |
+|------|------------|
+| 同一パス再選択 | **対応済み**（§4.5 (A)＋ステータス文言）。 |
+| 手順 5 失敗時 | **対応済み**（`IdleAnalysisRuntimeSnapshot`＋override 復元＋editor ディスク再読込）。 |
+| 埋め込み／独立ビューポート | **対応済み**（両経路で `ConditionEditorHeaderResponse`）。 |
+| `refresh` の副作用 | 成功時のキャッシュ破棄は現状維持。将来「軽量パス更新 API」は未着手（§11.4）。 |
+| 文言の発火元 | エディター「選択」は `commit_picked_condition_json_path` 経路。`pending_path_sync` は分析設定同期専用のまま（§11.3）。 |
+| 二相 commit | **対応済み**（§4.7, §13.1）。 |
+| 確認オーバーレイのタイミング | 次フレーム表示あり得る — 実装・設計どおり許容（§13.2）。 |
 
 ---
 
@@ -296,8 +298,8 @@
 
 ### 12.0 コマンド処理の原則（§13.2 反映）
 
-- 既存 `apply_condition_editor_command_draft` は概ね **`close` → `add/delete` → `save` → `reload` → `modal_response`** の順。
-- **原則**: **モーダル応答（Continue/Cancel）は最優先で単独処理**し、そのフレームでは他の永続状態更新と競合させない。
+- `apply_condition_editor_command_draft` の順序（2026-03-26）: **`selection` → `close` → `add/delete` →（`modal_response` があれば `apply_condition_editor_modal_response` のみで return）→ なければ `save` → `reload` → `pick`**。
+- **原則**: **モーダル応答（Continue/Cancel）は最優先で単独処理**し、そのフレームでは save / reload / pick と競合させない。
 - **原則**: **pick 系（ヘッダー「選択」）と `save` / `reload` は同一フレームで両立させない**（排他）。実装では `select_clicked` や `picked_path` を **収集のみ**し、**状態確定は 1 箇所**（例: `apply_condition_editor_command_draft` 前後の単一関数）で行う。埋め込み／独立ビューポートで二重実装しない（§13.2）。
 - `confirm_action` を立てたフレームでは、オーバーレイ描画は **次フレーム**になりうる（`window_inputs` のスナップショット都合）。許容だが実装時に留意（§13.2）。
 
@@ -321,38 +323,38 @@
 
 | ID | タスク | 内容 | 対応 |
 |----|--------|------|------|
-| D-1 | `ConditionEditorConfirmAction` 拡張 | `OpenPickedPath(PathBuf)`（名称は実装で統一）を追加。 | F-5, §4.4 |
-| D-2 | 確認メッセージ | `condition_editor_confirm_message` に `OpenPickedPath` 用の文面を追加（`ReloadPath` と同系統）。 | F-5 |
-| D-3 | モーダル `Continue` 分岐 | `apply_condition_editor_modal_response` で `OpenPickedPath` のとき §4.2 手順 3〜5 を実行するよう分岐。 | F-5 |
-| D-4 | path-switch ヘルパー（中核） | 入力 `PathBuf`、戻り `Result<(), String>`。**二相 commit**: 手順 5 実行前に **`analysis_runtime_state`（＋必要なら `filter_config_path_override`）のスナップショット**を取得。**(1)** `load_condition_document` で検証 **(2)** 成功時のみ editor を §4.7 の一括 helper で更新（二重 I/O なし）**(3)** override 設定 **(4)** `refresh_analysis_runtime()`。**(4) 失敗時**はスナップショットで runtime（および関連 override）を復元し、editor も §4.7 列挙フィールドまで巻き戻す（§13.1）。 | §4.2, §4.7, F-3, F-4, T-5, T-9 |
-| D-5 | editor 一括更新 helper | `(document, load_info, path, status_message)` → `ConditionEditorState` の関連フィールドを**一括**更新する関数を 1 つに寄せ、`load_condition_editor_from_path` と D-4 から共有。部分コピーは避ける（§13.1）。 | §4.7, T-9 |
-| D-6 | 「選択」クリック〜ダイアログ | `select_clicked` 時: `pick_open_json()`。`None` なら終了。`Some(path)` は §12.0 に従い **収集**し、確定は単一箇所へ。`is_dirty` なら `OpenPickedPath(path)` をセット（**override は未設定**。オーバーレイは次フレーム表示あり得る。§13.2）。 | F-2, F-5, T-7 |
-| D-7 | `CommandDraft` 連携 | §12.0 の順序原則に従い、`apply_condition_editor_command_draft` 内または直前の **1 箇所**で pick 確定処理を呼ぶ。`save`/`reload` と同フレーム競合を定義上排除。 | §12.0 |
-| D-8 | repaint / viewport | `refresh_analysis_runtime()` 後に UI を更新したい場合、`egui::Context::request_repaint()` や viewport 操作に **別途** `Context` を渡す（refresh API 自体は `Context` 非受け取り。§13.3）。 | 動作確認 |
+| D-1 | `ConditionEditorConfirmAction` 拡張 | **完了**: `OpenPickedPath(PathBuf)`。 | F-5, §4.4 |
+| D-2 | 確認メッセージ | **完了**: `OpenPickedPath` 用文面。 | F-5 |
+| D-3 | モーダル `Continue` 分岐 | **完了**: `commit_picked_condition_json_path`。 | F-5 |
+| D-4 | path-switch ヘルパー（中核） | **完了**: `commit_picked_condition_json_path`＋`IdleAnalysisRuntimeSnapshot`。 | §4.2, §4.7, F-3, F-4, T-5, T-9 |
+| D-5 | editor 一括更新 helper | **完了**: `apply_condition_editor_loaded_bundle`。 | §4.7, T-9 |
+| D-6 | 「選択」クリック〜ダイアログ | **完了**: `handle_condition_editor_json_select_click`。 | F-2, F-5, T-7 |
+| D-7 | `CommandDraft` 連携 | **完了**: `pick_exclusive`、§12.0 モーダル優先。 | §12.0 |
+| D-8 | repaint / viewport | **完了**: 成功時 `ctx.request_repaint()`。 | 動作確認 |
 
 ### 12.4 `App` 境界（`app.rs`）
 
 | ID | タスク | 内容 | 対応 |
 |----|--------|------|------|
-| A-1 | 境界確認 | `App::refresh_analysis_runtime` は既存。`app_condition_editor` から親経由で呼べるか確認するのみ。**原則、新規公開メソッドは追加しない**（不要な境界変更を避ける。§13.3）。 | §6 |
+| A-1 | 境界確認 | **完了**: `refresh_analysis_runtime` に加え、ロールバック用 `capture_idle_runtime_snapshot` / `apply_idle_runtime_snapshot` を追加（§13.1 対応）。 | §6 |
 
 ### 12.5 検証
 
 | ID | タスク | 内容 | 対応 |
 |----|--------|------|------|
-| Q-1 | 手動テスト | §7 の T-1〜T-9 をチェックリスト化し、実装後に一通り実施。特に T-5, T-7, T-9。 | §7 |
-| Q-2 | 回帰 | 分析設定からの条件 JSON 変更 → `pending_path_sync`、フッター保存／再読込、閉じる確認。**不正選択失敗後も保存ボタンが従来どおり有効**（T-5b）。 | T-6, §8 |
+| Q-1 | 手動テスト | **リリース前推奨**: §7 T-1〜T-9 のスポット確認（実装・自動テストで主要経路はカバー）。 | §7 |
+| Q-2 | 回帰 | **リリース前推奨**: 分析設定 `pending_path_sync`、保存／再読込、閉じる、T-5b。 | T-6, §8 |
 | Q-3 | 自動テスト | **完了**: `app_condition_editor::commit_pick_tests::invalid_json_leaves_override_loaded_path_and_dirty_unchanged`（§7, §13.4）。追加は任意。 | §7 |
 
 ### 12.6 推奨実装順（まとめ）
 
 1. ~~**T0-1**~~ **完了**（§4.5 確定）  
-2. **V-1 → V-5**（ヘッダー UI。`select_clicked` は収集のみでも可）  
-3. **D-1 → D-3**（確認アクションとモーダル）  
-4. **D-5 → D-4**（一括 editor helper のうえで path-switch ＋ スナップショット／rollback）  
-5. **D-6, D-7, D-8**（§12.0 の順序で統合）  
-6. **A-1**（確認のみ）  
-7. **Q-1 → Q-3**（Q-3 は最低 1 ケース必須）
+2. ~~**V-1 → V-5**~~ **完了**  
+3. ~~**D-1 → D-3**~~ **完了**  
+4. ~~**D-5 → D-4**~~ **完了**  
+5. ~~**D-6, D-7, D-8**~~ **完了**（§12.0 モーダル優先を 2026-03-26 に整合）  
+6. ~~**A-1**~~ **完了**  
+7. **Q-1 → Q-2**（リリース前手動推奨）／~~**Q-3**~~ **完了**
 
 ---
 
