@@ -625,9 +625,6 @@ def _build_positive_group_candidates(
         .sort(position_column)
         .iter_rows(named=True)
     ]
-    if not relevant_rows:
-        return []
-
     positions_by_form: dict[str, list[dict[str, object]]] = {}
     for form in target_forms:
         positions_by_form[form] = [
@@ -648,6 +645,26 @@ def _build_positive_group_candidates(
             for row in selected_rows
         ]
 
+<<<<<<< HEAD
+=======
+    if match_logic == "not":
+        matched_form_count = sum(1 for form in forms if positions_by_form.get(form))
+        if matched_form_count == 0:
+            return [
+                _build_candidate(
+                    paragraph_id=paragraph_id,
+                    unit_scope=unit_scope,
+                    unit_id=unit_id,
+                    hit_rows=[],
+                    position_column=position_column,
+                )
+            ]
+        return []
+
+    if not relevant_rows:
+        return []
+
+>>>>>>> 8160fac91fa818d5c84b858c052e6aa59c21ff5c
     if effective_max_token_distance is not None:
         max_token_distance = int(effective_max_token_distance)
         if match_logic == "and":
