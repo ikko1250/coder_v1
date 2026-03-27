@@ -159,6 +159,10 @@ fn commit_picked_condition_json_path(
         return Ok(());
     }
 
+    let Some(runtime_snap) = app.capture_idle_runtime_snapshot() else {
+        return Err("分析ジョブ実行中は条件 JSON を切り替えられません。".to_string());
+    };
+
     let prev_override = app.analysis_request_state.filter_config_path_override.clone();
     let prev_editor_path = app.condition_editor_state.loaded_path.clone();
 
@@ -178,7 +182,7 @@ fn commit_picked_condition_json_path(
     if app.analysis_runtime_state.runtime.is_none() {
         let fail_summary = app.analysis_runtime_state.status_text();
         app.analysis_request_state.filter_config_path_override = prev_override;
-        app.refresh_analysis_runtime();
+        app.apply_idle_runtime_snapshot(runtime_snap);
         if let Some(rp) = prev_editor_path {
             if let Err(restore_err) = load_condition_editor_from_path(
                 app,
@@ -942,4 +946,38 @@ fn clamp_condition_group_selection_for_document(
         return None;
     };
     clamp_condition_index(selected_group_index, condition.form_groups.len())
+}
+
+#[cfg(test)]
+mod commit_pick_tests {
+    use super::*;
+    use crate::app::App;
+    use std::io::Write;
+
+    #[test]
+    fn invalid_json_leaves_override_loaded_path_and_dirty_unchanged() {
+        let mut app = App::new(None);
+        let stable_loaded = PathBuf::from("asset/cooccurrence-conditions.json");
+        let preset_override = PathBuf::from("preset-override-for-test.json");
+        app.condition_editor_state.loaded_path = Some(stable_loaded.clone());
+        app.condition_editor_state.is_dirty = true;
+        app.analysis_request_state.filter_config_path_override = Some(preset_override.clone());
+
+        let tmp = std::env::temp_dir().join("coder_v1_condition_pick_invalid_xyz.json");
+        let mut file = std::fs::File::create(&tmp).expect("temp file");
+        file.write_all(b"{").expect("write");
+
+        let ctx = egui::Context::default();
+        let result = commit_picked_condition_json_path(&mut app, &ctx, tmp.clone());
+        assert!(result.is_err(), "expected load error, got {result:?}");
+
+        assert_eq!(
+            app.analysis_request_state.filter_config_path_override,
+            Some(preset_override)
+        );
+        assert_eq!(app.condition_editor_state.loaded_path, Some(stable_loaded));
+        assert!(app.condition_editor_state.is_dirty);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

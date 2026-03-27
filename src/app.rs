@@ -180,12 +180,24 @@ struct AnalysisExportContext {
     annotation_csv_path: PathBuf,
 }
 
+#[derive(Clone)]
 enum AnalysisJobStatus {
     Idle,
     RunningAnalysis { job_id: String },
     RunningExport { job_id: String },
     Succeeded { summary: String },
     Failed { summary: String },
+}
+
+/// `current_job` が無いときの [`AnalysisRuntimeState`] のみを退避する（`Receiver` は非 `Clone` のため）。
+#[derive(Clone)]
+pub(crate) struct IdleAnalysisRuntimeSnapshot {
+    runtime: Option<AnalysisRuntimeConfig>,
+    status: AnalysisJobStatus,
+    last_warnings: Vec<AnalysisWarningMessage>,
+    warning_window_open: bool,
+    last_export_context: Option<AnalysisExportContext>,
+    session_analysis_cache: Option<(AnalysisSessionCacheKey, AnalysisResultSnapshot)>,
 }
 
 struct AnalysisRuntimeState {
@@ -243,6 +255,30 @@ impl AnalysisRuntimeState {
 
     fn can_export(&self) -> bool {
         self.runtime.is_some() && self.current_job.is_none() && self.last_export_context.is_some()
+    }
+
+    fn capture_idle_snapshot(&self) -> Option<IdleAnalysisRuntimeSnapshot> {
+        if self.current_job.is_some() {
+            return None;
+        }
+        Some(IdleAnalysisRuntimeSnapshot {
+            runtime: self.runtime.clone(),
+            status: self.status.clone(),
+            last_warnings: self.last_warnings.clone(),
+            warning_window_open: self.warning_window_open,
+            last_export_context: self.last_export_context.clone(),
+            session_analysis_cache: self.session_analysis_cache.clone(),
+        })
+    }
+
+    fn apply_idle_snapshot(&mut self, snap: IdleAnalysisRuntimeSnapshot) {
+        self.current_job = None;
+        self.runtime = snap.runtime;
+        self.status = snap.status;
+        self.last_warnings = snap.last_warnings;
+        self.warning_window_open = snap.warning_window_open;
+        self.last_export_context = snap.last_export_context;
+        self.session_analysis_cache = snap.session_analysis_cache;
     }
 }
 
@@ -712,6 +748,14 @@ impl App {
 
     fn refresh_analysis_runtime(&mut self) {
         app_analysis_job::refresh_analysis_runtime(self);
+    }
+
+    pub(crate) fn capture_idle_runtime_snapshot(&self) -> Option<IdleAnalysisRuntimeSnapshot> {
+        self.analysis_runtime_state.capture_idle_snapshot()
+    }
+
+    pub(crate) fn apply_idle_runtime_snapshot(&mut self, snap: IdleAnalysisRuntimeSnapshot) {
+        self.analysis_runtime_state.apply_idle_snapshot(snap);
     }
 
     fn focus_condition_editor_viewport(&self, ctx: &egui::Context) {

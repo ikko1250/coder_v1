@@ -342,7 +342,7 @@
 |----|--------|------|------|
 | Q-1 | 手動テスト | §7 の T-1〜T-9 をチェックリスト化し、実装後に一通り実施。特に T-5, T-7, T-9。 | §7 |
 | Q-2 | 回帰 | 分析設定からの条件 JSON 変更 → `pending_path_sync`、フッター保存／再読込、閉じる確認。**不正選択失敗後も保存ボタンが従来どおり有効**（T-5b）。 | T-6, §8 |
-| Q-3 | 自動テスト | **最低 1 ケース必須**: `parse fail → override 不変 / loaded_path 不変 / is_dirty 不変`（§7, §13.4）。追加は任意。 | §7 |
+| Q-3 | 自動テスト | **完了**: `app_condition_editor::commit_pick_tests::invalid_json_leaves_override_loaded_path_and_dirty_unchanged`（§7, §13.4）。追加は任意。 | §7 |
 
 ### 12.6 推奨実装順（まとめ）
 
