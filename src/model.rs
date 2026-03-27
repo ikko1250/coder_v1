@@ -48,6 +48,7 @@ pub(crate) struct AnalysisRecord {
     pub(crate) matched_form_group_ids_text: String,
     pub(crate) matched_form_group_logics_text: String,
     pub(crate) form_group_explanations_text: String,
+    pub(crate) text_groups_explanations_text: String,
     pub(crate) mixed_scope_warning_text: String,
     pub(crate) match_group_ids_text: String,
     pub(crate) match_group_count: String,
@@ -80,7 +81,10 @@ impl AnalysisRecord {
     }
 
     pub(crate) fn supports_db_viewer(&self) -> bool {
-        self.analysis_unit == AnalysisUnit::Paragraph
+        matches!(
+            self.analysis_unit,
+            AnalysisUnit::Paragraph | AnalysisUnit::Sentence
+        )
     }
 
     pub(crate) fn supports_manual_annotation(&self) -> bool {
@@ -140,6 +144,8 @@ pub(crate) struct DbViewerState {
     pub(crate) db_path: PathBuf,
     pub(crate) source_paragraph_id: Option<i64>,
     pub(crate) source_paragraph_text: Option<String>,
+    /// 文モード CSV は段落本文列を持たないため、CSV と DB 段落の一致判定を行わない。
+    pub(crate) skip_paragraph_compare: bool,
     pub(crate) context: Option<DbParagraphContext>,
     pub(crate) error_message: Option<String>,
     /// P2-09: `prepare_db_viewer_state` 時点の `ViewerCoreState::data_source_generation`（整合確認用）。
@@ -153,6 +159,7 @@ impl DbViewerState {
             db_path,
             source_paragraph_id: None,
             source_paragraph_text: None,
+            skip_paragraph_compare: false,
             context: None,
             error_message: None,
             data_source_generation_when_prepared: None,
@@ -163,6 +170,7 @@ impl DbViewerState {
         self.is_open = false;
         self.source_paragraph_id = None;
         self.source_paragraph_text = None;
+        self.skip_paragraph_compare = false;
         self.context = None;
         self.error_message = None;
         self.data_source_generation_when_prepared = None;

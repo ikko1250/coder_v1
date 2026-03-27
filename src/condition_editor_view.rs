@@ -1,9 +1,13 @@
 use crate::condition_editor::{
     AnnotationFilterItem, ConditionEditorItem, FilterConfigDocument, FormGroupEditorItem,
+    TextGroupEditorItem,
 };
 use crate::ui_helpers::ime_safe_singleline;
 use egui::{Color32, RichText, ScrollArea, Ui};
 use std::path::Path;
+
+/// 条件エディターヘッダーのパス表示幅（分析設定の条件 JSON 行に合わせる）。
+pub(crate) const CONDITION_EDITOR_HEADER_PATH_FIELD_WIDTH: f32 = 460.0;
 
 pub(crate) const CONDITION_EDITOR_FIELD_LABEL_WIDTH: f32 = 156.0;
 pub(crate) const CONDITION_EDITOR_TEXT_INPUT_WIDTH: f32 = 280.0;
@@ -11,6 +15,11 @@ pub(crate) const CONDITION_EDITOR_CHOICE_WIDTH: f32 = 140.0;
 const CONDITION_EDITOR_NUMBER_WIDTH: f32 = 120.0;
 const CONDITION_EDITOR_LIST_INPUT_WIDTH: f32 = 280.0;
 const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ConditionEditorHeaderResponse {
+    pub(crate) select_clicked: bool,
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ConditionEditorFooterResponse {
@@ -47,10 +56,33 @@ pub(crate) fn draw_condition_editor_header_panel(
     status_message: Option<(&str, bool)>,
     projected_legacy_condition_count: usize,
     data_source_stale: bool,
-) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!("読込中: {loaded_path_label}"));
-        ui.label(format!("現在の解決先: {resolved_path_label}"));
+) -> ConditionEditorHeaderResponse {
+    let mut response = ConditionEditorHeaderResponse::default();
+
+    ui.horizontal(|ui| {
+        ui.label("読込中");
+        let mut loaded_display = loaded_path_label.to_string();
+        ui.add(
+            ime_safe_singleline(&mut loaded_display)
+                .desired_width(CONDITION_EDITOR_HEADER_PATH_FIELD_WIDTH)
+                .interactive(false),
+        );
+        if ui
+            .add_enabled(can_modify, egui::Button::new("選択"))
+            .on_hover_text("別の条件 JSON を開き、分析実行でもそのパスを使います。")
+            .clicked()
+        {
+            response.select_clicked = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("現在の解決先");
+        let mut resolved_display = resolved_path_label.to_string();
+        ui.add(
+            ime_safe_singleline(&mut resolved_display)
+                .desired_width(CONDITION_EDITOR_HEADER_PATH_FIELD_WIDTH)
+                .interactive(false),
+        );
     });
 
     if data_source_stale {
@@ -85,8 +117,10 @@ pub(crate) fn draw_condition_editor_header_panel(
     }
 
     if !can_modify {
-        ui.label("分析ジョブ実行中は条件 JSON を保存・再読込できません。");
+        ui.label("分析ジョブ実行中は条件 JSON の保存・再読込・ファイルの選択はできません。");
     }
+
+    response
 }
 
 pub(crate) fn draw_condition_editor_footer_panel(
@@ -186,15 +220,19 @@ pub(crate) fn draw_condition_editor_list_panel(
                         let selected = current_selection == Some(index);
                         let categories_preview = summarize_condition_list(&condition.categories, 2);
                         let label = format!(
-                            "{}. {} [{}] groups:{} forms:{} filters:{} refs:{}",
+                            "{}. {} [{}] fg:{} forms:{} tg:{} filters:{} refs:{}",
                             index + 1,
                             condition.condition_id,
                             categories_preview,
                             condition_group_count(condition),
                             total_forms_count(condition),
+                            condition.text_groups.len(),
                             condition.annotation_filters.len(),
                             condition.required_categories_all.len()
                                 + condition.required_categories_any.len()
+                                + condition.required_condition_ids_all.len()
+                                + condition.required_condition_ids_any.len()
+                                + condition.excluded_condition_ids_any.len()
                         );
                         if ui.selectable_label(selected, label).clicked() {
                             response.selected_index = Some(index);
@@ -260,6 +298,7 @@ pub(crate) fn draw_condition_editor_selected_condition(
         &mut response.requested_group_selection,
         condition,
     );
+    response.changed |= draw_condition_editor_text_groups_section(ui, condition);
 
     if condition.projected_from_legacy {
         ui.colored_label(
@@ -278,6 +317,21 @@ pub(crate) fn draw_condition_editor_selected_condition(
         ui,
         "required_categories_any",
         &mut condition.required_categories_any,
+    );
+    response.changed |= draw_string_list_editor(
+        ui,
+        "required_condition_ids_all",
+        &mut condition.required_condition_ids_all,
+    );
+    response.changed |= draw_string_list_editor(
+        ui,
+        "required_condition_ids_any",
+        &mut condition.required_condition_ids_any,
+    );
+    response.changed |= draw_string_list_editor(
+        ui,
+        "excluded_condition_ids_any",
+        &mut condition.excluded_condition_ids_any,
     );
 
     response
@@ -360,7 +414,11 @@ pub(crate) fn summarize_form_group_label(
     group: &FormGroupEditorItem,
     group_index: usize,
 ) -> String {
-    let logic_label = display_form_group_logic(group, group_index);
+    let logic_label = display_combine_logic(
+        group.match_logic.as_deref(),
+        group.combine_logic.as_deref(),
+        group_index,
+    );
     let forms_preview = summarize_condition_list(&group.forms, 2);
     format!(
         "g{} [{}] forms:{} {}",
@@ -391,7 +449,11 @@ pub(crate) fn draw_form_group_editor(
                 [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
                 egui::Label::new("logic"),
             );
-            let selected_logic = display_form_group_logic(group, group_index);
+            let selected_logic = display_combine_logic(
+                group.match_logic.as_deref(),
+                group.combine_logic.as_deref(),
+                group_index,
+            );
             egui::ComboBox::from_id_salt(("form_group_logic", group_index))
                 .width(CONDITION_EDITOR_CHOICE_WIDTH)
                 .selected_text(selected_logic)
@@ -406,7 +468,12 @@ pub(crate) fn draw_form_group_editor(
                             .selectable_label(selected_logic == *option, *option)
                             .clicked()
                         {
-                            set_form_group_logic(group, group_index, option);
+                            set_combine_logic(
+                                &mut group.match_logic,
+                                &mut group.combine_logic,
+                                group_index,
+                                option,
+                            );
                             changed = true;
                         }
                     }
@@ -701,8 +768,12 @@ pub(crate) fn draw_annotation_filter_editor(
     changed
 }
 
-fn display_form_group_logic(group: &FormGroupEditorItem, group_index: usize) -> &'static str {
-    let match_logic = group.match_logic.as_deref().unwrap_or("and");
+fn display_combine_logic(
+    match_logic: Option<&str>,
+    combine_logic: Option<&str>,
+    group_index: usize,
+) -> &'static str {
+    let match_logic = match_logic.unwrap_or("and");
     if group_index == 0 {
         return match match_logic {
             "or" => "or",
@@ -711,7 +782,7 @@ fn display_form_group_logic(group: &FormGroupEditorItem, group_index: usize) -> 
         };
     }
 
-    match (group.combine_logic.as_deref().unwrap_or("and"), match_logic) {
+    match (combine_logic.unwrap_or("and"), match_logic) {
         ("and", "or") => "and or",
         ("and", "not") => "and not",
         ("or", "and") => "or and",
@@ -721,10 +792,15 @@ fn display_form_group_logic(group: &FormGroupEditorItem, group_index: usize) -> 
     }
 }
 
-fn set_form_group_logic(group: &mut FormGroupEditorItem, group_index: usize, selected: &str) {
+fn set_combine_logic(
+    match_logic: &mut Option<String>,
+    combine_logic: &mut Option<String>,
+    group_index: usize,
+    selected: &str,
+) {
     if group_index == 0 {
-        group.combine_logic = None;
-        group.match_logic = Some(match selected {
+        *combine_logic = None;
+        *match_logic = Some(match selected {
             "or" => "or".to_string(),
             "not" => "not".to_string(),
             _ => "and".to_string(),
@@ -732,7 +808,7 @@ fn set_form_group_logic(group: &mut FormGroupEditorItem, group_index: usize, sel
         return;
     }
 
-    let (combine_logic, match_logic) = match selected {
+    let (combine, matched) = match selected {
         "and or" => ("and", "or"),
         "and not" => ("and", "not"),
         "or and" => ("or", "and"),
@@ -740,8 +816,8 @@ fn set_form_group_logic(group: &mut FormGroupEditorItem, group_index: usize, sel
         "or not" => ("or", "not"),
         _ => ("and", "and"),
     };
-    group.combine_logic = Some(combine_logic.to_string());
-    group.match_logic = Some(match_logic.to_string());
+    *combine_logic = Some(combine.to_string());
+    *match_logic = Some(matched.to_string());
 }
 
 fn edit_group_scope_choice(
@@ -873,6 +949,157 @@ fn clamp_editor_index(selected_index: Option<usize>, len: usize) -> Option<usize
     }
 }
 
+fn summarize_text_group_label(group: &TextGroupEditorItem, group_index: usize) -> String {
+    let logic_label = display_combine_logic(
+        group.match_logic.as_deref(),
+        group.combine_logic.as_deref(),
+        group_index,
+    );
+    let texts_preview = summarize_condition_list(&group.texts, 2);
+    format!(
+        "tg{} [{}] texts:{} {}",
+        group_index + 1,
+        logic_label,
+        group.texts.len(),
+        texts_preview
+    )
+}
+
+fn draw_text_group_editor(
+    ui: &mut Ui,
+    group_index: usize,
+    overall_search_scope: Option<&str>,
+    search_scope_locked: bool,
+    group: &mut TextGroupEditorItem,
+) -> bool {
+    let mut changed = false;
+    let logic_options_group1 = ["and", "or", "not"];
+    let logic_options_group_n = ["and", "and or", "and not", "or and", "or", "or not"];
+
+    ui.add_space(8.0);
+    ui.group(|ui| {
+        ui.label(RichText::new(format!("text group {}", group_index + 1)).strong());
+
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                egui::Label::new("logic"),
+            );
+            let selected_logic = display_combine_logic(
+                group.match_logic.as_deref(),
+                group.combine_logic.as_deref(),
+                group_index,
+            );
+            egui::ComboBox::from_id_salt(("text_group_logic", group_index))
+                .width(CONDITION_EDITOR_CHOICE_WIDTH)
+                .selected_text(selected_logic)
+                .show_ui(ui, |ui| {
+                    let options: &[&str] = if group_index == 0 {
+                        &logic_options_group1
+                    } else {
+                        &logic_options_group_n
+                    };
+                    for option in options {
+                        if ui
+                            .selectable_label(selected_logic == *option, *option)
+                            .clicked()
+                        {
+                            set_combine_logic(
+                                &mut group.match_logic,
+                                &mut group.combine_logic,
+                                group_index,
+                                option,
+                            );
+                            changed = true;
+                        }
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [CONDITION_EDITOR_FIELD_LABEL_WIDTH, 0.0],
+                egui::Label::new("search_scope"),
+            );
+            if search_scope_locked {
+                let mut locked_search_scope = "paragraph".to_string();
+                ui.add_enabled(
+                    false,
+                    ime_safe_singleline(&mut locked_search_scope)
+                        .desired_width(CONDITION_EDITOR_CHOICE_WIDTH),
+                );
+            } else {
+                changed |= edit_group_scope_choice(
+                    ui,
+                    &mut group.search_scope,
+                    overall_search_scope,
+                    CONDITION_EDITOR_CHOICE_WIDTH,
+                );
+            }
+        });
+
+        changed |= draw_string_list_editor(ui, "texts", &mut group.texts);
+    });
+
+    changed
+}
+
+fn draw_condition_editor_text_groups_section(
+    ui: &mut Ui,
+    condition: &mut ConditionEditorItem,
+) -> bool {
+    let mut changed = false;
+
+    egui::CollapsingHeader::new("text_groups（フルテキスト）")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.small(
+                "条件 JSON の text_groups。トークン無しでも保存可。annotation 併用時はスコープは paragraph に固定されます。",
+            );
+
+            if ui.button("text group 追加").clicked() {
+                condition
+                    .text_groups
+                    .push(build_default_text_group_item(condition.text_groups.len()));
+                changed = true;
+            }
+
+            if condition.text_groups.is_empty() {
+                ui.label(RichText::new("text group がありません").italics());
+                return;
+            }
+
+            let mut remove_group_index = None;
+            for (group_index, group) in condition.text_groups.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let label = summarize_text_group_label(group, group_index);
+                    ui.label(RichText::new(label).small());
+                    if ui.button("削除").clicked() {
+                        remove_group_index = Some(group_index);
+                    }
+                });
+            }
+            if let Some(group_index) = remove_group_index {
+                condition.text_groups.remove(group_index);
+                changed = true;
+            }
+
+            let overall_search_scope = condition.overall_search_scope.clone();
+            let search_scope_locked = !condition.annotation_filters.is_empty();
+            for (group_index, group) in condition.text_groups.iter_mut().enumerate() {
+                changed |= draw_text_group_editor(
+                    ui,
+                    group_index,
+                    overall_search_scope.as_deref(),
+                    search_scope_locked,
+                    group,
+                );
+            }
+        });
+
+    changed
+}
+
 fn draw_condition_editor_form_groups_section(
     ui: &mut Ui,
     requested_group_selection: &mut Option<usize>,
@@ -955,6 +1182,15 @@ fn build_default_form_group_item(group_index: usize) -> FormGroupEditorItem {
         match_logic: Some(if group_index == 0 { "and" } else { "or" }.to_string()),
         combine_logic: (group_index > 0).then_some("and".to_string()),
         forms: vec![String::new()],
+        ..Default::default()
+    }
+}
+
+fn build_default_text_group_item(group_index: usize) -> TextGroupEditorItem {
+    TextGroupEditorItem {
+        match_logic: Some(if group_index == 0 { "and" } else { "or" }.to_string()),
+        combine_logic: (group_index > 0).then_some("and".to_string()),
+        texts: vec![String::new()],
         ..Default::default()
     }
 }

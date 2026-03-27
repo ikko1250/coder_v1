@@ -22,6 +22,7 @@ GUI_RECORD_COLUMNS = [
     "matched_form_group_ids_text",
     "matched_form_group_logics_text",
     "form_group_explanations_text",
+    "text_groups_explanations_text",
     "mixed_scope_warning_text",
     "match_group_ids_text",
     "match_group_count",
@@ -43,6 +44,11 @@ SENTENCE_GUI_RECORD_COLUMNS = [
     "sentence_text_tagged",
     "matched_condition_ids_text",
     "matched_categories_text",
+    "matched_form_group_ids_text",
+    "matched_form_group_logics_text",
+    "form_group_explanations_text",
+    "text_groups_explanations_text",
+    "mixed_scope_warning_text",
     "match_group_ids_text",
     "match_group_count",
     "annotated_token_count",
@@ -60,6 +66,7 @@ FORM_GROUP_EXPLANATION_EXPORT_COLUMNS = [
     "matched_form_group_ids_text",
     "matched_form_group_logics_text",
     "form_group_explanations_text",
+    "text_groups_explanations_text",
     "mixed_scope_warning_text",
 ]
 
@@ -129,6 +136,7 @@ def _with_form_group_explanation_export_columns(
         pl.col("matched_form_group_ids_text").cast(pl.String).fill_null(""),
         pl.col("matched_form_group_logics_text").cast(pl.String).fill_null(""),
         pl.col("form_group_explanations_text").cast(pl.String).fill_null(""),
+        pl.col("text_groups_explanations_text").cast(pl.String).fill_null(""),
         pl.col("mixed_scope_warning_text").cast(pl.String).fill_null(""),
     ])
 
@@ -191,6 +199,7 @@ def enrich_reconstructed_paragraphs_result(
                 "matched_form_group_ids_text",
                 "matched_form_group_logics_text",
                 "form_group_explanations_text",
+                "text_groups_explanations_text",
                 "mixed_scope_warning_text",
                 "match_group_ids",
                 "match_group_count",
@@ -249,6 +258,7 @@ def build_reconstructed_paragraphs_export_df(
             "matched_form_group_ids_text",
             "matched_form_group_logics_text",
             "form_group_explanations_text",
+            "text_groups_explanations_text",
             "mixed_scope_warning_text",
             "match_group_ids_text",
             "match_group_count",
@@ -281,6 +291,7 @@ def build_gui_records_df(
             pl.col("matched_form_group_ids_text").cast(pl.String).fill_null(""),
             pl.col("matched_form_group_logics_text").cast(pl.String).fill_null(""),
             pl.col("form_group_explanations_text").cast(pl.String).fill_null(""),
+            pl.col("text_groups_explanations_text").cast(pl.String).fill_null(""),
             pl.col("mixed_scope_warning_text").cast(pl.String).fill_null(""),
             pl.col("match_group_ids_text").cast(pl.String).fill_null(""),
             pl.col("match_group_count").cast(pl.String).fill_null(""),
@@ -321,6 +332,11 @@ def build_sentence_gui_records_df(
             pl.col("sentence_text_tagged").cast(pl.String).fill_null(""),
             pl.col("matched_condition_ids_text").cast(pl.String).fill_null(""),
             pl.col("matched_categories_text").cast(pl.String).fill_null(""),
+            pl.col("matched_form_group_ids_text").cast(pl.String).fill_null(""),
+            pl.col("matched_form_group_logics_text").cast(pl.String).fill_null(""),
+            pl.col("form_group_explanations_text").cast(pl.String).fill_null(""),
+            pl.col("text_groups_explanations_text").cast(pl.String).fill_null(""),
+            pl.col("mixed_scope_warning_text").cast(pl.String).fill_null(""),
             pl.col("match_group_ids_text").cast(pl.String).fill_null(""),
             pl.col("match_group_count").cast(pl.String).fill_null(""),
             pl.col("annotated_token_count").cast(pl.String).fill_null(""),
@@ -358,7 +374,7 @@ def enrich_reconstructed_sentences_result(
 
     return DataAccessResult(
         data_frame=(
-            reconstructed_sentences_base_df
+            _with_form_group_explanation_export_columns(reconstructed_sentences_base_df)
             .join(
                 sentence_metadata_result.data_frame,
                 on=["sentence_id", "paragraph_id"],
@@ -390,6 +406,11 @@ def enrich_reconstructed_sentences_result(
                 "matched_condition_ids_text",
                 "matched_categories",
                 "matched_categories_text",
+                "matched_form_group_ids_text",
+                "matched_form_group_logics_text",
+                "form_group_explanations_text",
+                "text_groups_explanations_text",
+                "mixed_scope_warning_text",
                 "match_group_ids",
                 "match_group_ids_text",
                 "match_group_count",
@@ -417,6 +438,11 @@ def build_reconstructed_sentences_export_df(
         "sentence_text_highlight_html",
         "matched_condition_ids_text",
         "matched_categories_text",
+        "matched_form_group_ids_text",
+        "matched_form_group_logics_text",
+        "form_group_explanations_text",
+        "text_groups_explanations_text",
+        "mixed_scope_warning_text",
         "match_group_ids_text",
         "match_group_count",
         "annotated_token_count",

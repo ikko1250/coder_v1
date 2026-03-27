@@ -10,7 +10,7 @@ use super::app_analysis_job;
 use super::App;
 use crate::condition_editor::{
     build_default_condition_item, load_condition_document, save_condition_document_atomic,
-    FilterConfigDocument,
+    ConditionDocumentLoadInfo, FilterConfigDocument,
 };
 use crate::condition_editor_view::{
     draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
@@ -19,8 +19,8 @@ use crate::condition_editor_view::{
     draw_condition_editor_header_panel as render_condition_editor_header_panel,
     draw_condition_editor_list_panel as render_condition_editor_list_panel,
     draw_condition_editor_selected_condition as render_condition_editor_selected_condition,
-    ConditionEditorDetailResponse, ConditionEditorFooterResponse, ConditionEditorListResponse,
-    ConfirmOverlayResponse,
+    ConditionEditorDetailResponse, ConditionEditorFooterResponse, ConditionEditorHeaderResponse,
+    ConditionEditorListResponse, ConfirmOverlayResponse,
 };
 use eframe::egui;
 use egui::{Color32, RichText, ScrollArea, Ui};
@@ -31,6 +31,7 @@ use std::path::PathBuf;
 pub(super) enum ConditionEditorConfirmAction {
     CloseWindow,
     ReloadPath(PathBuf),
+    OpenPickedPath(PathBuf),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,7 @@ struct ConditionEditorCommandDraft {
     should_delete_condition: Option<usize>,
     close_requested: bool,
     modal_response: Option<ConditionEditorModalResponse>,
+    select_clicked: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -100,12 +102,14 @@ pub(super) fn open_condition_editor(app: &mut App, ctx: &egui::Context) -> Resul
     load_condition_editor_from_path(app, path, "条件 JSON を読み込みました。")
 }
 
-fn load_condition_editor_from_path(
+/// `load_condition_document` 済みの結果をエディター状態へ一括反映する（二重 I/O 回避用）。
+fn apply_condition_editor_loaded_bundle(
     app: &mut App,
     path: PathBuf,
+    document: FilterConfigDocument,
+    load_info: ConditionDocumentLoadInfo,
     status_message: &str,
-) -> Result<(), String> {
-    let (document, load_info) = load_condition_document(&path)?;
+) {
     let projected_count = load_info.projected_legacy_condition_count;
     let mut final_status_message = status_message.to_string();
     if projected_count > 0 {
@@ -130,7 +134,89 @@ fn load_condition_editor_from_path(
     app.condition_editor_state.status_is_error = false;
     app.condition_editor_state.is_dirty = false;
     app.condition_editor_state.confirm_action = None;
+}
+
+fn load_condition_editor_from_path(
+    app: &mut App,
+    path: PathBuf,
+    status_message: &str,
+) -> Result<(), String> {
+    let (document, load_info) = load_condition_document(&path)?;
+    apply_condition_editor_loaded_bundle(app, path, document, load_info, status_message);
     Ok(())
+}
+
+/// ファイルダイアログで選んだパスをコミットする（読込検証 → editor → override → refresh。失敗時は T0-1／§4.7）。
+fn commit_picked_condition_json_path(
+    app: &mut App,
+    ctx: &egui::Context,
+    path: PathBuf,
+) -> Result<(), String> {
+    if app.condition_editor_state.loaded_path.as_ref() == Some(&path) {
+        app.condition_editor_state.status_message =
+            Some("既に開いているファイルです。".to_string());
+        app.condition_editor_state.status_is_error = false;
+        return Ok(());
+    }
+
+    let Some(runtime_snap) = app.capture_idle_runtime_snapshot() else {
+        return Err("分析ジョブ実行中は条件 JSON を切り替えられません。".to_string());
+    };
+
+    let prev_override = app.analysis_request_state.filter_config_path_override.clone();
+    let prev_editor_path = app.condition_editor_state.loaded_path.clone();
+
+    let (document, load_info) = load_condition_document(&path)?;
+
+    apply_condition_editor_loaded_bundle(
+        app,
+        path.clone(),
+        document,
+        load_info,
+        "条件 JSON を読み込みました（ファイルから選択）。",
+    );
+
+    app.analysis_request_state.filter_config_path_override = Some(path);
+    app.refresh_analysis_runtime();
+
+    if app.analysis_runtime_state.runtime.is_none() {
+        let fail_summary = app.analysis_runtime_state.status_text();
+        app.analysis_request_state.filter_config_path_override = prev_override;
+        app.apply_idle_runtime_snapshot(runtime_snap);
+        if let Some(rp) = prev_editor_path {
+            if let Err(restore_err) = load_condition_editor_from_path(
+                app,
+                rp,
+                "分析ランタイムの更新に失敗したため、表示を元に戻しました。",
+            ) {
+                return Err(format!(
+                    "{fail_summary} さらにエディターの復元に失敗: {restore_err}"
+                ));
+            }
+        }
+        return Err(fail_summary);
+    }
+
+    ctx.request_repaint();
+    Ok(())
+}
+
+fn handle_condition_editor_json_select_click(app: &mut App, ctx: &egui::Context) {
+    if app.analysis_runtime_state.current_job.is_some() {
+        return;
+    }
+    let Some(picked) = app.file_dialog_host.pick_open_json() else {
+        return;
+    };
+    if app.condition_editor_state.is_dirty {
+        app.condition_editor_state.confirm_action =
+            Some(ConditionEditorConfirmAction::OpenPickedPath(picked));
+        return;
+    }
+    if let Err(error) = commit_picked_condition_json_path(app, ctx, picked) {
+        app.condition_editor_state.status_message = Some(error);
+        app.condition_editor_state.status_is_error = true;
+    }
 }
 
 fn clamp_condition_editor_selection(
@@ -442,6 +528,10 @@ fn condition_editor_confirm_message(confirm_action: &ConditionEditorConfirmActio
             "未保存の変更があります。次の条件 JSON を再読込すると変更は破棄されます。\n{}",
             path.display()
         ),
+        ConditionEditorConfirmAction::OpenPickedPath(path) => format!(
+            "未保存の変更があります。次の条件 JSON を開くと変更は破棄されます。\n{}",
+            path.display()
+        ),
     }
 }
 
@@ -462,7 +552,7 @@ fn draw_condition_editor_embedded_window(
         .default_height(760.0)
         .resizable(true)
         .show(viewport_ctx, |ui| {
-            render_condition_editor_header_panel(
+            let header_response = render_condition_editor_header_panel(
                 ui,
                 can_modify,
                 loaded_path_label,
@@ -472,6 +562,7 @@ fn draw_condition_editor_embedded_window(
                 app.condition_editor_state.projected_legacy_condition_count,
                 condition_editor_data_source_stale(app),
             );
+            apply_condition_editor_header_response(command_draft, header_response);
             ui.separator();
             draw_condition_editor_body_panel(
                 app,
@@ -512,7 +603,7 @@ fn draw_condition_editor_viewport_panels(
                 .inner_margin(egui::Margin::same(10)),
         )
         .show(viewport_ctx, |ui| {
-            render_condition_editor_header_panel(
+            let header_response = render_condition_editor_header_panel(
                 ui,
                 can_modify,
                 loaded_path_label,
@@ -522,6 +613,7 @@ fn draw_condition_editor_viewport_panels(
                 app.condition_editor_state.projected_legacy_condition_count,
                 condition_editor_data_source_stale(app),
             );
+            apply_condition_editor_header_response(command_draft, header_response);
         });
 
     egui::TopBottomPanel::bottom("condition_editor_viewport_footer")
@@ -578,6 +670,15 @@ fn apply_condition_editor_footer_response(
     }
     if footer_response.reload_clicked {
         command_draft.should_reload = true;
+    }
+}
+
+fn apply_condition_editor_header_response(
+    command_draft: &mut ConditionEditorCommandDraft,
+    header_response: ConditionEditorHeaderResponse,
+) {
+    if header_response.select_clicked {
+        command_draft.select_clicked = true;
     }
 }
 
@@ -703,6 +804,13 @@ fn apply_condition_editor_modal_response(
                         }
                         app.condition_editor_state.confirm_action = None;
                     }
+                    ConditionEditorConfirmAction::OpenPickedPath(path) => {
+                        if let Err(error) = commit_picked_condition_json_path(app, ctx, path) {
+                            app.condition_editor_state.status_message = Some(error);
+                            app.condition_editor_state.status_is_error = true;
+                        }
+                        app.condition_editor_state.confirm_action = None;
+                    }
                 }
             }
         }
@@ -725,6 +833,12 @@ fn apply_condition_editor_command_draft(
     apply_condition_editor_add_request(app, command_draft.should_add_condition);
     apply_condition_editor_delete_request(app, command_draft.should_delete_condition);
 
+    // §12.0: モーダル応答があるフレームでは save / reload / pick と競合させない。
+    if command_draft.modal_response.is_some() {
+        apply_condition_editor_modal_response(app, ctx, viewport_id, command_draft.modal_response);
+        return None;
+    }
+
     let mut save_error = None;
     if command_draft.should_save {
         if let Err(error) = save_condition_editor_document(app) {
@@ -736,7 +850,12 @@ fn apply_condition_editor_command_draft(
         command_draft.should_reload,
         resolved_path_result,
     );
-    apply_condition_editor_modal_response(app, ctx, viewport_id, command_draft.modal_response);
+
+    let pick_exclusive =
+        command_draft.select_clicked && !command_draft.should_save && !command_draft.should_reload;
+    if pick_exclusive {
+        handle_condition_editor_json_select_click(app, ctx);
+    }
 
     save_error.or(reload_error)
 }
@@ -830,4 +949,38 @@ fn clamp_condition_group_selection_for_document(
         return None;
     };
     clamp_condition_index(selected_group_index, condition.form_groups.len())
+}
+
+#[cfg(test)]
+mod commit_pick_tests {
+    use super::*;
+    use crate::app::App;
+    use std::io::Write;
+
+    #[test]
+    fn invalid_json_leaves_override_loaded_path_and_dirty_unchanged() {
+        let mut app = App::new(None);
+        let stable_loaded = PathBuf::from("asset/cooccurrence-conditions.json");
+        let preset_override = PathBuf::from("preset-override-for-test.json");
+        app.condition_editor_state.loaded_path = Some(stable_loaded.clone());
+        app.condition_editor_state.is_dirty = true;
+        app.analysis_request_state.filter_config_path_override = Some(preset_override.clone());
+
+        let tmp = std::env::temp_dir().join("coder_v1_condition_pick_invalid_xyz.json");
+        let mut file = std::fs::File::create(&tmp).expect("temp file");
+        file.write_all(b"{").expect("write");
+
+        let ctx = egui::Context::default();
+        let result = commit_picked_condition_json_path(&mut app, &ctx, tmp.clone());
+        assert!(result.is_err(), "expected load error, got {result:?}");
+
+        assert_eq!(
+            app.analysis_request_state.filter_config_path_override,
+            Some(preset_override)
+        );
+        assert_eq!(app.condition_editor_state.loaded_path, Some(stable_loaded));
+        assert!(app.condition_editor_state.is_dirty);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

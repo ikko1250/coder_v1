@@ -6,7 +6,10 @@ use super::{
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, resolve_filter_config_path, AnalysisExportRequest,
     AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess,
-    AnalysisWarningMessage,
+    AnalysisMeta, AnalysisRuntimeConfig, AnalysisWarningMessage,
+};
+use crate::analysis_session_cache::{
+    build_session_cache_key, AnalysisResultSnapshot, AnalysisSessionCacheKey,
 };
 use crate::viewer_core::{ViewerCoreCloseInput, ViewerCoreMessage};
 use eframe::egui::{self, RichText, ScrollArea};
@@ -43,6 +46,21 @@ pub(super) fn refresh_analysis_runtime(app: &mut App) {
     app.sync_condition_editor_with_runtime_path();
 }
 
+pub(super) fn invalidate_session_analysis_cache(app: &mut App) {
+    app.analysis_runtime_state.session_analysis_cache = None;
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AnalysisStartMode {
+    /// 入力が直近成功と一致すれば worker を呼ばない。
+    #[default]
+    Normal,
+    /// レベル A: セッションキャッシュを無視して worker を呼ぶ（`force_reload` は false）。
+    ForceWorkerRun,
+    /// レベル B: セッション無視 + worker の DB フレーム再読込。
+    ForceWorkerRunAndReloadDb,
+}
+
 pub(super) fn resolved_filter_config_path(app: &App) -> Result<PathBuf, String> {
     if let Some(runtime) = app.analysis_runtime_state.runtime.as_ref() {
         return Ok(runtime.filter_config_path.clone());
@@ -51,6 +69,13 @@ pub(super) fn resolved_filter_config_path(app: &App) -> Result<PathBuf, String> 
 }
 
 pub(super) fn start_analysis_job(app: &mut App) -> Result<(), String> {
+    start_analysis_job_with_mode(app, AnalysisStartMode::default())
+}
+
+pub(super) fn start_analysis_job_with_mode(
+    app: &mut App,
+    mode: AnalysisStartMode,
+) -> Result<(), String> {
     if app.analysis_runtime_state.current_job.is_some() {
         return Err("分析ジョブは既に実行中です".to_string());
     }
@@ -61,11 +86,29 @@ pub(super) fn start_analysis_job(app: &mut App) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
 
+    if mode == AnalysisStartMode::Normal {
+        let snapshot_hit = app
+            .analysis_runtime_state
+            .session_analysis_cache
+            .as_ref()
+            .and_then(|(cached_key, snapshot)| {
+                current_session_cache_key(app, &runtime)
+                    .filter(|current_key| current_key == cached_key)
+                    .map(|_| snapshot.clone())
+            });
+        if let Some(snapshot) = snapshot_hit {
+            return apply_session_cache_hit(app, &snapshot);
+        }
+    }
+
     cleanup_job_directories(&runtime.jobs_root)?;
+
+    let force_reload_db_frames = mode == AnalysisStartMode::ForceWorkerRunAndReloadDb;
 
     let (job_id, receiver) = app.analysis_process_host.spawn_analysis_job(AnalysisJobRequest {
         db_path: app.db_viewer_state.db_path.clone(),
         runtime,
+        force_reload_db_frames,
     });
 
     app.analysis_runtime_state.last_warnings.clear();
@@ -76,6 +119,82 @@ pub(super) fn start_analysis_job(app: &mut App) -> Result<(), String> {
     };
     app.core.set_expected_job_id(job_id.clone());
     app.logger.info(&format!("analysis job started: {job_id}"));
+    Ok(())
+}
+
+fn resolved_annotation_csv_path_for_runtime(app: &App) -> PathBuf {
+    app.analysis_runtime_state
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.annotation_csv_path.clone())
+        .or_else(|| app.resolved_annotation_csv_path().ok())
+        .unwrap_or_default()
+}
+
+fn current_session_cache_key(app: &App, runtime: &AnalysisRuntimeConfig) -> Option<AnalysisSessionCacheKey> {
+    let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
+    build_session_cache_key(
+        &app.db_viewer_state.db_path,
+        &runtime.filter_config_path,
+        &annotation_csv_path,
+        runtime,
+    )
+}
+
+fn build_status_summary_from_meta(meta: &AnalysisMeta) -> String {
+    let warning_count = meta.warning_messages.len();
+    let mut summary = format!(
+        "{}{}抽出 / {:.2} 秒",
+        meta.selected_unit_count(),
+        meta.analysis_unit.count_label(),
+        meta.duration_seconds
+    );
+    if warning_count > 0 {
+        summary.push_str(&format!(" / 警告 {} 件", warning_count));
+    }
+    summary
+}
+
+fn analysis_result_snapshot_from_success(app: &App, success: &AnalysisJobSuccess) -> AnalysisResultSnapshot {
+    let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
+    AnalysisResultSnapshot {
+        records: success.records.clone(),
+        source_label: format!("分析結果: {}", success.meta.job_id),
+        last_warnings: success.meta.warning_messages.clone(),
+        db_path: PathBuf::from(&success.meta.db_path),
+        filter_config_path: PathBuf::from(&success.meta.filter_config_path),
+        annotation_csv_path,
+        status_summary: build_status_summary_from_meta(&success.meta),
+    }
+}
+
+fn try_store_session_analysis_cache(app: &mut App, success: &AnalysisJobSuccess) {
+    let Some(runtime) = app.analysis_runtime_state.runtime.as_ref() else {
+        return;
+    };
+    let Some(key) = current_session_cache_key(app, runtime) else {
+        return;
+    };
+    let snapshot = analysis_result_snapshot_from_success(app, success);
+    app.analysis_runtime_state.session_analysis_cache = Some((key, snapshot));
+}
+
+fn apply_session_cache_hit(app: &mut App, snapshot: &AnalysisResultSnapshot) -> Result<(), String> {
+    app.analysis_runtime_state.last_warnings = snapshot.last_warnings.clone();
+    app.analysis_runtime_state.warning_window_open = false;
+    app.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
+        db_path: snapshot.db_path.clone(),
+        filter_config_path: snapshot.filter_config_path.clone(),
+        annotation_csv_path: snapshot.annotation_csv_path.clone(),
+    });
+    let summary = format!("前回結果を再表示（{}）", snapshot.status_summary);
+    app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    app.logger
+        .info("session analysis cache hit; skipped Python worker analyze request");
+    let _ = app.apply_event(ViewerCoreMessage::ReplaceRecords {
+        records: snapshot.records.clone(),
+        source_label: snapshot.source_label.clone(),
+    });
     Ok(())
 }
 
@@ -240,27 +359,14 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
 }
 
 fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> ViewerCoreMessage {
+    try_store_session_analysis_cache(app, &success);
+
     let warnings = success.meta.warning_messages.clone();
-    let warning_count = warnings.len();
     let source_label = format!("分析結果: {}", success.meta.job_id);
-    let mut summary = format!(
-        "{}{}抽出 / {:.2} 秒",
-        success.meta.selected_unit_count(),
-        success.meta.analysis_unit.count_label(),
-        success.meta.duration_seconds
-    );
-    if warning_count > 0 {
-        summary.push_str(&format!(" / 警告 {} 件", warning_count));
-    }
+    let summary = build_status_summary_from_meta(&success.meta);
     app.analysis_runtime_state.last_warnings = warnings;
     app.analysis_runtime_state.warning_window_open = false;
-    let annotation_csv_path = app
-        .analysis_runtime_state
-        .runtime
-        .as_ref()
-        .map(|runtime| runtime.annotation_csv_path.clone())
-        .or_else(|| app.resolved_annotation_csv_path().ok())
-        .unwrap_or_default();
+    let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
     app.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
         db_path: PathBuf::from(&success.meta.db_path),
         filter_config_path: PathBuf::from(&success.meta.filter_config_path),

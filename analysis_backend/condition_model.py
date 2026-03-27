@@ -5,6 +5,8 @@ from typing import Literal
 
 import polars as pl
 
+from .text_unit_frames import TextUnitFrames
+
 
 DistanceMatchingMode = Literal["strict", "auto-approx", "approx"]
 ConfigIssueSeverity = Literal["warning", "error"]
@@ -66,6 +68,14 @@ class NormalizedFormGroup:
 
 
 @dataclass(frozen=True)
+class NormalizedTextGroup:
+    texts: list[str]
+    match_logic: str
+    combine_logic: str | None
+    search_scope: str
+
+
+@dataclass(frozen=True)
 class NormalizedCondition:
     condition_id: str
     categories: list[str]
@@ -77,6 +87,7 @@ class NormalizedCondition:
     effective_max_token_distance: int | None
     overall_search_scope: str = "paragraph"
     form_groups: list[NormalizedFormGroup] = field(default_factory=list)
+    text_groups: list[NormalizedTextGroup] = field(default_factory=list)
     annotation_filters: list[AnnotationFilter] = field(default_factory=list)
     required_categories_all: list[str] = field(default_factory=list)
     required_categories_any: list[str] = field(default_factory=list)
@@ -130,3 +141,4 @@ class TargetSelectionResult:
     target_paragraph_ids: list[int]
     target_sentence_ids: list[int]
     warning_messages: list[MatchingWarning] = field(default_factory=list)
+    text_unit_frames: TextUnitFrames | None = None

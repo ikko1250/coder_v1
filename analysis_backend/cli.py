@@ -403,6 +403,7 @@ def run_analysis_job(args: Namespace) -> int:
                 tokens_with_position_df=selected_tokens_with_position_df,
                 token_annotations_df=token_annotations_df,
                 sentence_match_summary_df=selection_result.sentence_match_summary_df,
+                paragraph_match_summary_df=paragraph_match_summary_df,
             )
             reconstructed_sentences_result = enrich_reconstructed_sentences_result(
                 db_path=db_path,

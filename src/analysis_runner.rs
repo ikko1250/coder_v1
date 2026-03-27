@@ -17,7 +17,7 @@ const DEFAULT_SCRIPT_RELATIVE_PATH: &str = "run-analysis.py";
 const DEFAULT_JOBS_RELATIVE_PATH: &str = "runtime/jobs";
 const JOB_HISTORY_KEEP_COUNT: usize = 5;
 const PYTHON_PATH_ENV_KEY: &str = "CSV_VIEWER_PYTHON";
-const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(10000);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AnalysisRuntimeOverrides {
@@ -42,6 +42,8 @@ pub(crate) struct AnalysisRuntimeConfig {
 pub(crate) struct AnalysisJobRequest {
     pub(crate) db_path: PathBuf,
     pub(crate) runtime: AnalysisRuntimeConfig,
+    /// Python worker の DB フレーム読み込みキャッシュを破棄して再読込する（設計書の「再読込分析」レベル B）。
+    pub(crate) force_reload_db_frames: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,6 +225,8 @@ struct AnalysisJsonRecord {
     #[serde(default)]
     form_group_explanations_text: String,
     #[serde(default)]
+    text_groups_explanations_text: String,
+    #[serde(default)]
     mixed_scope_warning_text: String,
     #[serde(default)]
     match_group_ids_text: String,
@@ -261,6 +265,7 @@ impl AnalysisJsonRecord {
             matched_form_group_ids_text: self.matched_form_group_ids_text,
             matched_form_group_logics_text: self.matched_form_group_logics_text,
             form_group_explanations_text: self.form_group_explanations_text,
+            text_groups_explanations_text: self.text_groups_explanations_text,
             mixed_scope_warning_text: self.mixed_scope_warning_text,
             match_group_ids_text: self.match_group_ids_text,
             match_group_count: self.match_group_count,
@@ -475,7 +480,7 @@ fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobE
         filter_config_path: request.runtime.filter_config_path.display().to_string(),
         annotation_csv_path: request.runtime.annotation_csv_path.display().to_string(),
         limit_rows: None,
-        force_reload: false,
+        force_reload: request.force_reload_db_frames,
     };
     let worker_handle_for_request = worker_handle.clone();
     let (sender, receiver) = mpsc::channel();
@@ -635,7 +640,11 @@ fn spawn_worker(
         stderr_buffer,
     };
 
-    send_simple_worker_request(&handle, "health")?;
+    if let Err(message) = send_simple_worker_request(&handle, "health") {
+        let stderr = worker_stderr_snapshot(&handle);
+        shutdown_worker(&handle);
+        return Err(attach_stderr_to_message(message, &stderr));
+    }
     Ok(handle)
 }
 
@@ -700,6 +709,13 @@ fn worker_stderr_snapshot(handle: &WorkerHandle) -> String {
         .unwrap_or_default()
 }
 
+fn attach_stderr_to_message(message: String, stderr: &str) -> String {
+    if stderr.trim().is_empty() {
+        return message;
+    }
+    format!("{message}\n\nstderr:\n{stderr}")
+}
+
 fn send_simple_worker_request(
     handle: &WorkerHandle,
     request_type: &'static str,
@@ -723,10 +739,10 @@ fn send_analyze_request(
     handle: WorkerHandle,
     request: WorkerAnalyzeRequest,
 ) -> Result<AnalysisJobSuccess, AnalysisJobFailure> {
-    let stderr = worker_stderr_snapshot(&handle);
     let response = match send_worker_request(&handle, &request) {
         Ok(response) => response,
         Err(message) => {
+            let stderr = worker_stderr_snapshot(&handle);
             shutdown_worker(&handle);
             invalidate_worker_slot(&handle.fingerprint);
             return Err(AnalysisJobFailure {
@@ -736,6 +752,8 @@ fn send_analyze_request(
             });
         }
     };
+
+    let stderr = worker_stderr_snapshot(&handle);
 
     if response.request_id != request.request_id {
         shutdown_worker(&handle);
@@ -798,10 +816,10 @@ fn send_export_request(
     request: WorkerExportRequest,
     output_csv_path: PathBuf,
 ) -> Result<AnalysisExportSuccess, AnalysisJobFailure> {
-    let stderr = worker_stderr_snapshot(&handle);
     let response = match send_worker_request(&handle, &request) {
         Ok(response) => response,
         Err(message) => {
+            let stderr = worker_stderr_snapshot(&handle);
             shutdown_worker(&handle);
             invalidate_worker_slot(&handle.fingerprint);
             return Err(AnalysisJobFailure {
@@ -811,6 +829,8 @@ fn send_export_request(
             });
         }
     };
+
+    let stderr = worker_stderr_snapshot(&handle);
 
     if response.request_id != request.request_id {
         shutdown_worker(&handle);
