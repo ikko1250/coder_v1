@@ -6,12 +6,20 @@ use crate::ui_helpers::ime_safe_singleline;
 use egui::{Color32, RichText, ScrollArea, Ui};
 use std::path::Path;
 
+/// 条件エディターヘッダーのパス表示幅（分析設定の条件 JSON 行に合わせる）。
+pub(crate) const CONDITION_EDITOR_HEADER_PATH_FIELD_WIDTH: f32 = 460.0;
+
 pub(crate) const CONDITION_EDITOR_FIELD_LABEL_WIDTH: f32 = 156.0;
 pub(crate) const CONDITION_EDITOR_TEXT_INPUT_WIDTH: f32 = 280.0;
 pub(crate) const CONDITION_EDITOR_CHOICE_WIDTH: f32 = 140.0;
 const CONDITION_EDITOR_NUMBER_WIDTH: f32 = 120.0;
 const CONDITION_EDITOR_LIST_INPUT_WIDTH: f32 = 280.0;
 const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ConditionEditorHeaderResponse {
+    pub(crate) select_clicked: bool,
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ConditionEditorFooterResponse {
@@ -48,10 +56,33 @@ pub(crate) fn draw_condition_editor_header_panel(
     status_message: Option<(&str, bool)>,
     projected_legacy_condition_count: usize,
     data_source_stale: bool,
-) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!("読込中: {loaded_path_label}"));
-        ui.label(format!("現在の解決先: {resolved_path_label}"));
+) -> ConditionEditorHeaderResponse {
+    let mut response = ConditionEditorHeaderResponse::default();
+
+    ui.horizontal(|ui| {
+        ui.label("読込中");
+        let mut loaded_display = loaded_path_label.to_string();
+        ui.add(
+            ime_safe_singleline(&mut loaded_display)
+                .desired_width(CONDITION_EDITOR_HEADER_PATH_FIELD_WIDTH)
+                .interactive(false),
+        );
+        if ui
+            .add_enabled(can_modify, egui::Button::new("選択"))
+            .on_hover_text("別の条件 JSON を開き、分析実行でもそのパスを使います。")
+            .clicked()
+        {
+            response.select_clicked = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("現在の解決先");
+        let mut resolved_display = resolved_path_label.to_string();
+        ui.add(
+            ime_safe_singleline(&mut resolved_display)
+                .desired_width(CONDITION_EDITOR_HEADER_PATH_FIELD_WIDTH)
+                .interactive(false),
+        );
     });
 
     if data_source_stale {
@@ -86,8 +117,10 @@ pub(crate) fn draw_condition_editor_header_panel(
     }
 
     if !can_modify {
-        ui.label("分析ジョブ実行中は条件 JSON を保存・再読込できません。");
+        ui.label("分析ジョブ実行中は条件 JSON の保存・再読込・ファイルの選択はできません。");
     }
+
+    response
 }
 
 pub(crate) fn draw_condition_editor_footer_panel(

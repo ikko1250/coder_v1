@@ -311,11 +311,11 @@
 
 | ID | タスク | 内容 | 対応 |
 |----|--------|------|------|
-| V-1 | `ConditionEditorHeaderResponse` | `select_clicked: bool`（仮名）を持つ構造体を追加。フッターの `ConditionEditorFooterResponse` と同パターン。 | F-1 |
-| V-2 | ヘッダー API 変更 | `draw_condition_editor_header_panel` を **戻り値** `ConditionEditorHeaderResponse` に変更。呼び出し側は `app_condition_editor.rs` の2経路（埋め込みウィンドウ／トップパネル）。 | F-1, §9 |
-| V-3 | レイアウト §5 | 「読込中」「現在の解決先」を分析設定に近い **固定幅非編集**＋「選択」に変更。2 パス分で縦長になりすぎないよう **2 行固定／要約表示**等を §5 に合わせて決める（§13.3）。 | §5, §11.2 |
-| V-4 | ボタン状態 | `can_modify == false` で「選択」無効、`on_hover_text` で §5 の説明を付与。 | F-6 |
-| V-5 | ジョブ中文言 | ヘッダー下部の実行中メッセージを §5 どおり更新（保存・再読込・選択）。 | §5 |
+| V-1 | `ConditionEditorHeaderResponse` | **完了**: `select_clicked` を追加（`ConditionEditorFooterResponse` と同パターン）。 | F-1 |
+| V-2 | ヘッダー API 変更 | **完了**: `draw_condition_editor_header_panel` → `ConditionEditorHeaderResponse`。埋め込み／トップパネル両経路で `apply_condition_editor_header_response`。 | F-1, §9 |
+| V-3 | レイアウト §5 | **完了**: 2 行（読込中＋選択／解決先）、幅 460、`ime_safe_singleline`。 | §5, §11.2 |
+| V-4 | ボタン状態 | **完了**: `can_modify` で無効化、ホバー文言。 | F-6 |
+| V-5 | ジョブ中文言 | **完了**: 「保存・再読込・ファイルの選択はできません」。 | §5 |
 
 ### 12.3 ドメイン・トランザクション（`app_condition_editor.rs` 中心）
 
