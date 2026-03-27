@@ -82,13 +82,13 @@ const FILTER_COLUMN_SPECS: &[FilterColumnSpec] = &[
     FilterColumnSpec {
         column: FilterColumn::MatchedConditions,
         label: "conditions",
-        value_kind: FilterValueKind::Single(record_matched_condition_ids_value),
+        value_kind: FilterValueKind::Multi(record_matched_condition_ids_values),
         sort_kind: FilterSortKind::Text,
     },
     FilterColumnSpec {
         column: FilterColumn::MatchGroupIds,
         label: "match_groups",
-        value_kind: FilterValueKind::Single(record_match_group_ids_value),
+        value_kind: FilterValueKind::Multi(record_match_group_ids_values),
         sort_kind: FilterSortKind::Text,
     },
     FilterColumnSpec {
@@ -217,12 +217,12 @@ fn record_matched_categories_values(record: &AnalysisRecord) -> Vec<String> {
     category_values(&record.matched_categories_text)
 }
 
-fn record_matched_condition_ids_value(record: &AnalysisRecord) -> String {
-    normalize_single_filter_value(&record.matched_condition_ids_text)
+fn record_matched_condition_ids_values(record: &AnalysisRecord) -> Vec<String> {
+    category_values(&record.matched_condition_ids_text)
 }
 
-fn record_match_group_ids_value(record: &AnalysisRecord) -> String {
-    normalize_single_filter_value(&record.match_group_ids_text)
+fn record_match_group_ids_values(record: &AnalysisRecord) -> Vec<String> {
+    category_values(&record.match_group_ids_text)
 }
 
 fn record_match_group_count_value(record: &AnalysisRecord) -> String {
@@ -359,6 +359,28 @@ mod tests {
         assert!(FilterColumn::MatchedCategories.matches(&record, &selected));
         let selected2: BTreeSet<String> = ["Z".to_string()].into_iter().collect();
         assert!(!FilterColumn::MatchedCategories.matches(&record, &selected2));
+    }
+
+    #[test]
+    fn filter_column_matched_conditions_matches_any_condition_id() {
+        let mut record = empty_paragraph_record(1);
+        record.matched_condition_ids_text = "A, B".to_string();
+        let selected: BTreeSet<String> = ["B".to_string()].into_iter().collect();
+        assert!(FilterColumn::MatchedConditions.matches(&record, &selected));
+        let selected2: BTreeSet<String> = ["Z".to_string()].into_iter().collect();
+        assert!(!FilterColumn::MatchedConditions.matches(&record, &selected2));
+    }
+
+    #[test]
+    fn build_filter_options_splits_match_group_ids() {
+        let mut a = empty_paragraph_record(1);
+        a.match_group_ids_text = "g1, g2".to_string();
+        let mut b = empty_paragraph_record(2);
+        b.match_group_ids_text = "g2".to_string();
+        let opts = build_filter_options(&[a, b]);
+        let groups = opts.get(&FilterColumn::MatchGroupIds).unwrap();
+        let values: Vec<_> = groups.iter().map(|option| (option.value.as_str(), option.count)).collect();
+        assert_eq!(values, vec![("g1", 1), ("g2", 2)]);
     }
 
     #[test]
