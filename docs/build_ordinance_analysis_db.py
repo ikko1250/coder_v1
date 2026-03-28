@@ -12,7 +12,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 ANALYSIS_DB_PATH = "data/ordinance_analysis.db"
 REPORT_PATH_SUFFIX = ".report.json"
-FILE_NAME_PATTERN = re.compile(r"^(?P<category1>[^_]+)_(?P<category2>[^_]+)$")
+# Optional leading "<digits>_" (e.g. municipality id) before <category1>_<category2>.
+FILE_NAME_PATTERN = re.compile(
+    r"^(?:\d+_)?(?P<category1>[^_]+)_(?P<category2>[^_]+)$"
+)
 
 SENTENCE_END_CHARS = set("。．.!?！？")
 SENTENCE_CLOSING_CHARS = set("」』）)]】〉》\"'")
@@ -554,7 +557,10 @@ def load_source_rows_from_dir(input_dir: Path, limit: Optional[int]) -> Tuple[Li
                     severity="warning",
                     code="invalid_file_name",
                     path=str(file_path.relative_to(input_dir).as_posix()),
-                    message="file name must match <category1>_<category2>.(txt|md)",
+                    message=(
+                        "file name must match <category1>_<category2>.(txt|md) "
+                        "or <digits>_<category1>_<category2>.(txt|md)"
+                    ),
                 )
             )
             continue
