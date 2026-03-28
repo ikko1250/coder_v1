@@ -51,6 +51,11 @@ pub(super) fn draw_builder_settings_window(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.label("フォルダー入力から Analysis DB を生成します。");
             ui.label("この設定は現在のセッション内だけで有効です。");
+            ui.label(
+                "入力 .txt / .md のファイル名（拡張子除く stem）は \
+                 <category1>_<category2> または <数字ID>_<category1>_<category2>。\
+                 category 値に _ は含めません（Python ビルダーと同じ規則）。",
+            );
             ui.separator();
 
             draw_path_override_row(
