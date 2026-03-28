@@ -5,9 +5,8 @@ use std::path::PathBuf;
 const PARAGRAPH_REQUIRED_COLUMNS: &[&str] = &[
     "paragraph_id",
     "document_id",
-    "municipality_name",
-    "ordinance_or_rule",
-    "doc_type",
+    "category1",
+    "category2",
     "sentence_count",
     "paragraph_text",
     "paragraph_text_tagged",
@@ -21,9 +20,8 @@ const SENTENCE_REQUIRED_COLUMNS: &[&str] = &[
     "sentence_id",
     "paragraph_id",
     "document_id",
-    "municipality_name",
-    "ordinance_or_rule",
-    "doc_type",
+    "category1",
+    "category2",
     "sentence_no_in_paragraph",
     "sentence_no_in_document",
     "sentence_text",
@@ -74,9 +72,8 @@ pub(crate) fn load_records(path: &PathBuf) -> Result<Vec<AnalysisRecord>, String
             paragraph_id: get(&row, "paragraph_id"),
             sentence_id: get(&row, "sentence_id"),
             document_id: get(&row, "document_id"),
-            municipality_name: get(&row, "municipality_name"),
-            ordinance_or_rule: get(&row, "ordinance_or_rule"),
-            doc_type: get(&row, "doc_type"),
+            category1: get(&row, "category1"),
+            category2: get(&row, "category2"),
             sentence_count: get(&row, "sentence_count"),
             sentence_no_in_paragraph: get(&row, "sentence_no_in_paragraph"),
             sentence_no_in_document: get(&row, "sentence_no_in_document"),
@@ -161,10 +158,10 @@ mod tests {
         fs::write(
             &path,
             concat!(
-                "paragraph_id,document_id,municipality_name,ordinance_or_rule,doc_type,sentence_count,",
+                "paragraph_id,document_id,category1,category2,sentence_count,",
                 "paragraph_text,paragraph_text_tagged,matched_condition_ids_text,matched_categories_text,",
                 "match_group_count,annotated_token_count\n",
-                "1,2,札幌市,条例,,3,本文,<hit>本文</hit>,cond-1,抑制区域,1,2\n"
+                "1,2,札幌市,条例,3,本文,<hit>本文</hit>,cond-1,抑制区域,1,2\n"
             ),
         )
         .unwrap();
@@ -186,10 +183,10 @@ mod tests {
         fs::write(
             &path,
             concat!(
-                "sentence_id,paragraph_id,document_id,municipality_name,ordinance_or_rule,doc_type,",
+                "sentence_id,paragraph_id,document_id,category1,category2,",
                 "sentence_no_in_paragraph,sentence_no_in_document,sentence_text,sentence_text_tagged,",
                 "matched_condition_ids_text,matched_categories_text,match_group_ids_text,match_group_count,annotated_token_count\n",
-                "11,1,2,札幌市,条例,,2,5,文本文,<hit>文</hit>本文,cond-1,抑制区域,group-1,1,2\n"
+                "11,1,2,札幌市,条例,2,5,文本文,<hit>文</hit>本文,cond-1,抑制区域,group-1,1,2\n"
             ),
         )
         .unwrap();
@@ -247,10 +244,10 @@ mod tests {
             "{}{}",
             '\u{feff}',
             concat!(
-                "paragraph_id,document_id,municipality_name,ordinance_or_rule,doc_type,sentence_count,",
+                "paragraph_id,document_id,category1,category2,sentence_count,",
                 "paragraph_text,paragraph_text_tagged,matched_condition_ids_text,matched_categories_text,",
                 "match_group_count,annotated_token_count\n",
-                "1,2,市,条例,,3,本文,,cond-1,cat,1,0\n"
+                "1,2,市,条例,3,本文,,cond-1,cat,1,0\n"
             )
         );
         fs::write(&path, content).unwrap();

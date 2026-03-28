@@ -482,9 +482,8 @@ def _(escape, mo, reconstructed_paragraphs_df):
     preview_rows = reconstructed_paragraphs_df.head(preview_limit).iter_rows(named=True)
     preview_sections: list[str] = []
     for preview_row in preview_rows:
-        municipality_name = escape(str(preview_row["municipality_name"] or ""))
-        ordinance_or_rule = escape(str(preview_row["ordinance_or_rule"] or ""))
-        doc_type = escape(str(preview_row["doc_type"] or ""))
+        category1 = escape(str(preview_row.get("category1", "") or ""))
+        category2 = escape(str(preview_row.get("category2", "") or ""))
         paragraph_id = int(preview_row["paragraph_id"])
         matched_categories_text = escape(str(preview_row["matched_categories_text"] or ""))
         matched_condition_ids_text = escape(str(preview_row["matched_condition_ids_text"] or ""))
@@ -493,9 +492,8 @@ def _(escape, mo, reconstructed_paragraphs_df):
             f"""
             <section class="co-preview-card">
               <div class="co-preview-meta">
-                <strong>{municipality_name}</strong>
-                <span>{ordinance_or_rule}</span>
-                <span>{doc_type}</span>
+                <strong>{category1}</strong>
+                <span>{category2}</span>
                 <span>paragraph_id={paragraph_id}</span>
               </div>
               <div class="co-preview-tags">

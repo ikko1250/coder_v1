@@ -59,6 +59,12 @@ cargo build --workspace
 uv sync
 ```
 
+analysis DB 生成スクリプトで Sudachi によるトークナイズも行う場合:
+
+```bash
+uv sync --extra analysis-db
+```
+
 `venv` を使う場合:
 
 ```bash
@@ -74,6 +80,8 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install polars
 ```
+
+analysis DB 生成だけを試す場合は `--skip-tokenize` で Sudachi 依存なしでも実行できます。
 
 ## 起動方法
 
@@ -126,6 +134,21 @@ Tauri パイロットの最小フロント起動:
 ```bash
 cargo run -p csv_viewer_tauri_host
 ```
+
+analysis DB 生成:
+
+```bash
+python3 docs/build_ordinance_analysis_db.py \
+  --input-dir path/to/texts \
+  --analysis-db data/ordinance_analysis.db \
+  --skip-tokenize
+```
+
+入力ファイル名は `<category1>_<category2>.txt` または `<category1>_<category2>.md` の形式が必須です。  
+1 件でも規約違反があると処理は中止され、`<analysis-db>.report.json` にレポートを出力します。
+
+分析結果の CSV / GUI レコードは `category1` / `category2` を canonical metadata として扱います。  
+Rust 側 reader も `category1` / `category2` を前提とします。
 
 ## ディレクトリ概要
 

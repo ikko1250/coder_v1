@@ -7,3 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "polars>=1.38.1",
 ]
+
+[project.optional-dependencies]
+analysis-db = [
+    "sudachipy>=0.6,<1.0",
+    "sudachidict-core>=20240109",
+]

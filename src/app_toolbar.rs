@@ -44,9 +44,12 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
         });
 
         ui.horizontal_wrapped(|ui| {
-            let can_start = app.analysis_runtime_state.can_start();
-            let can_export = app.analysis_runtime_state.can_export();
-            let settings_enabled = app.analysis_runtime_state.current_job.is_none();
+            let can_start = app.analysis_runtime_state.runtime.is_some() && !app.is_any_job_running();
+            let can_export = app.analysis_runtime_state.runtime.is_some()
+                && !app.is_any_job_running()
+                && app.analysis_runtime_state.last_export_context.is_some();
+            let can_build = app.builder_runtime_state.runtime.is_some() && !app.is_any_job_running();
+            let settings_enabled = !app.is_any_job_running();
             let python_label = app
                 .analysis_runtime_state
                 .runtime
@@ -64,11 +67,18 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|_| "-".to_string());
             let db_label = app.db_viewer_state.db_path.display().to_string();
+            let builder_python_label = app
+                .builder_runtime_state
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.python_label.clone())
+                .unwrap_or_else(|| "-".to_string());
+            let builder_status_text = app.builder_runtime_state.status_text();
 
             if matches!(
                 app.analysis_runtime_state.status,
                 AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. }
-            ) {
+            ) || app.builder_runtime_state.current_job.is_some() {
                 ui.add(egui::Spinner::new());
             }
 
@@ -120,6 +130,36 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
                 app.analysis_request_state.settings_window_open = true;
             }
 
+            ui.separator();
+
+            if ui
+                .add_enabled(can_build, egui::Button::new("DB生成"))
+                .clicked()
+            {
+                if let Err(error) = app.start_build_job() {
+                    app.error_message = Some(error);
+                }
+            }
+
+            if ui
+                .add_enabled(settings_enabled, egui::Button::new("DB生成設定"))
+                .clicked()
+            {
+                app.builder_request_state.settings_window_open = true;
+            }
+
+            if ui
+                .add_enabled(
+                    settings_enabled && app.builder_runtime_state.pending_switch_db_path.is_some(),
+                    egui::Button::new("生成DBを現在DBに設定"),
+                )
+                .clicked()
+            {
+                if let Err(error) = app.apply_built_db_as_current() {
+                    app.error_message = Some(error);
+                }
+            }
+
             if ui
                 .add_enabled(settings_enabled, egui::Button::new("条件編集"))
                 .clicked()
@@ -133,6 +173,7 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
             ui.label(format!("条件: {filter_config_label}"));
             ui.label(format!("Annotation: {annotation_label}"));
             ui.label(format!("Python: {python_label}"));
+            ui.label(format!("Builder Python: {builder_python_label}"));
             if can_export {
                 ui.label("保存対象は直近分析結果の全件です");
             }
@@ -144,6 +185,7 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
             let status_text = app.analysis_runtime_state.status_text();
             let status_color = analysis_status_color(ui, &app.analysis_runtime_state.status);
             ui.label(RichText::new(status_text).color(status_color));
+            ui.label(builder_status_text);
         });
     });
 }

@@ -24,9 +24,8 @@ struct FilterColumnSpec {
 
 const FILTER_COLUMN_ORDER: &[FilterColumn] = &[
     FilterColumn::MatchedCategories,
-    FilterColumn::MunicipalityName,
-    FilterColumn::OrdinanceOrRule,
-    FilterColumn::DocType,
+    FilterColumn::Category1,
+    FilterColumn::Category2,
     FilterColumn::ParagraphId,
     FilterColumn::DocumentId,
     FilterColumn::SentenceCount,
@@ -44,21 +43,15 @@ const FILTER_COLUMN_SPECS: &[FilterColumnSpec] = &[
         sort_kind: FilterSortKind::Text,
     },
     FilterColumnSpec {
-        column: FilterColumn::MunicipalityName,
-        label: "自治体",
-        value_kind: FilterValueKind::Single(record_municipality_name_value),
+        column: FilterColumn::Category1,
+        label: "category1",
+        value_kind: FilterValueKind::Single(record_category1_value),
         sort_kind: FilterSortKind::Text,
     },
     FilterColumnSpec {
-        column: FilterColumn::OrdinanceOrRule,
-        label: "条例/規則",
-        value_kind: FilterValueKind::Single(record_ordinance_or_rule_value),
-        sort_kind: FilterSortKind::Text,
-    },
-    FilterColumnSpec {
-        column: FilterColumn::DocType,
-        label: "doc_type",
-        value_kind: FilterValueKind::Single(record_doc_type_value),
+        column: FilterColumn::Category2,
+        label: "category2",
+        value_kind: FilterValueKind::Single(record_category2_value),
         sort_kind: FilterSortKind::Text,
     },
     FilterColumnSpec {
@@ -197,16 +190,12 @@ fn record_document_id_value(record: &AnalysisRecord) -> String {
     normalize_single_filter_value(&record.document_id)
 }
 
-fn record_municipality_name_value(record: &AnalysisRecord) -> String {
-    normalize_single_filter_value(&record.municipality_name)
+fn record_category1_value(record: &AnalysisRecord) -> String {
+    normalize_single_filter_value(&record.category1)
 }
 
-fn record_ordinance_or_rule_value(record: &AnalysisRecord) -> String {
-    normalize_single_filter_value(&record.ordinance_or_rule)
-}
-
-fn record_doc_type_value(record: &AnalysisRecord) -> String {
-    normalize_single_filter_value(&record.doc_type)
+fn record_category2_value(record: &AnalysisRecord) -> String {
+    normalize_single_filter_value(&record.category2)
 }
 
 fn record_sentence_count_value(record: &AnalysisRecord) -> String {
@@ -294,9 +283,8 @@ mod tests {
             paragraph_id: String::new(),
             sentence_id: String::new(),
             document_id: String::new(),
-            municipality_name: String::new(),
-            ordinance_or_rule: String::new(),
-            doc_type: String::new(),
+            category1: String::new(),
+            category2: String::new(),
             sentence_count: String::new(),
             sentence_no_in_paragraph: String::new(),
             sentence_no_in_document: String::new(),
@@ -338,18 +326,18 @@ mod tests {
     fn filter_column_matches_empty_selection_is_always_true() {
         let record = empty_paragraph_record(1);
         let empty: BTreeSet<String> = BTreeSet::new();
-        assert!(FilterColumn::MunicipalityName.matches(&record, &empty));
+        assert!(FilterColumn::Category1.matches(&record, &empty));
     }
 
     #[test]
-    fn filter_column_municipality_matches_selected_value() {
+    fn filter_column_category1_matches_selected_value() {
         let mut a = empty_paragraph_record(1);
-        a.municipality_name = "札幌市".to_string();
+        a.category1 = "札幌市".to_string();
         let mut b = empty_paragraph_record(2);
-        b.municipality_name = "旭川市".to_string();
+        b.category1 = "旭川市".to_string();
         let selected: BTreeSet<String> = ["札幌市".to_string()].into_iter().collect();
-        assert!(FilterColumn::MunicipalityName.matches(&a, &selected));
-        assert!(!FilterColumn::MunicipalityName.matches(&b, &selected));
+        assert!(FilterColumn::Category1.matches(&a, &selected));
+        assert!(!FilterColumn::Category1.matches(&b, &selected));
     }
 
     #[test]
@@ -385,17 +373,17 @@ mod tests {
     }
 
     #[test]
-    fn build_filter_options_counts_distinct_municipalities() {
+    fn build_filter_options_counts_distinct_category1_values() {
         let mut a = empty_paragraph_record(1);
-        a.municipality_name = "札幌市".to_string();
+        a.category1 = "札幌市".to_string();
         let mut b = empty_paragraph_record(2);
-        b.municipality_name = "札幌市".to_string();
+        b.category1 = "札幌市".to_string();
         let mut c = empty_paragraph_record(3);
-        c.municipality_name = "旭川市".to_string();
+        c.category1 = "旭川市".to_string();
         let opts = build_filter_options(&[a, b, c]);
-        let muni = opts.get(&FilterColumn::MunicipalityName).unwrap();
-        assert_eq!(muni.len(), 2);
-        let total: usize = muni.iter().map(|o| o.count).sum();
+        let category1 = opts.get(&FilterColumn::Category1).unwrap();
+        assert_eq!(category1.len(), 2);
+        let total: usize = category1.iter().map(|o| o.count).sum();
         assert_eq!(total, 3);
     }
 

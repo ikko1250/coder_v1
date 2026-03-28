@@ -1,12 +1,14 @@
 //! Python 分析・エクスポート・警告ウィンドウ・終了ガード（未保存）。親モジュール `app` の子。
 
 use super::{
-    AnalysisExportContext, AnalysisJobStatus, AnalysisRuntimeState, App, RunningAnalysisJob,
+    AnalysisExportContext, AnalysisJobStatus, AnalysisRuntimeState, App, BuilderJobStatus,
+    RunningAnalysisJob, RunningBuildJob,
 };
 use crate::analysis_runner::{
-    build_runtime_config, cleanup_job_directories, resolve_filter_config_path, AnalysisExportRequest,
-    AnalysisExportSuccess, AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess,
-    AnalysisMeta, AnalysisRuntimeConfig, AnalysisWarningMessage,
+    build_runtime_config, cleanup_job_directories, resolve_filter_config_path,
+    AnalysisDbBuildRequest, AnalysisDbBuildSuccess, AnalysisExportRequest, AnalysisExportSuccess,
+    AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisMeta,
+    AnalysisRuntimeConfig, AnalysisWarningMessage,
 };
 use crate::analysis_session_cache::{
     build_session_cache_key, AnalysisResultSnapshot, AnalysisSessionCacheKey,
@@ -76,8 +78,8 @@ pub(super) fn start_analysis_job_with_mode(
     app: &mut App,
     mode: AnalysisStartMode,
 ) -> Result<(), String> {
-    if app.analysis_runtime_state.current_job.is_some() {
-        return Err("分析ジョブは既に実行中です".to_string());
+    if app.is_any_job_running() {
+        return Err("別のジョブが既に実行中です".to_string());
     }
 
     let runtime = app
@@ -199,8 +201,8 @@ fn apply_session_cache_hit(app: &mut App, snapshot: &AnalysisResultSnapshot) -> 
 }
 
 pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Result<(), String> {
-    if app.analysis_runtime_state.current_job.is_some() {
-        return Err("分析ジョブは既に実行中です".to_string());
+    if app.is_any_job_running() {
+        return Err("別のジョブが既に実行中です".to_string());
     }
 
     let runtime = app
@@ -231,9 +233,82 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
     Ok(())
 }
 
+fn parse_builder_limit(limit_input: &str) -> Result<Option<usize>, String> {
+    let trimmed = limit_input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|_| format!("limit は正の整数で指定してください: {trimmed}"))
+}
+
+pub(super) fn start_build_job(app: &mut App) -> Result<(), String> {
+    if app.is_any_job_running() {
+        return Err("別のジョブが既に実行中です".to_string());
+    }
+    app.refresh_builder_runtime();
+
+    let input_dir = app
+        .builder_request_state
+        .input_dir_path
+        .clone()
+        .ok_or_else(|| "入力フォルダーを指定してください".to_string())?;
+    if !input_dir.is_dir() {
+        return Err(format!(
+            "入力フォルダーが見つからないか、ディレクトリではありません: {}",
+            input_dir.display()
+        ));
+    }
+    if app.builder_request_state.analysis_db_path.as_os_str().is_empty() {
+        return Err("出力 DB パスを指定してください".to_string());
+    }
+    if app.builder_request_state.purge && app.builder_request_state.fresh_db {
+        return Err("--purge と --fresh-db は同時指定できません".to_string());
+    }
+    let limit = parse_builder_limit(&app.builder_request_state.limit_input)?;
+
+    let runtime = app
+        .builder_runtime_state
+        .runtime
+        .clone()
+        .ok_or_else(|| "builder 用 Python 実行環境を解決できません".to_string())?;
+    let report_path = app.builder_request_state.resolved_report_path();
+
+    let (job_id, receiver, control) =
+        app.analysis_process_host.spawn_build_job(AnalysisDbBuildRequest {
+            runtime,
+            input_dir,
+            analysis_db_path: app.builder_request_state.analysis_db_path.clone(),
+            report_path: report_path.clone(),
+            skip_tokenize: app.builder_request_state.skip_tokenize,
+            sudachi_dict: app.builder_request_state.sudachi_dict.as_str().to_string(),
+            split_mode: app.builder_request_state.split_mode.as_str().to_string(),
+            split_inside_parentheses: app.builder_request_state.split_inside_parentheses,
+            merge_table_lines: app.builder_request_state.merge_table_lines,
+            purge: app.builder_request_state.purge,
+            fresh_db: app.builder_request_state.fresh_db,
+            limit,
+            note: app.builder_request_state.note_input.trim().to_string(),
+        })?;
+
+    app.builder_runtime_state.pending_switch_db_path = None;
+    app.builder_runtime_state.current_job = Some(RunningBuildJob {
+        receiver,
+        control,
+        started_at: std::time::Instant::now(),
+    });
+    app.builder_runtime_state.status = BuilderJobStatus::Running {
+        job_id: job_id.clone(),
+    };
+    app.logger.info(&format!("builder job started: {job_id}"));
+    Ok(())
+}
+
 pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
     let Some(running_job) = app.analysis_runtime_state.current_job.as_ref() else {
-        return AnalysisJobPollOutput::default();
+        return poll_builder_job(app);
     };
 
     match running_job.receiver.try_recv() {
@@ -341,6 +416,18 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
             needs_repaint: false,
             repaint_after: Some(Duration::from_millis(100)),
         },
+        Ok(AnalysisJobEvent::BuildCompleted(_)) => {
+            app.analysis_runtime_state.current_job = None;
+            app.core.clear_expected_job_id();
+            app.analysis_runtime_state.status = AnalysisJobStatus::Failed {
+                summary: "想定外の builder 完了イベントを受信しました".to_string(),
+            };
+            AnalysisJobPollOutput {
+                core_event: None,
+                needs_repaint: true,
+                repaint_after: None,
+            }
+        }
         Err(TryRecvError::Disconnected) => {
             app.analysis_runtime_state.current_job = None;
             app.core.clear_expected_job_id();
@@ -349,6 +436,60 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
             };
             app.logger
                 .error("analysis job channel disconnected while waiting for completion");
+            AnalysisJobPollOutput {
+                core_event: None,
+                needs_repaint: true,
+                repaint_after: None,
+            }
+        }
+    }
+}
+
+fn poll_builder_job(app: &mut App) -> AnalysisJobPollOutput {
+    let Some(running_job) = app.builder_runtime_state.current_job.as_ref() else {
+        return AnalysisJobPollOutput::default();
+    };
+
+    match running_job.receiver.try_recv() {
+        Ok(AnalysisJobEvent::BuildCompleted(result)) => {
+            app.builder_runtime_state.current_job = None;
+            match result {
+                Ok(success) => {
+                    handle_build_success(app, success);
+                }
+                Err(failure) => {
+                    handle_build_failure(app, failure);
+                }
+            }
+            AnalysisJobPollOutput {
+                core_event: None,
+                needs_repaint: true,
+                repaint_after: None,
+            }
+        }
+        Ok(_) => {
+            app.builder_runtime_state.current_job = None;
+            app.builder_runtime_state.status = BuilderJobStatus::Failed {
+                summary: "想定外のイベントを受信しました".to_string(),
+            };
+            AnalysisJobPollOutput {
+                core_event: None,
+                needs_repaint: true,
+                repaint_after: None,
+            }
+        }
+        Err(TryRecvError::Empty) => AnalysisJobPollOutput {
+            core_event: None,
+            needs_repaint: false,
+            repaint_after: Some(Duration::from_millis(100)),
+        },
+        Err(TryRecvError::Disconnected) => {
+            app.builder_runtime_state.current_job = None;
+            app.builder_runtime_state.status = BuilderJobStatus::Failed {
+                summary: "DB 生成ジョブの完了通知を受け取れませんでした".to_string(),
+            };
+            app.logger
+                .error("builder job channel disconnected while waiting for completion");
             AnalysisJobPollOutput {
                 core_event: None,
                 needs_repaint: true,
@@ -390,6 +531,32 @@ fn handle_export_success(app: &mut App, success: AnalysisExportSuccess) {
         "CSV を保存しました。\n\n保存先:\n{}",
         success.output_csv_path.display()
     ));
+}
+
+fn handle_build_success(app: &mut App, success: AnalysisDbBuildSuccess) {
+    let summary = format!("DB 生成完了: {}", success.analysis_db_path.display());
+    app.builder_runtime_state.pending_switch_db_path = Some(success.analysis_db_path.clone());
+    app.builder_runtime_state.status = BuilderJobStatus::Succeeded { summary };
+    app.logger.info("builder job succeeded");
+    app.error_message = Some(format!(
+        "DB 生成が完了しました。\n\nDB:\n{}\n\nreport:\n{}",
+        success.analysis_db_path.display(),
+        success.report_path.display()
+    ));
+}
+
+fn handle_build_failure(app: &mut App, failure: AnalysisJobFailure) {
+    let summary = failure.message.clone();
+    app.builder_runtime_state.status = BuilderJobStatus::Failed { summary };
+    app.builder_runtime_state.pending_switch_db_path = None;
+    app.logger.error("builder job failed");
+
+    let mut error_message = failure.message;
+    if !failure.stderr.is_empty() {
+        error_message.push_str("\n\nstderr:\n");
+        error_message.push_str(&failure.stderr);
+    }
+    app.error_message = Some(error_message);
 }
 
 fn handle_analysis_failure(app: &mut App, failure: AnalysisJobFailure) {
@@ -549,13 +716,16 @@ pub(super) fn draw_warning_details_window(app: &mut App, ctx: &egui::Context) {
 }
 
 pub(super) fn guard_root_close_with_dirty_editor(app: &mut App, ctx: &egui::Context) {
+    let close_requested = ctx.input(|input| input.viewport().close_requested());
     let input = ViewerCoreCloseInput {
         condition_editor_dirty: app.condition_editor_state.is_dirty,
     };
     if app.core.can_close(&input).is_ok() {
+        if close_requested && app.builder_runtime_state.current_job.is_some() {
+            app.cancel_running_builder_job();
+        }
         return;
     }
-    let close_requested = ctx.input(|input| input.viewport().close_requested());
     if !close_requested {
         return;
     }

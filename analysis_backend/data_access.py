@@ -54,6 +54,18 @@ def _read_table_columns(connection: sqlite3.Connection, table_name: str) -> set[
     }
 
 
+def _document_category1_select(document_columns: set[str]) -> str:
+    if "category1" not in document_columns:
+        raise KeyError("analysis_documents.category1 is required")
+    return "COALESCE(d.category1, '')"
+
+
+def _document_category2_select(document_columns: set[str]) -> str:
+    if "category2" not in document_columns:
+        raise KeyError("analysis_documents.category2 is required")
+    return "COALESCE(d.category2, '')"
+
+
 def _read_database_df_result(db_path: Path, query: str, *, query_name: str) -> DataAccessResult:
     try:
         with sqlite3.connect(str(db_path)) as conn:
@@ -61,7 +73,7 @@ def _read_database_df_result(db_path: Path, query: str, *, query_name: str) -> D
                 data_frame=pl.read_database(query=query, connection=conn),
                 issues=[],
             )
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, KeyError) as exc:
         return DataAccessResult(
             data_frame=None,
             issues=[
@@ -150,7 +162,7 @@ def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None)
             data_frame=typed_df.select(list(ANALYSIS_SENTENCES_READ_SCHEMA.keys())),
             issues=[],
         )
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, KeyError) as exc:
         return DataAccessResult(
             data_frame=None,
             issues=[
@@ -184,10 +196,13 @@ def read_paragraph_document_metadata_result(
     try:
         with sqlite3.connect(str(db_path)) as conn:
             paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
+            document_columns = _read_table_columns(conn, "analysis_documents")
             if "is_table_paragraph" in paragraph_columns:
                 table_flag_select = "COALESCE(CAST(p.is_table_paragraph AS INTEGER), 0) AS is_table_paragraph"
             else:
                 table_flag_select = "0 AS is_table_paragraph"
+            category1_select = _document_category1_select(document_columns)
+            category2_select = _document_category2_select(document_columns)
             for start_idx in range(0, len(paragraph_ids), PARAGRAPH_METADATA_CHUNK_SIZE):
                 chunk_ids = paragraph_ids[start_idx:start_idx + PARAGRAPH_METADATA_CHUNK_SIZE]
                 placeholders = ",".join("?" for _ in chunk_ids)
@@ -195,8 +210,8 @@ def read_paragraph_document_metadata_result(
                     SELECT
                         p.paragraph_id,
                         p.document_id,
-                        d.municipality_name,
-                        d.doc_type,
+                        {category1_select} AS category1,
+                        {category2_select} AS category2,
                         {table_flag_select}
                     FROM analysis_paragraphs AS p
                     JOIN analysis_documents AS d
@@ -204,7 +219,7 @@ def read_paragraph_document_metadata_result(
                     WHERE p.paragraph_id IN ({placeholders})
                 """
                 rows.extend(conn.execute(query, tuple(chunk_ids)).fetchall())
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, KeyError) as exc:
         return DataAccessResult(
             data_frame=None,
             issues=[
@@ -229,6 +244,9 @@ def read_paragraph_document_metadata_result(
             .with_columns([
                 pl.col("paragraph_id").cast(pl.Int64),
                 pl.col("document_id").cast(pl.Int64),
+                pl.col("category1").cast(pl.String).fill_null(""),
+                pl.col("category2").cast(pl.String).fill_null(""),
+                pl.col("is_table_paragraph").cast(pl.Int64),
             ])
             .sort("paragraph_id")
         ),
@@ -252,11 +270,14 @@ def read_sentence_document_metadata_result(
             issues=[],
         )
 
-    rows: list[tuple[int, int, int, str | None, str | None, int | None, int | None, str | None, int]] = []
+    rows: list[
+        tuple[int, int, int, str | None, str | None, int | None, int | None, str | None, int]
+    ] = []
     try:
         with sqlite3.connect(str(db_path)) as conn:
             sentence_columns = _read_table_columns(conn, "analysis_sentences")
             paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
+            document_columns = _read_table_columns(conn, "analysis_documents")
             sentence_no_in_document_select = (
                 "COALESCE(CAST(s.sentence_no_in_document AS INTEGER), 0) AS sentence_no_in_document"
                 if "sentence_no_in_document" in sentence_columns
@@ -272,6 +293,8 @@ def read_sentence_document_metadata_result(
                 if "is_table_paragraph" in paragraph_columns
                 else "0 AS is_table_paragraph"
             )
+            category1_select = _document_category1_select(document_columns)
+            category2_select = _document_category2_select(document_columns)
             for start_idx in range(0, len(sentence_ids), PARAGRAPH_METADATA_CHUNK_SIZE):
                 chunk_ids = sentence_ids[start_idx:start_idx + PARAGRAPH_METADATA_CHUNK_SIZE]
                 placeholders = ",".join("?" for _ in chunk_ids)
@@ -280,8 +303,8 @@ def read_sentence_document_metadata_result(
                         s.sentence_id,
                         s.paragraph_id,
                         p.document_id,
-                        d.municipality_name,
-                        d.doc_type,
+                        {category1_select} AS category1,
+                        {category2_select} AS category2,
                         COALESCE(CAST(s.sentence_no_in_paragraph AS INTEGER), 0) AS sentence_no_in_paragraph,
                         {sentence_no_in_document_select},
                         {sentence_text_select},
@@ -294,7 +317,7 @@ def read_sentence_document_metadata_result(
                     WHERE s.sentence_id IN ({placeholders})
                 """
                 rows.extend(conn.execute(query, tuple(chunk_ids)).fetchall())
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, KeyError) as exc:
         return DataAccessResult(
             data_frame=None,
             issues=[
@@ -320,6 +343,8 @@ def read_sentence_document_metadata_result(
                 pl.col("sentence_id").cast(pl.Int64),
                 pl.col("paragraph_id").cast(pl.Int64),
                 pl.col("document_id").cast(pl.Int64),
+                pl.col("category1").cast(pl.String).fill_null(""),
+                pl.col("category2").cast(pl.String).fill_null(""),
                 pl.col("sentence_no_in_paragraph").cast(pl.Int64),
                 pl.col("sentence_no_in_document").cast(pl.Int64),
                 pl.col("sentence_text").cast(pl.String).fill_null(""),

@@ -205,9 +205,8 @@ mod tests {
             paragraph_id: String::new(),
             sentence_id: String::new(),
             document_id: String::new(),
-            municipality_name: String::new(),
-            ordinance_or_rule: String::new(),
-            doc_type: String::new(),
+            category1: String::new(),
+            category2: String::new(),
             sentence_count: String::new(),
             sentence_no_in_paragraph: String::new(),
             sentence_no_in_document: String::new(),
@@ -311,7 +310,7 @@ mod tests {
             value: "a".into(),
             selected: true,
         };
-        let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearColumn(FilterColumn::MunicipalityName);
+        let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearColumn(FilterColumn::Category1);
         let _: ViewerCoreMessage = ViewerCoreMessage::FilterClearAll;
     }
 

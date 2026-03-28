@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -14,10 +15,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const DEFAULT_FILTER_CONFIG_RELATIVE_PATH: &str = "asset/cooccurrence-conditions.json";
 const DEFAULT_ANNOTATION_CSV_RELATIVE_PATH: &str = "asset/manual-annotations.csv";
 const DEFAULT_SCRIPT_RELATIVE_PATH: &str = "run-analysis.py";
+const DEFAULT_BUILDER_SCRIPT_RELATIVE_PATH: &str = "docs/build_ordinance_analysis_db.py";
 const DEFAULT_JOBS_RELATIVE_PATH: &str = "runtime/jobs";
 const JOB_HISTORY_KEEP_COUNT: usize = 5;
 const PYTHON_PATH_ENV_KEY: &str = "CSV_VIEWER_PYTHON";
 const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(10000);
+const BUILD_REPORT_PATH_SUFFIX: &str = ".report.json";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct AnalysisRuntimeOverrides {
@@ -39,6 +42,15 @@ pub(crate) struct AnalysisRuntimeConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BuilderRuntimeConfig {
+    pub(crate) python_command: OsString,
+    pub(crate) python_args: Vec<OsString>,
+    pub(crate) python_label: String,
+    pub(crate) project_root: PathBuf,
+    pub(crate) builder_script_path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnalysisJobRequest {
     pub(crate) db_path: PathBuf,
     pub(crate) runtime: AnalysisRuntimeConfig,
@@ -55,6 +67,23 @@ pub(crate) struct AnalysisExportRequest {
     pub(crate) runtime: AnalysisRuntimeConfig,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnalysisDbBuildRequest {
+    pub(crate) runtime: BuilderRuntimeConfig,
+    pub(crate) input_dir: PathBuf,
+    pub(crate) analysis_db_path: PathBuf,
+    pub(crate) report_path: PathBuf,
+    pub(crate) skip_tokenize: bool,
+    pub(crate) sudachi_dict: String,
+    pub(crate) split_mode: String,
+    pub(crate) split_inside_parentheses: bool,
+    pub(crate) merge_table_lines: bool,
+    pub(crate) purge: bool,
+    pub(crate) fresh_db: bool,
+    pub(crate) limit: Option<usize>,
+    pub(crate) note: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnalysisJobSuccess {
     pub(crate) meta: AnalysisMeta,
@@ -68,6 +97,13 @@ pub(crate) struct AnalysisExportSuccess {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AnalysisDbBuildSuccess {
+    pub(crate) analysis_db_path: PathBuf,
+    pub(crate) report_path: PathBuf,
+    pub(crate) stdout: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnalysisJobFailure {
     pub(crate) meta: Option<AnalysisMeta>,
     pub(crate) stderr: String,
@@ -78,6 +114,23 @@ pub(crate) struct AnalysisJobFailure {
 pub(crate) enum AnalysisJobEvent {
     AnalysisCompleted(Result<AnalysisJobSuccess, AnalysisJobFailure>),
     ExportCompleted(Result<AnalysisExportSuccess, AnalysisJobFailure>),
+    BuildCompleted(Result<AnalysisDbBuildSuccess, AnalysisJobFailure>),
+}
+
+#[derive(Clone)]
+pub(crate) struct BuildJobControl {
+    child: Arc<Mutex<Child>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl BuildJobControl {
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -195,11 +248,9 @@ struct AnalysisJsonRecord {
     #[serde(default)]
     document_id: String,
     #[serde(default)]
-    municipality_name: String,
+    category1: String,
     #[serde(default)]
-    ordinance_or_rule: String,
-    #[serde(default)]
-    doc_type: String,
+    category2: String,
     #[serde(default)]
     sentence_count: String,
     #[serde(default)]
@@ -250,9 +301,8 @@ impl AnalysisJsonRecord {
             paragraph_id: self.paragraph_id,
             sentence_id: self.sentence_id,
             document_id: self.document_id,
-            municipality_name: self.municipality_name,
-            ordinance_or_rule: self.ordinance_or_rule,
-            doc_type: self.doc_type,
+            category1: self.category1,
+            category2: self.category2,
             sentence_count: self.sentence_count,
             sentence_no_in_paragraph: self.sentence_no_in_paragraph,
             sentence_no_in_document: self.sentence_no_in_document,
@@ -391,6 +441,32 @@ pub(crate) fn build_runtime_config(
     })
 }
 
+pub(crate) fn build_builder_runtime_config(
+    overrides: &AnalysisRuntimeOverrides,
+) -> Result<BuilderRuntimeConfig, String> {
+    let builder_script_path = resolve_project_file(DEFAULT_BUILDER_SCRIPT_RELATIVE_PATH)
+        .ok_or_else(|| {
+            format!(
+                "builder スクリプトが見つかりません: {DEFAULT_BUILDER_SCRIPT_RELATIVE_PATH}"
+            )
+        })?;
+    let project_root = builder_script_path
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let (python_command, python_args, python_label) =
+        resolve_python_command(&project_root, overrides)?;
+
+    Ok(BuilderRuntimeConfig {
+        python_command,
+        python_args,
+        python_label,
+        project_root,
+        builder_script_path,
+    })
+}
+
 pub(crate) fn cleanup_job_directories(jobs_root: &Path) -> Result<(), String> {
     if !jobs_root.exists() {
         return Ok(());
@@ -459,6 +535,52 @@ pub(crate) fn spawn_export_job(
     });
 
     (job_id, receiver)
+}
+
+pub(crate) fn spawn_build_job(
+    request: AnalysisDbBuildRequest,
+) -> Result<(String, Receiver<AnalysisJobEvent>, BuildJobControl), String> {
+    let mut command = build_builder_command(&request)?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("builder プロセスの起動に失敗しました: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "builder stdout を取得できませんでした".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "builder stderr を取得できませんでした".to_string())?;
+
+    let (sender, receiver) = mpsc::channel();
+    let job_id = build_job_id();
+    let child = Arc::new(Mutex::new(child));
+    let stdout_buffer = Arc::new(Mutex::new(String::new()));
+    let stderr_buffer = Arc::new(Mutex::new(String::new()));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    spawn_output_collector(stdout, stdout_buffer.clone());
+    spawn_stderr_collector(stderr, stderr_buffer.clone());
+
+    let control = BuildJobControl {
+        child: child.clone(),
+        cancelled: cancelled.clone(),
+    };
+
+    let request_job_id = job_id.clone();
+    thread::spawn(move || {
+        let event = run_build_job(
+            request_job_id,
+            request,
+            child,
+            stdout_buffer,
+            stderr_buffer,
+            cancelled,
+        );
+        let _ = sender.send(event);
+    });
+
+    Ok((job_id, receiver, control))
 }
 
 fn run_analysis_job(job_id: String, request: AnalysisJobRequest) -> AnalysisJobEvent {
@@ -669,6 +791,40 @@ fn spawn_stderr_collector(stderr: ChildStderr, stderr_buffer: Arc<Mutex<String>>
             }
         }
     });
+}
+
+fn spawn_output_collector(stdout: ChildStdout, stdout_buffer: Arc<Mutex<String>>) {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let text = String::from_utf8_lossy(&chunk[..bytes_read]);
+                    if let Ok(mut buffer) = stdout_buffer.lock() {
+                        buffer.push_str(&text);
+                        if buffer.len() > 32_768 {
+                            let remove_len = buffer.len() - 32_768;
+                            buffer.drain(..remove_len);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn buffer_snapshot(buffer: &Arc<Mutex<String>>) -> String {
+    buffer
+        .lock()
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn stderr_buffer_snapshot(stderr_buffer: &Arc<Mutex<String>>) -> String {
+    buffer_snapshot(stderr_buffer)
 }
 
 fn worker_is_running(handle: &WorkerHandle) -> bool {
@@ -977,7 +1133,11 @@ mod json_response_tests {
 #[cfg(test)]
 mod tests {
     use super::json_response_tests::{read_json_response, read_meta_json};
-    use super::AnalysisWarningMessage;
+    use super::{
+        build_builder_command, build_default_builder_report_path, AnalysisDbBuildRequest,
+        AnalysisWarningMessage, BuilderRuntimeConfig,
+    };
+    use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1152,9 +1312,8 @@ mod tests {
     {
       "paragraph_id": "1",
       "document_id": "2",
-      "municipality_name": "札幌市",
-      "ordinance_or_rule": "条例",
-      "doc_type": "",
+      "category1": "札幌市",
+      "category2": "条例",
       "sentence_count": "3",
       "paragraph_text": "本文",
       "paragraph_text_tagged": "<hit>本文</hit>",
@@ -1183,7 +1342,8 @@ mod tests {
             .into_analysis_record(1, response.meta.analysis_unit);
         assert_eq!(first_record.row_no, 1);
         assert_eq!(first_record.paragraph_id, "1");
-        assert_eq!(first_record.municipality_name, "札幌市");
+        assert_eq!(first_record.category1, "札幌市");
+        assert_eq!(first_record.category2, "条例");
         assert_eq!(first_record.annotated_token_count, "2");
         assert_eq!(first_record.manual_annotation_count, "1");
     }
@@ -1220,6 +1380,63 @@ mod tests {
     }
 
     #[test]
+    fn build_default_builder_report_path_appends_report_suffix() {
+        let report_path =
+            build_default_builder_report_path(PathBuf::from("/tmp/sample.db").as_path());
+        assert_eq!(report_path, PathBuf::from("/tmp/sample.db.report.json"));
+    }
+
+    #[test]
+    fn build_builder_command_uses_explicit_report_path_and_optional_flags() {
+        let request = AnalysisDbBuildRequest {
+            runtime: BuilderRuntimeConfig {
+                python_command: OsString::from("python"),
+                python_args: vec![OsString::from("-X"), OsString::from("utf8")],
+                python_label: "python".to_string(),
+                project_root: PathBuf::from("/tmp/project"),
+                builder_script_path: PathBuf::from("/tmp/project/docs/build_ordinance_analysis_db.py"),
+            },
+            input_dir: PathBuf::from("/tmp/in"),
+            analysis_db_path: PathBuf::from("/tmp/out.db"),
+            report_path: PathBuf::from("/tmp/out.db.report.json"),
+            skip_tokenize: false,
+            sudachi_dict: "core".to_string(),
+            split_mode: "C".to_string(),
+            split_inside_parentheses: true,
+            merge_table_lines: true,
+            purge: false,
+            fresh_db: true,
+            limit: Some(25),
+            note: "note".to_string(),
+        };
+
+        let command = build_builder_command(&request).unwrap();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            command.get_program().to_string_lossy(),
+            std::borrow::Cow::Borrowed("python")
+        );
+        assert!(args.contains(&"/tmp/project/docs/build_ordinance_analysis_db.py".to_string()));
+        assert!(args.contains(&"--report-path".to_string()));
+        assert!(args.contains(&"/tmp/out.db.report.json".to_string()));
+        assert!(args.contains(&"--sudachi-dict".to_string()));
+        assert!(args.contains(&"core".to_string()));
+        assert!(args.contains(&"--split-mode".to_string()));
+        assert!(args.contains(&"C".to_string()));
+        assert!(args.contains(&"--split-inside-parentheses".to_string()));
+        assert!(args.contains(&"--merge-table-lines".to_string()));
+        assert!(args.contains(&"--fresh-db".to_string()));
+        assert!(args.contains(&"--limit".to_string()));
+        assert!(args.contains(&"25".to_string()));
+        assert!(args.contains(&"--note".to_string()));
+        assert!(args.contains(&"note".to_string()));
+    }
+
+    #[test]
     fn read_json_response_accepts_sentence_records_payload() {
         let payload = r#"{
   "meta": {
@@ -1243,9 +1460,8 @@ mod tests {
       "sentence_id": "11",
       "paragraph_id": "1",
       "document_id": "2",
-      "municipality_name": "札幌市",
-      "ordinance_or_rule": "条例",
-      "doc_type": "",
+      "category1": "札幌市",
+      "category2": "条例",
       "sentence_no_in_paragraph": "2",
       "sentence_no_in_document": "5",
       "sentence_text": "文本文",
@@ -1277,12 +1493,133 @@ mod tests {
     }
 }
 
+fn run_build_job(
+    job_id: String,
+    request: AnalysisDbBuildRequest,
+    child: Arc<Mutex<Child>>,
+    stdout_buffer: Arc<Mutex<String>>,
+    stderr_buffer: Arc<Mutex<String>>,
+    cancelled: Arc<AtomicBool>,
+) -> AnalysisJobEvent {
+    let exit_status = loop {
+        let status = match child.lock() {
+            Ok(mut child_guard) => child_guard.try_wait(),
+            Err(_) => {
+                return AnalysisJobEvent::BuildCompleted(Err(AnalysisJobFailure {
+                    meta: None,
+                    stderr: stderr_buffer_snapshot(&stderr_buffer),
+                    message: "builder プロセス状態の取得に失敗しました".to_string(),
+                }));
+            }
+        };
+        match status {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(error) => {
+                return AnalysisJobEvent::BuildCompleted(Err(AnalysisJobFailure {
+                    meta: None,
+                    stderr: stderr_buffer_snapshot(&stderr_buffer),
+                    message: format!("builder プロセス終了待機に失敗しました: {error}"),
+                }));
+            }
+        }
+    };
+
+    let stdout = buffer_snapshot(&stdout_buffer);
+    let stderr = stderr_buffer_snapshot(&stderr_buffer);
+    if cancelled.load(Ordering::SeqCst) {
+        return AnalysisJobEvent::BuildCompleted(Err(AnalysisJobFailure {
+            meta: None,
+            stderr,
+            message: "DB 生成ジョブを中止しました".to_string(),
+        }));
+    }
+
+    if exit_status.success() {
+        if !request.analysis_db_path.is_file() {
+            return AnalysisJobEvent::BuildCompleted(Err(AnalysisJobFailure {
+                meta: None,
+                stderr,
+                message: format!(
+                    "生成後の analysis DB が見つかりません: {}",
+                    request.analysis_db_path.display()
+                ),
+            }));
+        }
+        return AnalysisJobEvent::BuildCompleted(Ok(AnalysisDbBuildSuccess {
+            analysis_db_path: request.analysis_db_path,
+            report_path: request.report_path,
+            stdout,
+        }));
+    }
+
+    AnalysisJobEvent::BuildCompleted(Err(AnalysisJobFailure {
+        meta: None,
+        stderr,
+        message: format!("builder プロセスが失敗しました: {job_id}"),
+    }))
+}
+
 fn build_job_id() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     format!("job-{millis}")
+}
+
+pub(crate) fn build_default_builder_report_path(analysis_db_path: &Path) -> PathBuf {
+    let resolved_analysis_db = analysis_db_path.to_path_buf();
+    let file_name = resolved_analysis_db
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "analysis.db".to_string());
+    resolved_analysis_db.with_file_name(format!("{file_name}{BUILD_REPORT_PATH_SUFFIX}"))
+}
+
+fn build_builder_command(request: &AnalysisDbBuildRequest) -> Result<Command, String> {
+    let mut command = Command::new(&request.runtime.python_command);
+    command.current_dir(&request.runtime.project_root);
+    command.args(&request.runtime.python_args);
+    command.arg(&request.runtime.builder_script_path);
+    command.arg("--input-dir");
+    command.arg(&request.input_dir);
+    command.arg("--analysis-db");
+    command.arg(&request.analysis_db_path);
+    command.arg("--report-path");
+    command.arg(&request.report_path);
+    if request.skip_tokenize {
+        command.arg("--skip-tokenize");
+    } else {
+        command.arg("--sudachi-dict");
+        command.arg(OsString::from(request.sudachi_dict.as_str()));
+        command.arg("--split-mode");
+        command.arg(OsString::from(request.split_mode.as_str()));
+    }
+    if request.split_inside_parentheses {
+        command.arg("--split-inside-parentheses");
+    }
+    if request.merge_table_lines {
+        command.arg("--merge-table-lines");
+    }
+    if request.purge {
+        command.arg("--purge");
+    }
+    if request.fresh_db {
+        command.arg("--fresh-db");
+    }
+    if let Some(limit) = request.limit {
+        command.arg("--limit");
+        command.arg(OsString::from(limit.to_string()));
+    }
+    if !request.note.trim().is_empty() {
+        command.arg("--note");
+        command.arg(OsString::from(request.note.as_str()));
+    }
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.stdin(Stdio::null());
+    Ok(command)
 }
 
 pub(crate) fn resolve_filter_config_path(

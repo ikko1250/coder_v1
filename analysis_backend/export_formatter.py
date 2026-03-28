@@ -11,9 +11,8 @@ from .data_access import read_sentence_document_metadata_result
 GUI_RECORD_COLUMNS = [
     "paragraph_id",
     "document_id",
-    "municipality_name",
-    "ordinance_or_rule",
-    "doc_type",
+    "category1",
+    "category2",
     "sentence_count",
     "paragraph_text",
     "paragraph_text_tagged",
@@ -35,9 +34,8 @@ SENTENCE_GUI_RECORD_COLUMNS = [
     "sentence_id",
     "paragraph_id",
     "document_id",
-    "municipality_name",
-    "ordinance_or_rule",
-    "doc_type",
+    "category1",
+    "category2",
     "sentence_no_in_paragraph",
     "sentence_no_in_document",
     "sentence_text",
@@ -70,6 +68,17 @@ FORM_GROUP_EXPLANATION_EXPORT_COLUMNS = [
     "mixed_scope_warning_text",
 ]
 
+
+def _with_category_metadata(export_df: pl.DataFrame) -> pl.DataFrame:
+    work = export_df
+    if "category1" not in work.columns:
+        work = work.with_columns(pl.lit("").alias("category1"))
+    if "category2" not in work.columns:
+        work = work.with_columns(pl.lit("").alias("category2"))
+    return work.with_columns([
+        pl.col("category1").cast(pl.String).fill_null("").alias("category1"),
+        pl.col("category2").cast(pl.String).fill_null("").alias("category2"),
+    ])
 
 def _build_manual_annotation_summary_join_df(
     manual_annotation_summary_df: pl.DataFrame | None,
@@ -169,25 +178,17 @@ def enrich_reconstructed_paragraphs_result(
                 on="paragraph_id",
                 how="left",
             )
-            .with_columns(
-                [
-                    pl.when(pl.col("doc_type").fill_null("").str.contains("施行規則", literal=True))
-                    .then(pl.lit("施行規則"))
-                    .when(pl.col("doc_type").fill_null("").str.contains("条例", literal=True))
-                    .then(pl.lit("条例"))
-                    .otherwise(pl.lit("不明"))
-                    .alias("ordinance_or_rule"),
-                    pl.col("manual_annotation_count").fill_null(0).cast(pl.UInt32),
-                    pl.col("manual_annotation_pairs_text").fill_null(""),
-                    pl.col("manual_annotation_namespaces_text").fill_null(""),
-                ]
-            )
+            .with_columns([
+                pl.col("manual_annotation_count").fill_null(0).cast(pl.UInt32),
+                pl.col("manual_annotation_pairs_text").fill_null(""),
+                pl.col("manual_annotation_namespaces_text").fill_null(""),
+            ])
+            .pipe(_with_category_metadata)
             .select([
                 "paragraph_id",
                 "document_id",
-                "municipality_name",
-                "ordinance_or_rule",
-                "doc_type",
+                "category1",
+                "category2",
                 "sentence_count",
                 "paragraph_text",
                 "paragraph_text_tagged",
@@ -233,8 +234,10 @@ def build_reconstructed_paragraphs_export_df(
     reconstructed_paragraphs_df: pl.DataFrame,
 ) -> pl.DataFrame:
     return (
-        _with_manual_annotation_export_columns(
-            _with_form_group_explanation_export_columns(reconstructed_paragraphs_df)
+        _with_category_metadata(
+            _with_manual_annotation_export_columns(
+                _with_form_group_explanation_export_columns(reconstructed_paragraphs_df)
+            )
         )
         .with_columns(
             pl.col("match_group_ids")
@@ -246,9 +249,8 @@ def build_reconstructed_paragraphs_export_df(
         .select([
             "paragraph_id",
             "document_id",
-            "municipality_name",
-            "ordinance_or_rule",
-            "doc_type",
+            "category1",
+            "category2",
             "sentence_count",
             "paragraph_text",
             "paragraph_text_tagged",
@@ -275,14 +277,13 @@ def build_gui_records_df(
 ) -> pl.DataFrame:
     export_df = build_reconstructed_paragraphs_export_df(reconstructed_paragraphs_df)
     return (
-        export_df
+        _with_category_metadata(export_df)
         .select(GUI_RECORD_COLUMNS)
         .with_columns([
             pl.col("paragraph_id").cast(pl.String).fill_null(""),
             pl.col("document_id").cast(pl.String).fill_null(""),
-            pl.col("municipality_name").cast(pl.String).fill_null(""),
-            pl.col("ordinance_or_rule").cast(pl.String).fill_null(""),
-            pl.col("doc_type").cast(pl.String).fill_null(""),
+            pl.col("category1").cast(pl.String).fill_null(""),
+            pl.col("category2").cast(pl.String).fill_null(""),
             pl.col("sentence_count").cast(pl.String).fill_null(""),
             pl.col("paragraph_text").cast(pl.String).fill_null(""),
             pl.col("paragraph_text_tagged").cast(pl.String).fill_null(""),
@@ -317,15 +318,14 @@ def build_sentence_gui_records_df(
 ) -> pl.DataFrame:
     export_df = build_reconstructed_sentences_export_df(reconstructed_sentences_df)
     return (
-        export_df
+        _with_category_metadata(export_df)
         .select(SENTENCE_GUI_RECORD_COLUMNS)
         .with_columns([
             pl.col("sentence_id").cast(pl.String).fill_null(""),
             pl.col("paragraph_id").cast(pl.String).fill_null(""),
             pl.col("document_id").cast(pl.String).fill_null(""),
-            pl.col("municipality_name").cast(pl.String).fill_null(""),
-            pl.col("ordinance_or_rule").cast(pl.String).fill_null(""),
-            pl.col("doc_type").cast(pl.String).fill_null(""),
+            pl.col("category1").cast(pl.String).fill_null(""),
+            pl.col("category2").cast(pl.String).fill_null(""),
             pl.col("sentence_no_in_paragraph").cast(pl.String).fill_null(""),
             pl.col("sentence_no_in_document").cast(pl.String).fill_null(""),
             pl.col("sentence_text").cast(pl.String).fill_null(""),
@@ -382,21 +382,15 @@ def enrich_reconstructed_sentences_result(
                 suffix="_metadata",
             )
             .with_columns([
-                pl.when(pl.col("doc_type").fill_null("").str.contains("施行規則", literal=True))
-                .then(pl.lit("施行規則"))
-                .when(pl.col("doc_type").fill_null("").str.contains("条例", literal=True))
-                .then(pl.lit("条例"))
-                .otherwise(pl.lit("不明"))
-                .alias("ordinance_or_rule"),
                 pl.col("sentence_no_in_document").fill_null(0).cast(pl.Int64),
             ])
+            .pipe(_with_category_metadata)
             .select([
                 "sentence_id",
                 "paragraph_id",
                 "document_id",
-                "municipality_name",
-                "ordinance_or_rule",
-                "doc_type",
+                "category1",
+                "category2",
                 "sentence_no_in_paragraph",
                 "sentence_no_in_document",
                 "sentence_text",
@@ -424,13 +418,12 @@ def enrich_reconstructed_sentences_result(
 def build_reconstructed_sentences_export_df(
     reconstructed_sentences_df: pl.DataFrame,
 ) -> pl.DataFrame:
-    return reconstructed_sentences_df.select([
+    return _with_category_metadata(reconstructed_sentences_df).select([
         "sentence_id",
         "paragraph_id",
         "document_id",
-        "municipality_name",
-        "ordinance_or_rule",
-        "doc_type",
+        "category1",
+        "category2",
         "sentence_no_in_paragraph",
         "sentence_no_in_document",
         "sentence_text",

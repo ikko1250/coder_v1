@@ -25,16 +25,16 @@ CONDITION_HIT_SCHEMA = {
 PARAGRAPH_METADATA_SCHEMA = {
     "paragraph_id": pl.Int64,
     "document_id": pl.Int64,
-    "municipality_name": pl.String,
-    "doc_type": pl.String,
+    "category1": pl.String,
+    "category2": pl.String,
     "is_table_paragraph": pl.Int64,
 }
 SENTENCE_METADATA_SCHEMA = {
     "sentence_id": pl.Int64,
     "paragraph_id": pl.Int64,
     "document_id": pl.Int64,
-    "municipality_name": pl.String,
-    "doc_type": pl.String,
+    "category1": pl.String,
+    "category2": pl.String,
     "sentence_no_in_paragraph": pl.Int64,
     "sentence_no_in_document": pl.Int64,
     "sentence_text": pl.String,

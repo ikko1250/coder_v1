@@ -294,8 +294,8 @@ fn draw_record_summary(ui: &mut Ui, record: &AnalysisRecord) {
     ui.label(
         RichText::new(format!(
             "{} / {} / {}={}",
-            record.municipality_name,
-            record.ordinance_or_rule,
+            record.category1,
+            record.category2,
             record.analysis_unit.id_column_name(),
             record.unit_id()
         ))
@@ -309,7 +309,8 @@ fn draw_record_summary(ui: &mut Ui, record: &AnalysisRecord) {
     if !record.sentence_id.trim().is_empty() {
         ui.label(format!("sentence_id: {}", record.sentence_id));
     }
-    ui.label(format!("doc_type: {}", record.doc_type));
+    ui.label(format!("category1: {}", record.category1));
+    ui.label(format!("category2: {}", record.category2));
     ui.label(format!("sentence_count: {}", record.sentence_count));
     if !record.sentence_no_in_paragraph.trim().is_empty() {
         ui.label(format!(

@@ -4,7 +4,8 @@
 //! [`crate::viewer_core`] は子プロセス起動を行わず、ジョブ ID とチャネル受信は UI 層の責務のままである。
 
 use crate::analysis_runner::{
-    spawn_analysis_job, spawn_export_job, AnalysisExportRequest, AnalysisJobEvent, AnalysisJobRequest,
+    spawn_analysis_job, spawn_build_job, spawn_export_job, AnalysisDbBuildRequest,
+    AnalysisExportRequest, AnalysisJobEvent, AnalysisJobRequest, BuildJobControl,
 };
 use std::sync::mpsc::Receiver;
 
@@ -19,6 +20,11 @@ pub(crate) trait AnalysisProcessHost {
         &self,
         request: AnalysisExportRequest,
     ) -> (String, Receiver<AnalysisJobEvent>);
+
+    fn spawn_build_job(
+        &self,
+        request: AnalysisDbBuildRequest,
+    ) -> Result<(String, Receiver<AnalysisJobEvent>, BuildJobControl), String>;
 }
 
 /// 標準ライブラリのスレッド＋[`analysis_runner`] のワーカー起動（デスクトップ用）。
@@ -38,5 +44,12 @@ impl AnalysisProcessHost for ThreadAnalysisProcessHost {
         request: AnalysisExportRequest,
     ) -> (String, Receiver<AnalysisJobEvent>) {
         spawn_export_job(request)
+    }
+
+    fn spawn_build_job(
+        &self,
+        request: AnalysisDbBuildRequest,
+    ) -> Result<(String, Receiver<AnalysisJobEvent>, BuildJobControl), String> {
+        spawn_build_job(request)
     }
 }

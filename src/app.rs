@@ -40,6 +40,7 @@
 //! トップツールバーは [`app_toolbar`](app_toolbar) サブモジュール（`src/app_toolbar.rs`）。
 //! DB 参照ウィンドウは [`app_db_viewer`](app_db_viewer) サブモジュール（`src/app_db_viewer.rs`）。
 //! 分析設定ウィンドウは [`app_analysis_settings`](app_analysis_settings)（`src/app_analysis_settings.rs`）。
+//! DB 生成設定ウィンドウは [`app_builder_settings`](app_builder_settings)（`src/app_builder_settings.rs`）。
 //! 分析ジョブ・警告一覧は [`app_analysis_job`](app_analysis_job)（`src/app_analysis_job.rs`）。
 //! 中央ペイン（フィルタ・一覧・詳細）は [`app_main_layout`](app_main_layout)（`src/app_main_layout.rs`）。
 //! エラーダイアログは [`app_error_dialog`](app_error_dialog)（`src/app_error_dialog.rs`）。
@@ -58,6 +59,9 @@ mod app_analysis_settings;
 #[path = "app_analysis_job.rs"]
 mod app_analysis_job;
 
+#[path = "app_builder_settings.rs"]
+mod app_builder_settings;
+
 #[path = "app_main_layout.rs"]
 mod app_main_layout;
 
@@ -71,8 +75,9 @@ mod app_condition_editor;
 mod app_lifecycle;
 
 use crate::analysis_runner::{
-    build_runtime_config, resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig,
-    AnalysisRuntimeOverrides, AnalysisWarningMessage,
+    build_builder_runtime_config, build_default_builder_report_path, build_runtime_config,
+    resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig, AnalysisRuntimeOverrides,
+    AnalysisWarningMessage, BuildJobControl, BuilderRuntimeConfig,
 };
 use crate::analysis_session_cache::{AnalysisResultSnapshot, AnalysisSessionCacheKey};
 use crate::analysis_process_host::{AnalysisProcessHost, ThreadAnalysisProcessHost};
@@ -98,6 +103,7 @@ use egui_extras::Column;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TreeScrollRequest {
@@ -139,14 +145,14 @@ const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
         value: tree_paragraph_id_value,
     },
     TreeColumnSpec {
-        header: "自治体",
+        header: "category1",
         build_column: build_tree_municipality_column,
-        value: tree_municipality_value,
+        value: tree_category1_value,
     },
     TreeColumnSpec {
-        header: "条例/規則",
+        header: "category2",
         build_column: build_tree_ordinance_column,
-        value: tree_ordinance_value,
+        value: tree_category2_value,
     },
     TreeColumnSpec {
         header: "カテゴリ",
@@ -235,10 +241,6 @@ impl AnalysisRuntimeState {
         }
     }
 
-    fn can_start(&self) -> bool {
-        self.runtime.is_some() && self.current_job.is_none()
-    }
-
     fn status_text(&self) -> String {
         match &self.status {
             AnalysisJobStatus::Idle => "分析待機中".to_string(),
@@ -251,10 +253,6 @@ impl AnalysisRuntimeState {
 
     fn has_warning_details(&self) -> bool {
         !self.last_warnings.is_empty()
-    }
-
-    fn can_export(&self) -> bool {
-        self.runtime.is_some() && self.current_job.is_none() && self.last_export_context.is_some()
     }
 
     fn capture_idle_snapshot(&self) -> Option<IdleAnalysisRuntimeSnapshot> {
@@ -282,6 +280,62 @@ impl AnalysisRuntimeState {
     }
 }
 
+struct RunningBuildJob {
+    receiver: Receiver<AnalysisJobEvent>,
+    control: BuildJobControl,
+    started_at: Instant,
+}
+
+#[derive(Clone)]
+enum BuilderJobStatus {
+    Idle,
+    Running { job_id: String },
+    Succeeded { summary: String },
+    Failed { summary: String },
+}
+
+struct BuilderRuntimeState {
+    runtime: Option<BuilderRuntimeConfig>,
+    current_job: Option<RunningBuildJob>,
+    status: BuilderJobStatus,
+    pending_switch_db_path: Option<PathBuf>,
+}
+
+impl BuilderRuntimeState {
+    fn from_runtime(runtime: Result<BuilderRuntimeConfig, String>) -> Self {
+        match runtime {
+            Ok(runtime) => Self {
+                runtime: Some(runtime),
+                current_job: None,
+                status: BuilderJobStatus::Idle,
+                pending_switch_db_path: None,
+            },
+            Err(error) => Self {
+                runtime: None,
+                current_job: None,
+                status: BuilderJobStatus::Failed { summary: error },
+                pending_switch_db_path: None,
+            },
+        }
+    }
+
+    fn status_text(&self) -> String {
+        match &self.status {
+            BuilderJobStatus::Idle => "DB生成待機中".to_string(),
+            BuilderJobStatus::Running { job_id } => {
+                let elapsed = self
+                    .current_job
+                    .as_ref()
+                    .map(|job| job.started_at.elapsed().as_secs())
+                    .unwrap_or(0);
+                format!("DB生成中: {job_id} ({elapsed} 秒)")
+            }
+            BuilderJobStatus::Succeeded { summary } => format!("DB生成成功: {summary}"),
+            BuilderJobStatus::Failed { summary } => format!("DB生成失敗: {summary}"),
+        }
+    }
+}
+
 #[derive(Default)]
 struct AnalysisRequestState {
     python_path_override: Option<PathBuf>,
@@ -296,6 +350,99 @@ impl AnalysisRequestState {
             python_path: self.python_path_override.clone(),
             filter_config_path: self.filter_config_path_override.clone(),
             annotation_csv_path: self.annotation_csv_path_override.clone(),
+        }
+    }
+}
+
+struct BuilderRequestState {
+    python_path_override: Option<PathBuf>,
+    input_dir_path: Option<PathBuf>,
+    analysis_db_path: PathBuf,
+    report_path: Option<PathBuf>,
+    skip_tokenize: bool,
+    sudachi_dict: BuilderSudachiDict,
+    split_mode: BuilderSplitMode,
+    split_inside_parentheses: bool,
+    merge_table_lines: bool,
+    purge: bool,
+    fresh_db: bool,
+    limit_input: String,
+    note_input: String,
+    settings_window_open: bool,
+}
+
+impl BuilderRequestState {
+    fn new(default_analysis_db_path: PathBuf) -> Self {
+        Self {
+            python_path_override: None,
+            input_dir_path: None,
+            analysis_db_path: default_analysis_db_path,
+            report_path: None,
+            skip_tokenize: false,
+            sudachi_dict: BuilderSudachiDict::default(),
+            split_mode: BuilderSplitMode::default(),
+            split_inside_parentheses: false,
+            merge_table_lines: false,
+            purge: false,
+            fresh_db: false,
+            limit_input: String::new(),
+            note_input: String::new(),
+            settings_window_open: false,
+        }
+    }
+
+    fn runtime_overrides(&self) -> AnalysisRuntimeOverrides {
+        AnalysisRuntimeOverrides {
+            python_path: self.python_path_override.clone(),
+            filter_config_path: None,
+            annotation_csv_path: None,
+        }
+    }
+
+    fn resolved_report_path(&self) -> PathBuf {
+        self.report_path
+            .clone()
+            .unwrap_or_else(|| build_default_builder_report_path(&self.analysis_db_path))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BuilderSudachiDict {
+    #[default]
+    Core,
+    Full,
+    Small,
+}
+
+impl BuilderSudachiDict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Full => "full",
+            Self::Small => "small",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BuilderSplitMode {
+    A,
+    B,
+    C,
+}
+
+impl Default for BuilderSplitMode {
+    fn default() -> Self {
+        Self::C
+    }
+}
+
+impl BuilderSplitMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
         }
     }
 }
@@ -354,6 +501,8 @@ pub(crate) struct App {
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
     analysis_runtime_state: AnalysisRuntimeState,
+    builder_request_state: BuilderRequestState,
+    builder_runtime_state: BuilderRuntimeState,
     pub(crate) core: ViewerCoreState,
     pending_tree_scroll: Option<TreeScrollRequest>,
     pub(crate) error_message: Option<String>,
@@ -367,14 +516,19 @@ impl App {
     pub(crate) fn new(initial_csv_path: Option<PathBuf>) -> Self {
         let analysis_request_state = AnalysisRequestState::default();
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
+        let default_db_path = resolve_default_db_path();
+        let builder_request_state = BuilderRequestState::new(default_db_path.clone());
+        let builder_runtime = build_builder_runtime_config(&builder_request_state.runtime_overrides());
         let mut app = Self {
             file_dialog_host: Box::new(RfdFileDialogHost),
             analysis_process_host: Box::new(ThreadAnalysisProcessHost),
             logger: Box::new(StderrAppLogger),
             records_source_label: "分析結果なし".to_string(),
-            db_viewer_state: DbViewerState::new(resolve_default_db_path()),
+            db_viewer_state: DbViewerState::new(default_db_path),
             analysis_request_state,
             analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
+            builder_request_state,
+            builder_runtime_state: BuilderRuntimeState::from_runtime(builder_runtime),
             core: ViewerCoreState::default(),
             pending_tree_scroll: None,
             error_message: None,
@@ -750,6 +904,18 @@ impl App {
         app_analysis_job::refresh_analysis_runtime(self);
     }
 
+    fn refresh_builder_runtime(&mut self) {
+        if self.builder_runtime_state.current_job.is_some() {
+            return;
+        }
+        let runtime = build_builder_runtime_config(&self.builder_request_state.runtime_overrides());
+        self.builder_runtime_state = BuilderRuntimeState::from_runtime(runtime);
+    }
+
+    fn is_any_job_running(&self) -> bool {
+        self.analysis_runtime_state.current_job.is_some() || self.builder_runtime_state.current_job.is_some()
+    }
+
     pub(crate) fn capture_idle_runtime_snapshot(&self) -> Option<IdleAnalysisRuntimeSnapshot> {
         self.analysis_runtime_state.capture_idle_snapshot()
     }
@@ -792,6 +958,32 @@ impl App {
         app_analysis_job::start_export_job(self, output_csv_path)
     }
 
+    fn start_build_job(&mut self) -> Result<(), String> {
+        app_analysis_job::start_build_job(self)
+    }
+
+    fn apply_built_db_as_current(&mut self) -> Result<(), String> {
+        let db_path = self
+            .builder_runtime_state
+            .pending_switch_db_path
+            .clone()
+            .ok_or_else(|| "現在 DB に設定できる生成済み DB がありません".to_string())?;
+        self.db_viewer_state.db_path = db_path.clone();
+        self.db_viewer_state.reset_loaded_state();
+        self.builder_request_state.analysis_db_path = db_path.clone();
+        self.builder_runtime_state.pending_switch_db_path = None;
+        self.builder_runtime_state.status = BuilderJobStatus::Succeeded {
+            summary: format!("生成済み DB を現在 DB に設定: {}", db_path.display()),
+        };
+        Ok(())
+    }
+
+    fn cancel_running_builder_job(&mut self) {
+        if let Some(job) = self.builder_runtime_state.current_job.as_ref() {
+            job.control.cancel();
+        }
+    }
+
     fn draw_warning_details_window(&mut self, ctx: &egui::Context) {
         app_analysis_job::draw_warning_details_window(self, ctx);
     }
@@ -817,6 +1009,7 @@ impl eframe::App for App {
 
         self.draw_db_viewer_window(ctx);
         self.draw_analysis_settings_window(ctx);
+        self.draw_builder_settings_window(ctx);
         self.draw_condition_editor_window(ctx);
 
         if let Some(row_index) = clicked_row {
@@ -851,6 +1044,10 @@ impl App {
 
     fn draw_analysis_settings_window(&mut self, ctx: &egui::Context) {
         app_analysis_settings::draw_analysis_settings_window(self, ctx);
+    }
+
+    fn draw_builder_settings_window(&mut self, ctx: &egui::Context) {
+        app_builder_settings::draw_builder_settings_window(self, ctx);
     }
 
     fn draw_condition_editor_window(&mut self, ctx: &egui::Context) {
@@ -902,12 +1099,12 @@ fn tree_paragraph_id_value(record: &AnalysisRecord) -> String {
     record.unit_id().to_string()
 }
 
-fn tree_municipality_value(record: &AnalysisRecord) -> String {
-    record.municipality_name.clone()
+fn tree_category1_value(record: &AnalysisRecord) -> String {
+    record.category1.clone()
 }
 
-fn tree_ordinance_value(record: &AnalysisRecord) -> String {
-    record.ordinance_or_rule.clone()
+fn tree_category2_value(record: &AnalysisRecord) -> String {
+    record.category2.clone()
 }
 
 fn tree_category_value(record: &AnalysisRecord) -> String {

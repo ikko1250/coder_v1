@@ -17,7 +17,7 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
     let mut clear_python_override = false;
     let mut clear_filter_config_override = false;
     let mut clear_annotation_csv_override = false;
-    let settings_enabled = app.analysis_runtime_state.current_job.is_none();
+    let settings_enabled = !app.is_any_job_running();
     let python_override_label = app
         .analysis_request_state
         .python_path_override
