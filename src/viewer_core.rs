@@ -80,6 +80,18 @@ pub enum ViewerCoreMessage {
 
 /// 一覧・フィルタ・選択の状態（`App` が保持）。
 #[derive(Debug)]
+pub(crate) struct FilterPanelCache {
+    pub(crate) active_column: FilterColumn,
+    pub(crate) query: String,
+    pub(crate) selection_revision: u64,
+    pub(crate) query_revision: u64,
+    pub(crate) options_revision: u64,
+    pub(crate) matching_options: Vec<FilterOption>,
+    pub(crate) selected_non_matching_options: Vec<FilterOption>,
+    pub(crate) active_values: Vec<(FilterColumn, String)>,
+}
+
+#[derive(Debug)]
 pub struct ViewerCoreState {
     pub(crate) all_records: Vec<AnalysisRecord>,
     pub(crate) filtered_indices: Vec<usize>,
@@ -88,6 +100,10 @@ pub struct ViewerCoreState {
     pub(crate) filter_candidate_queries: HashMap<FilterColumn, String>,
     pub(crate) active_filter_column: FilterColumn,
     pub(crate) selected_row: Option<usize>,
+    pub(crate) filter_panel_cache: Option<FilterPanelCache>,
+    pub(crate) filter_selection_revision: u64,
+    pub(crate) filter_query_revision: u64,
+    pub(crate) filter_options_revision: u64,
     /// 現在「この ID の完了だけ受け入れる」分析／エクスポートジョブ。CSV 再読込などで [`Self::clear_expected_job_id`] する。
     pub(crate) expected_job_id: Option<String>,
     /// 詳細ペイン用。第 1 要素は `AnalysisRecord::row_no`。[`Self::invalidate_detail_segment_cache`] で明示的に無効化する。
@@ -106,6 +122,10 @@ impl Default for ViewerCoreState {
             filter_candidate_queries: HashMap::new(),
             active_filter_column: FilterColumn::MatchedCategories,
             selected_row: None,
+            filter_panel_cache: None,
+            filter_selection_revision: 0,
+            filter_query_revision: 0,
+            filter_options_revision: 0,
             expected_job_id: None,
             detail_segment_cache: None,
             data_source_generation: 0,
@@ -148,6 +168,22 @@ impl ViewerCoreState {
 
     pub(crate) fn set_detail_segment_cache(&mut self, row_no: usize, segments: Vec<TextSegment>) {
         self.detail_segment_cache = Some((row_no, segments));
+    }
+
+    pub(crate) fn invalidate_filter_panel_cache(&mut self) {
+        self.filter_panel_cache = None;
+    }
+
+    pub(crate) fn bump_filter_selection_revision(&mut self) {
+        self.filter_selection_revision = self.filter_selection_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_filter_query_revision(&mut self) {
+        self.filter_query_revision = self.filter_query_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_filter_options_revision(&mut self) {
+        self.filter_options_revision = self.filter_options_revision.wrapping_add(1);
     }
 
     /// 現在のフィルタ選択に基づき `filtered_indices` を再計算する（P2-08）。

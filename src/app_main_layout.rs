@@ -57,22 +57,37 @@ fn record_list_panel_width_range(available_width: f32) -> RangeInclusive<f32> {
     super::RECORD_LIST_PANEL_MIN_WIDTH..=max_width
 }
 
-fn draw_filters(app: &mut App, ui: &mut Ui) {
-    let active_count: usize = app.core.selected_filter_values.values().map(BTreeSet::len).sum();
-    let options = app
-        .core
-        .filter_options
-        .get(&app.core.active_filter_column)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let selected_values = app.core.selected_filter_values.get(&app.core.active_filter_column);
+fn rebuild_filter_panel_cache_if_needed(app: &mut App) {
+    let active_column = app.core.active_filter_column;
     let candidate_query = app
         .core
         .filter_candidate_queries
-        .get(&app.core.active_filter_column)
-        .map(String::as_str)
-        .unwrap_or("");
-    let normalized_query = normalize_filter_candidate_search_text(candidate_query);
+        .get(&active_column)
+        .cloned()
+        .unwrap_or_default();
+    let selection_revision = app.core.filter_selection_revision;
+    let query_revision = app.core.filter_query_revision;
+    let options_revision = app.core.filter_options_revision;
+
+    let cache_is_valid = app.core.filter_panel_cache.as_ref().is_some_and(|cache| {
+        cache.active_column == active_column
+            && cache.query == candidate_query
+            && cache.selection_revision == selection_revision
+            && cache.query_revision == query_revision
+            && cache.options_revision == options_revision
+    });
+    if cache_is_valid {
+        return;
+    }
+
+    let options = app
+        .core
+        .filter_options
+        .get(&active_column)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let selected_values = app.core.selected_filter_values.get(&active_column);
+    let normalized_query = normalize_filter_candidate_search_text(&candidate_query);
     let mut matching_options = Vec::new();
     let mut selected_non_matching_options = Vec::new();
     for option in options {
@@ -90,37 +105,70 @@ fn draw_filters(app: &mut App, ui: &mut Ui) {
         .core
         .selected_filter_values
         .iter()
-        .flat_map(|(column, values)| {
-            values
-                .iter()
-                .cloned()
-                .map(|value| (*column, value))
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|(column, values)| values.iter().cloned().map(|value| (*column, value)))
         .collect();
+
+    app.core.filter_panel_cache = Some(crate::viewer_core::FilterPanelCache {
+        active_column,
+        query: candidate_query,
+        selection_revision,
+        query_revision,
+        options_revision,
+        matching_options,
+        selected_non_matching_options,
+        active_values,
+    });
+}
+
+fn draw_filters(app: &mut App, ui: &mut Ui) {
+    rebuild_filter_panel_cache_if_needed(app);
+
+    let active_count: usize = app.core.selected_filter_values.values().map(BTreeSet::len).sum();
+    let selected_values = app.core.selected_filter_values.get(&app.core.active_filter_column);
+    let candidate_query = app
+        .core
+        .filter_panel_cache
+        .as_ref()
+        .map(|cache| cache.query.as_str())
+        .unwrap_or("");
+    let has_any_options = app
+        .core
+        .filter_options
+        .get(&app.core.active_filter_column)
+        .is_some_and(|options| !options.is_empty());
+    let (matching_options, selected_non_matching_options, active_values) = {
+        let cache = app
+            .core
+            .filter_panel_cache
+            .as_ref()
+            .expect("filter panel cache should exist");
+        (
+            cache.matching_options.as_slice(),
+            cache.selected_non_matching_options.as_slice(),
+            cache.active_values.as_slice(),
+        )
+    };
     let response = render_filter_panel(
         ui,
         app.core.active_filter_column,
         active_count,
-        &matching_options,
-        &selected_non_matching_options,
+        matching_options,
+        selected_non_matching_options,
         selected_values,
-        &active_values,
+        active_values,
         candidate_query,
-        !options.is_empty(),
+        has_any_options,
     );
 
     let response_column = app.core.active_filter_column;
     if let Some(updated_query) = response.updated_query {
-        if updated_query.is_empty() {
-            app.core.filter_candidate_queries.remove(&response_column);
-        } else {
-            app.core.filter_candidate_queries
-                .insert(response_column, updated_query);
+        if app.set_filter_candidate_query(response_column, updated_query) {
+            ui.ctx().request_repaint();
         }
     }
     if let Some(selected_column) = response.selected_column {
         app.core.active_filter_column = selected_column;
+        ui.ctx().request_repaint();
     }
     if response.clear_column_clicked {
         if app
@@ -175,6 +223,7 @@ fn draw_tree(
     let mut table = TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
+        .animate_scrolling(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
 
     for spec in super::TREE_COLUMN_SPECS {
@@ -217,9 +266,9 @@ fn draw_tree(
                         );
 
                         let rich_text = if is_selected {
-                            RichText::new(value).color(Color32::WHITE)
+                            RichText::new(value.as_ref()).color(Color32::WHITE)
                         } else {
-                            RichText::new(value)
+                            RichText::new(value.as_ref())
                         };
 
                         let label_response = ui.add(

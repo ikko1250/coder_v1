@@ -100,6 +100,7 @@ use crate::viewer_core::{
 use eframe::egui;
 use egui::Ui;
 use egui_extras::Column;
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -130,7 +131,7 @@ struct SelectionChange {
 struct TreeColumnSpec {
     header: &'static str,
     build_column: fn() -> Column,
-    value: fn(&AnalysisRecord) -> String,
+    value: for<'a> fn(&'a AnalysisRecord) -> Cow<'a, str>,
 }
 
 const TREE_COLUMN_SPECS: &[TreeColumnSpec] = &[
@@ -605,6 +606,10 @@ impl App {
         self.core.filter_options = build_filter_options(&self.core.all_records);
         self.core.selected_filter_values.clear();
         self.core.filter_candidate_queries.clear();
+        self.core.bump_filter_options_revision();
+        self.core.bump_filter_selection_revision();
+        self.core.bump_filter_query_revision();
+        self.core.invalidate_filter_panel_cache();
         self.core.recompute_filtered_indices();
         self.core.bump_data_source_generation();
         self.core
@@ -807,6 +812,8 @@ impl App {
                 );
         }
         self.core.filter_options = build_filter_options(&self.core.all_records);
+        self.core.bump_filter_options_revision();
+        self.core.invalidate_filter_panel_cache();
         self.core
             .invalidate_detail_segment_cache(SegmentCacheInvalidateReason::AnnotationSaved);
         Ok(())
@@ -862,6 +869,8 @@ impl App {
 
     fn clear_filters_for_column(&mut self, column: FilterColumn) -> bool {
         if self.core.selected_filter_values.remove(&column).is_some() {
+            self.core.bump_filter_selection_revision();
+            self.core.invalidate_filter_panel_cache();
             self.apply_filters();
             true
         } else {
@@ -872,6 +881,8 @@ impl App {
     fn clear_all_filters(&mut self) -> bool {
         if !self.core.selected_filter_values.is_empty() {
             self.core.selected_filter_values.clear();
+            self.core.bump_filter_selection_revision();
+            self.core.invalidate_filter_panel_cache();
             self.apply_filters();
             true
         } else {
@@ -899,9 +910,30 @@ impl App {
         }
 
         if changed {
+            self.core.bump_filter_selection_revision();
+            self.core.invalidate_filter_panel_cache();
             self.apply_filters();
         }
         changed
+    }
+
+    fn set_filter_candidate_query(&mut self, column: FilterColumn, query: String) -> bool {
+        let changed = match self.core.filter_candidate_queries.get(&column) {
+            Some(existing) => existing != &query,
+            None => !query.is_empty(),
+        };
+        if !changed {
+            return false;
+        }
+
+        if query.is_empty() {
+            self.core.filter_candidate_queries.remove(&column);
+        } else {
+            self.core.filter_candidate_queries.insert(column, query);
+        }
+        self.core.bump_filter_query_revision();
+        self.core.invalidate_filter_panel_cache();
+        true
     }
 
     fn get_segments(&mut self) -> Vec<TextSegment> {
@@ -1119,30 +1151,30 @@ fn build_tree_annotated_token_count_column() -> Column {
     Column::initial(92.0).at_least(72.0).clip(true)
 }
 
-fn tree_row_no_value(record: &AnalysisRecord) -> String {
-    record.row_no.to_string()
+fn tree_row_no_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Owned(record.row_no.to_string())
 }
 
-fn tree_paragraph_id_value(record: &AnalysisRecord) -> String {
-    record.unit_id().to_string()
+fn tree_paragraph_id_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Borrowed(record.unit_id())
 }
 
-fn tree_category1_value(record: &AnalysisRecord) -> String {
-    record.category1.clone()
+fn tree_category1_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Borrowed(&record.category1)
 }
 
-fn tree_category2_value(record: &AnalysisRecord) -> String {
-    record.category2.clone()
+fn tree_category2_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Borrowed(&record.category2)
 }
 
-fn tree_category_value(record: &AnalysisRecord) -> String {
-    record.matched_categories_text.clone()
+fn tree_category_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Borrowed(&record.matched_categories_text)
 }
 
-fn tree_annotation_value(record: &AnalysisRecord) -> String {
-    first_manual_annotation_line(&record.manual_annotation_pairs_text)
+fn tree_annotation_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Owned(first_manual_annotation_line(&record.manual_annotation_pairs_text))
 }
 
-fn tree_annotated_token_count_value(record: &AnalysisRecord) -> String {
-    record.annotated_token_count.clone()
+fn tree_annotated_token_count_value(record: &AnalysisRecord) -> Cow<'_, str> {
+    Cow::Borrowed(&record.annotated_token_count)
 }
