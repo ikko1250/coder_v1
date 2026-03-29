@@ -34,6 +34,20 @@ def _build_filter_config_issue(
     )
 
 
+def _condition_is_skipped(raw_condition: object) -> bool:
+    if not isinstance(raw_condition, dict):
+        return False
+
+    raw_skip = raw_condition.get("skip", False)
+    if isinstance(raw_skip, bool):
+        return raw_skip
+    if isinstance(raw_skip, str):
+        return raw_skip.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(raw_skip, (int, float)):
+        return bool(raw_skip)
+    return False
+
+
 def load_filter_config_result(filter_config_path: Path) -> LoadFilterConfigResult:
     if not filter_config_path.exists():
         raise FileNotFoundError(f"Filter config JSON not found: {filter_config_path}")
@@ -49,6 +63,11 @@ def load_filter_config_result(filter_config_path: Path) -> LoadFilterConfigResul
     raw_conditions = raw_config.get("cooccurrence_conditions", [])
     if not isinstance(raw_conditions, list):
         raise ValueError(f"'cooccurrence_conditions' must be list: {filter_config_path}")
+    active_conditions = [
+        raw_condition
+        for raw_condition in raw_conditions
+        if not _condition_is_skipped(raw_condition)
+    ]
 
     issues: list[ConfigIssue] = []
     raw_match_logic = str(raw_config.get("condition_match_logic", "any")).strip().lower()
@@ -152,7 +171,7 @@ def load_filter_config_result(filter_config_path: Path) -> LoadFilterConfigResul
     return LoadFilterConfigResult(
         filter_config=FilterConfig(
             condition_match_logic=condition_match_logic,
-            cooccurrence_conditions=raw_conditions,
+            cooccurrence_conditions=active_conditions,
             loaded_condition_count=len(raw_conditions),
             max_reconstructed_paragraphs=max_reconstructed_paragraphs,
             analysis_unit=analysis_unit,

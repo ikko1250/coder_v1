@@ -9,9 +9,11 @@ use std::path::PathBuf;
 pub(crate) trait FileDialogHost {
     /// メイン CSV を開く（`.csv` 優先）。
     fn pick_open_csv(&self) -> Option<PathBuf>;
+    /// 分析に使う既存の Analysis DB を開く。
+    fn pick_open_analysis_db(&self) -> Option<PathBuf>;
     /// Builder 入力フォルダーを選ぶ。
     fn pick_open_folder(&self) -> Option<PathBuf>;
-    /// 分析結果の全件 CSV 保存。
+    /// 一覧に表示中の分析結果 CSV 保存。
     fn pick_save_analysis_result_csv(&self) -> Option<PathBuf>;
     /// Analysis DB の保存先。
     fn pick_save_analysis_db(&self) -> Option<PathBuf>;
@@ -37,6 +39,13 @@ impl FileDialogHost for RfdFileDialogHost {
             .pick_file()
     }
 
+    fn pick_open_analysis_db(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .add_filter("SQLite DB", &["db", "sqlite", "sqlite3"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+    }
+
     fn pick_open_folder(&self) -> Option<PathBuf> {
         rfd::FileDialog::new().pick_folder()
     }
@@ -44,7 +53,7 @@ impl FileDialogHost for RfdFileDialogHost {
     fn pick_save_analysis_result_csv(&self) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .add_filter("CSV files", &["csv"])
-            .set_file_name("analysis-result.csv")
+            .set_file_name("analysis-result-visible.csv")
             .save_file()
     }
 

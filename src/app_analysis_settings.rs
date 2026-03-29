@@ -1,6 +1,7 @@
-//! 分析設定オーバーレイ（Python / 条件 JSON / annotation CSV の上書き）。親モジュール `app` の子。
+//! 分析設定オーバーレイ（Analysis DB / Python / 条件 JSON / annotation CSV の上書き）。親モジュール `app` の子。
 
 use super::App;
+use crate::db::resolve_default_db_path;
 use crate::ui_helpers::ime_safe_singleline;
 use eframe::egui::{self, Ui};
 use std::path::PathBuf;
@@ -11,13 +12,16 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
     }
 
     let mut window_open = app.analysis_request_state.settings_window_open;
+    let mut selected_analysis_db_path = None;
     let mut selected_python_path = None;
     let mut selected_filter_config_path = None;
     let mut selected_annotation_csv_path = None;
+    let mut reset_analysis_db_path = false;
     let mut clear_python_override = false;
     let mut clear_filter_config_override = false;
     let mut clear_annotation_csv_override = false;
     let settings_enabled = !app.is_any_job_running();
+    let analysis_db_label = app.db_viewer_state.db_path.display().to_string();
     let python_override_label = app
         .analysis_request_state
         .python_path_override
@@ -58,8 +62,20 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
         .open(&mut window_open)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.label("分析実行に使う Python と条件 JSON を切り替えます。");
+            ui.label("分析実行に使う DB / Python / 条件 JSON を切り替えます。");
             ui.label("この設定は現在のセッション内だけで有効です。");
+            ui.separator();
+
+            draw_analysis_path_override_row(
+                ui,
+                "分析 DB",
+                &analysis_db_label,
+                "既定値",
+                settings_enabled,
+                || app.file_dialog_host.pick_open_analysis_db(),
+                &mut selected_analysis_db_path,
+                &mut reset_analysis_db_path,
+            );
             ui.separator();
 
             draw_analysis_path_override_row(
@@ -110,6 +126,13 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
     app.analysis_request_state.settings_window_open = window_open;
 
     let mut runtime_changed = false;
+    let mut needs_repaint = false;
+    if let Some(path) = selected_analysis_db_path {
+        needs_repaint |= app.set_current_analysis_db_path(path);
+    }
+    if reset_analysis_db_path {
+        needs_repaint |= app.set_current_analysis_db_path(resolve_default_db_path());
+    }
     if let Some(path) = selected_python_path {
         app.analysis_request_state.python_path_override = Some(path);
         runtime_changed = true;
@@ -137,6 +160,9 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
 
     if runtime_changed {
         app.refresh_analysis_runtime();
+        needs_repaint = true;
+    }
+    if needs_repaint {
         ctx.request_repaint();
     }
 }

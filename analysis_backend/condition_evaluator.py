@@ -271,6 +271,20 @@ def _build_condition_issue(
     )
 
 
+def _raw_condition_is_skipped(raw_condition: object) -> bool:
+    if not isinstance(raw_condition, dict):
+        return False
+
+    raw_skip = raw_condition.get("skip", False)
+    if isinstance(raw_skip, bool):
+        return raw_skip
+    if isinstance(raw_skip, str):
+        return raw_skip.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(raw_skip, (int, float)):
+        return bool(raw_skip)
+    return False
+
+
 def _normalize_annotation_filters(
     raw_annotation_filters: object,
     *,
@@ -3375,6 +3389,8 @@ def normalize_cooccurrence_conditions_result(
                     condition_index=idx,
                 )
             )
+            continue
+        if _raw_condition_is_skipped(raw_condition):
             continue
 
         raw_condition_id_val = raw_condition.get("condition_id")

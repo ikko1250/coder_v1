@@ -2,8 +2,15 @@ use crate::condition_editor::{
     AnnotationFilterItem, ConditionEditorItem, FilterConfigDocument, FormGroupEditorItem,
     TextGroupEditorItem,
 };
+use crate::condition_editor_filter::{
+    condition_effective_scope_label, condition_reference_count, ConditionListFilterColumn,
+};
+use crate::filter::display_filter_value;
+use crate::model::FilterOption;
 use crate::ui_helpers::ime_safe_singleline;
-use egui::{Color32, RichText, ScrollArea, Ui};
+use egui::{Color32, Key, RichText, ScrollArea, Ui};
+use egui_extras::{Column, TableBuilder};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// 条件エディターヘッダーのパス表示幅（分析設定の条件 JSON 行に合わせる）。
@@ -15,6 +22,12 @@ pub(crate) const CONDITION_EDITOR_CHOICE_WIDTH: f32 = 140.0;
 const CONDITION_EDITOR_NUMBER_WIDTH: f32 = 120.0;
 const CONDITION_EDITOR_LIST_INPUT_WIDTH: f32 = 280.0;
 const CONDITION_EDITOR_FILTER_OPERATOR_WIDTH: f32 = 120.0;
+const CONDITION_EDITOR_LIST_INDEX_WIDTH: f32 = 40.0;
+const CONDITION_EDITOR_LIST_SCOPE_WIDTH: f32 = 76.0;
+const CONDITION_EDITOR_LIST_COUNT_WIDTH: f32 = 56.0;
+const CONDITION_EDITOR_LIST_FILTER_COUNT_WIDTH: f32 = 56.0;
+const CONDITION_EDITOR_LIST_FILTER_CHECKBOX_WIDTH: f32 = 24.0;
+const CONDITION_EDITOR_LIST_FILTER_SCROLLBAR_MARGIN: f32 = 16.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ConditionEditorHeaderResponse {
@@ -27,11 +40,18 @@ pub(crate) struct ConditionEditorFooterResponse {
     pub(crate) reload_clicked: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConditionEditorListResponse {
     pub(crate) add_clicked: bool,
     pub(crate) selected_index: Option<usize>,
     pub(crate) selected_group_index: Option<usize>,
+    pub(crate) toggled_skip: Vec<(usize, bool)>,
+    pub(crate) selected_filter_column: Option<ConditionListFilterColumn>,
+    pub(crate) clear_column_clicked: bool,
+    pub(crate) clear_all_clicked: bool,
+    pub(crate) updated_query: Option<String>,
+    pub(crate) toggled_filter_options: Vec<(String, bool)>,
+    pub(crate) removed_active_filter_values: Vec<(ConditionListFilterColumn, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -44,6 +64,13 @@ pub(crate) struct ConditionEditorDetailResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConfirmOverlayResponse {
     Continue,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SkipWarningOverlayResponse {
+    Ignore,
+    Cascade,
     Cancel,
 }
 
@@ -187,11 +214,59 @@ pub(crate) fn draw_condition_editor_confirm_overlay(
     response
 }
 
+pub(crate) fn draw_condition_editor_skip_warning_overlay(
+    viewport_ctx: &egui::Context,
+    message: &str,
+) -> Option<SkipWarningOverlayResponse> {
+    let mut response = None;
+    let screen_rect = viewport_ctx.screen_rect();
+
+    egui::Area::new(egui::Id::new("condition_editor_skip_warning_overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen_rect.min)
+        .show(viewport_ctx, |ui| {
+            ui.set_min_size(screen_rect.size());
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, Color32::from_black_alpha(160));
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.add_space((screen_rect.height() * 0.2).max(72.0));
+                egui::Frame::window(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(520.0);
+                    ui.label(message);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("無視してスキップ").clicked() {
+                            response = Some(SkipWarningOverlayResponse::Ignore);
+                        }
+                        if ui.button("参照元も一括スキップ").clicked() {
+                            response = Some(SkipWarningOverlayResponse::Cascade);
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            response = Some(SkipWarningOverlayResponse::Cancel);
+                        }
+                    });
+                });
+            });
+        });
+
+    response
+}
+
 pub(crate) fn draw_condition_editor_list_panel(
     ui: &mut Ui,
     can_modify: bool,
     document: Option<&FilterConfigDocument>,
     current_selection: Option<usize>,
+    filtered_indices: &[usize],
+    total_condition_count: usize,
+    active_filter_column: ConditionListFilterColumn,
+    active_filter_count: usize,
+    matching_options: &[FilterOption],
+    selected_non_matching_options: &[FilterOption],
+    selected_values: Option<&BTreeSet<String>>,
+    active_values: &[(ConditionListFilterColumn, String)],
+    candidate_query: &str,
+    has_any_options: bool,
 ) -> ConditionEditorListResponse {
     let mut response = ConditionEditorListResponse::default();
     ui.vertical(|ui| {
@@ -205,45 +280,441 @@ pub(crate) fn draw_condition_editor_list_panel(
             }
         });
 
-        ScrollArea::vertical()
-            .id_salt("condition_editor_list_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let Some(document) = document else {
-                    ui.label(RichText::new("条件 JSON 未読込").italics());
-                    return;
-                };
-                if document.cooccurrence_conditions.is_empty() {
-                    ui.label(RichText::new("condition がありません").italics());
+        draw_condition_editor_list_filters(
+            ui,
+            active_filter_column,
+            active_filter_count,
+            matching_options,
+            selected_non_matching_options,
+            selected_values,
+            active_values,
+            candidate_query,
+            has_any_options,
+            &mut response,
+        );
+
+        ui.add_space(6.0);
+
+        if let Some(document) = document {
+            if document.cooccurrence_conditions.is_empty() {
+                ui.label(RichText::new("condition がありません").italics());
+            } else {
+                ui.label(format!("表示: {} / {}", filtered_indices.len(), total_condition_count));
+                if filtered_indices.is_empty() {
+                    ui.label(
+                        RichText::new("フィルター条件に一致する condition がありません")
+                            .italics(),
+                    );
                 } else {
-                    for (index, condition) in document.cooccurrence_conditions.iter().enumerate() {
-                        let selected = current_selection == Some(index);
-                        let categories_preview = summarize_condition_list(&condition.categories, 2);
-                        let label = format!(
-                            "{}. {} [{}] fg:{} forms:{} tg:{} filters:{} refs:{}",
-                            index + 1,
-                            condition.condition_id,
-                            categories_preview,
-                            condition_group_count(condition),
-                            total_forms_count(condition),
-                            condition.text_groups.len(),
-                            condition.annotation_filters.len(),
-                            condition.required_categories_all.len()
-                                + condition.required_categories_any.len()
-                                + condition.required_condition_ids_all.len()
-                                + condition.required_condition_ids_any.len()
-                                + condition.excluded_condition_ids_any.len()
-                        );
-                        if ui.selectable_label(selected, label).clicked() {
-                            response.selected_index = Some(index);
-                            response.selected_group_index =
-                                clamp_editor_index(Some(0), condition.form_groups.len());
-                        }
-                    }
+                    draw_condition_editor_list_table(
+                        ui,
+                        can_modify,
+                        document,
+                        current_selection,
+                        filtered_indices,
+                        &mut response,
+                    );
                 }
-            });
+            }
+        } else {
+            ui.label(RichText::new("条件 JSON 未読込").italics());
+        }
     });
     response
+}
+
+fn draw_condition_editor_list_filters(
+    ui: &mut Ui,
+    active_filter_column: ConditionListFilterColumn,
+    active_filter_count: usize,
+    matching_options: &[FilterOption],
+    selected_non_matching_options: &[FilterOption],
+    selected_values: Option<&BTreeSet<String>>,
+    active_values: &[(ConditionListFilterColumn, String)],
+    candidate_query: &str,
+    has_any_options: bool,
+    response: &mut ConditionEditorListResponse,
+) {
+    let mut selected_column = active_filter_column;
+
+    egui::CollapsingHeader::new(format!("Filters ({})", active_filter_count))
+        .id_salt("condition_editor_filters_panel")
+        .default_open(true)
+        .show(ui, |ui| {
+            draw_condition_editor_filter_header(
+                ui,
+                active_filter_column,
+                active_filter_count,
+                &mut selected_column,
+                response,
+            );
+            draw_condition_editor_candidate_query_input(ui, candidate_query, response);
+            draw_condition_editor_filter_options(
+                ui,
+                matching_options,
+                selected_non_matching_options,
+                selected_values,
+                has_any_options,
+                response,
+            );
+            draw_condition_editor_active_filter_values(ui, active_values, response);
+        });
+
+    if selected_column != active_filter_column {
+        response.selected_filter_column = Some(selected_column);
+    }
+}
+
+fn draw_condition_editor_filter_header(
+    ui: &mut Ui,
+    active_filter_column: ConditionListFilterColumn,
+    active_filter_count: usize,
+    selected_column: &mut ConditionListFilterColumn,
+    response: &mut ConditionEditorListResponse,
+) {
+    ui.horizontal(|ui| {
+        ui.label("フィルター対象:");
+        egui::ComboBox::from_id_salt("condition_editor_filter_column_selector")
+            .selected_text(active_filter_column.label())
+            .show_ui(ui, |ui| {
+                for &column in ConditionListFilterColumn::all() {
+                    ui.selectable_value(selected_column, column, column.label());
+                }
+            });
+        ui.label(format!("適用中: {} 件", active_filter_count));
+    });
+
+    ui.horizontal(|ui| {
+        if ui.button("現在の列をクリア").clicked() {
+            response.clear_column_clicked = true;
+        }
+        if ui.button("全解除").clicked() {
+            response.clear_all_clicked = true;
+        }
+    });
+}
+
+fn draw_condition_editor_candidate_query_input(
+    ui: &mut Ui,
+    candidate_query: &str,
+    response: &mut ConditionEditorListResponse,
+) {
+    let mut query = candidate_query.to_string();
+    let text_edit_response = ui.add(ime_safe_singleline(&mut query).hint_text("候補を検索"));
+
+    if text_edit_response.changed() {
+        response.updated_query = Some(query.clone());
+    }
+
+    let escape_pressed =
+        text_edit_response.has_focus() && ui.input(|input| input.key_pressed(Key::Escape));
+    if escape_pressed && !query.is_empty() {
+        response.updated_query = Some(String::new());
+    }
+}
+
+fn draw_condition_editor_filter_options(
+    ui: &mut Ui,
+    matching_options: &[FilterOption],
+    selected_non_matching_options: &[FilterOption],
+    selected_values: Option<&BTreeSet<String>>,
+    has_any_options: bool,
+    response: &mut ConditionEditorListResponse,
+) {
+    ScrollArea::vertical()
+        .id_salt("condition_editor_filter_options_scroll")
+        .max_height(180.0)
+        .show(ui, |ui| {
+            if !has_any_options {
+                ui.label(RichText::new("候補なし").italics());
+                return;
+            }
+
+            let safe_width =
+                (ui.available_width() - CONDITION_EDITOR_LIST_FILTER_SCROLLBAR_MARGIN).max(0.0);
+            let column_count = condition_editor_filter_option_column_count(safe_width);
+            let spacing_x = ui.spacing().item_spacing.x;
+            let item_width = if column_count <= 1 {
+                safe_width
+            } else {
+                (safe_width - (column_count - 1) as f32 * spacing_x) / column_count as f32
+            };
+
+            ui.spacing_mut().item_spacing.y = 4.0;
+
+            if matching_options.is_empty() {
+                ui.label(RichText::new("一致候補なし").italics());
+            } else {
+                draw_condition_editor_filter_option_grid(
+                    ui,
+                    matching_options,
+                    selected_values,
+                    item_width,
+                    column_count,
+                    response,
+                );
+            }
+
+            if !selected_non_matching_options.is_empty() {
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(RichText::new("選択中").strong());
+                draw_condition_editor_filter_option_grid(
+                    ui,
+                    selected_non_matching_options,
+                    selected_values,
+                    item_width,
+                    column_count,
+                    response,
+                );
+            }
+        });
+}
+
+fn draw_condition_editor_filter_option_grid(
+    ui: &mut Ui,
+    options: &[FilterOption],
+    selected_values: Option<&BTreeSet<String>>,
+    item_width: f32,
+    column_count: usize,
+    response: &mut ConditionEditorListResponse,
+) {
+    for row_options in options.chunks(column_count) {
+        ui.horizontal(|ui| {
+            for option in row_options {
+                let is_selected =
+                    selected_values.is_some_and(|values| values.contains(&option.value));
+                if let Some(next_checked) = draw_condition_editor_filter_option_item(
+                    ui,
+                    option,
+                    is_selected,
+                    item_width,
+                ) {
+                    response
+                        .toggled_filter_options
+                        .push((option.value.clone(), next_checked));
+                }
+            }
+
+            for _ in row_options.len()..column_count {
+                ui.allocate_space(egui::vec2(item_width, 0.0));
+            }
+        });
+    }
+}
+
+fn condition_editor_filter_option_column_count(available_width: f32) -> usize {
+    if available_width < 290.0 {
+        1
+    } else if available_width < 435.0 {
+        2
+    } else if available_width < 580.0 {
+        3
+    } else {
+        4
+    }
+}
+
+fn draw_condition_editor_filter_option_item(
+    ui: &mut Ui,
+    option: &FilterOption,
+    is_selected: bool,
+    item_width: f32,
+) -> Option<bool> {
+    let mut checked = is_selected;
+    let mut changed = false;
+    let label_text = display_filter_value(&option.value);
+    let full_label = format!("{} ({})", label_text, option.count);
+    let spacing_x = ui.spacing().item_spacing.x;
+    let label_width = (item_width
+        - CONDITION_EDITOR_LIST_FILTER_CHECKBOX_WIDTH
+        - CONDITION_EDITOR_LIST_FILTER_COUNT_WIDTH
+        - spacing_x * 2.0)
+        .max(24.0);
+
+    let response = ui
+        .push_id(("condition_editor_filter_option", option.value.as_str()), |ui| {
+            let layout_height = ui.spacing().interact_size.y;
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(item_width, layout_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(item_width);
+
+                    let checkbox_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(CONDITION_EDITOR_LIST_FILTER_CHECKBOX_WIDTH, layout_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.add(egui::Checkbox::without_text(&mut checked)),
+                        )
+                        .inner;
+                    if checkbox_response.changed() {
+                        changed = true;
+                    }
+
+                    let label_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(label_width, layout_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add_sized(
+                                    [label_width, layout_height],
+                                    egui::Label::new(label_text.as_str())
+                                        .truncate()
+                                        .selectable(false)
+                                        .halign(egui::Align::LEFT)
+                                        .sense(egui::Sense::click()),
+                                )
+                            },
+                        )
+                        .inner;
+                    if label_response.clicked() {
+                        checked = !checked;
+                        changed = true;
+                    }
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(CONDITION_EDITOR_LIST_FILTER_COUNT_WIDTH, layout_height),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(format!("({})", option.count));
+                        },
+                    );
+
+                    checkbox_response.union(label_response)
+                },
+            )
+            .inner
+        })
+        .inner;
+    response.on_hover_text(full_label);
+
+    changed.then_some(checked)
+}
+
+fn draw_condition_editor_active_filter_values(
+    ui: &mut Ui,
+    active_values: &[(ConditionListFilterColumn, String)],
+    response: &mut ConditionEditorListResponse,
+) {
+    if active_values.is_empty() {
+        return;
+    }
+
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label("適用中:");
+        for (column, value) in active_values {
+            let button_label = format!("{}: {} ×", column.label(), display_filter_value(value));
+            if ui.small_button(button_label).clicked() {
+                response
+                    .removed_active_filter_values
+                    .push((*column, value.clone()));
+            }
+        }
+    });
+}
+
+fn draw_condition_editor_list_table(
+    ui: &mut Ui,
+    can_modify: bool,
+    document: &FilterConfigDocument,
+    current_selection: Option<usize>,
+    filtered_indices: &[usize],
+    response: &mut ConditionEditorListResponse,
+) {
+    let selected_fill = Color32::from_rgb(70, 130, 180);
+    let table = TableBuilder::new(ui)
+        .striped(true)
+        .resizable(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::exact(CONDITION_EDITOR_LIST_FILTER_CHECKBOX_WIDTH + 8.0))
+        .column(Column::exact(CONDITION_EDITOR_LIST_INDEX_WIDTH))
+        .column(Column::remainder().at_least(120.0))
+        .column(Column::remainder().at_least(120.0))
+        .column(Column::exact(CONDITION_EDITOR_LIST_SCOPE_WIDTH))
+        .column(Column::exact(CONDITION_EDITOR_LIST_COUNT_WIDTH))
+        .column(Column::exact(CONDITION_EDITOR_LIST_COUNT_WIDTH))
+        .column(Column::exact(CONDITION_EDITOR_LIST_COUNT_WIDTH))
+        .column(Column::exact(CONDITION_EDITOR_LIST_COUNT_WIDTH))
+        .column(Column::exact(CONDITION_EDITOR_LIST_COUNT_WIDTH));
+
+    table
+        .header(24.0, |mut header| {
+            for title in ["skip", "No", "condition_id", "categories", "scope", "groups", "forms", "text", "filters", "refs"] {
+                header.col(|ui| {
+                    ui.strong(title);
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(22.0, filtered_indices.len(), |mut row| {
+                let visible_index = row.index();
+                let condition_index = filtered_indices[visible_index];
+                let condition = &document.cooccurrence_conditions[condition_index];
+                let is_selected = current_selection == Some(condition_index);
+                let categories_preview = summarize_condition_list(&condition.categories, 2);
+                let row_values = [
+                    (condition_index + 1).to_string(),
+                    condition.condition_id.clone(),
+                    categories_preview,
+                    display_filter_value(&condition_effective_scope_label(condition)),
+                    condition_group_count(condition).to_string(),
+                    total_forms_count(condition).to_string(),
+                    condition.text_groups.len().to_string(),
+                    condition.annotation_filters.len().to_string(),
+                    condition_reference_count(condition).to_string(),
+                ];
+
+                let mut row_clicked = false;
+                row.col(|ui| {
+                    let mut skip = condition.skip;
+                    let checkbox_response = ui.add_enabled(
+                        can_modify,
+                        egui::Checkbox::without_text(&mut skip),
+                    );
+                    if checkbox_response.changed() {
+                        response.toggled_skip.push((condition_index, skip));
+                    }
+                });
+                for value in row_values {
+                    row.col(|ui| {
+                        let cell_rect = ui.max_rect();
+                        if is_selected {
+                            ui.painter().rect_filled(cell_rect, 0.0, selected_fill);
+                        }
+
+                        let cell_response = ui.interact(
+                            cell_rect,
+                            ui.id()
+                                .with(("condition_editor_cell_click", condition_index)),
+                            egui::Sense::click(),
+                        );
+                        let rich_text = if is_selected {
+                            RichText::new(value).color(Color32::WHITE)
+                        } else {
+                            RichText::new(value)
+                        };
+                        let label_response = ui.add(
+                            egui::Label::new(rich_text)
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        );
+                        if (cell_response | label_response).clicked() {
+                            row_clicked = true;
+                        }
+                    });
+                }
+
+                if row_clicked {
+                    response.selected_index = Some(condition_index);
+                    response.selected_group_index =
+                        clamp_editor_index(Some(0), condition.form_groups.len());
+                }
+            });
+        });
 }
 
 pub(crate) fn draw_condition_editor_selected_condition(

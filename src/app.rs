@@ -191,8 +191,10 @@ enum AnalysisJobStatus {
     Idle,
     RunningAnalysis { job_id: String },
     RunningExport { job_id: String },
-    Succeeded { summary: String },
-    Failed { summary: String },
+    AnalysisSucceeded { summary: String },
+    ExportSucceeded { summary: String },
+    AnalysisFailed { summary: String },
+    ExportFailed { summary: String },
 }
 
 /// `current_job` が無いときの [`AnalysisRuntimeState`] のみを退避する（`Receiver` は非 `Clone` のため）。
@@ -232,7 +234,7 @@ impl AnalysisRuntimeState {
             Err(error) => Self {
                 runtime: None,
                 current_job: None,
-                status: AnalysisJobStatus::Failed { summary: error },
+                status: AnalysisJobStatus::AnalysisFailed { summary: error },
                 last_warnings: Vec::new(),
                 warning_window_open: false,
                 last_export_context: None,
@@ -246,8 +248,10 @@ impl AnalysisRuntimeState {
             AnalysisJobStatus::Idle => "分析待機中".to_string(),
             AnalysisJobStatus::RunningAnalysis { job_id } => format!("分析実行中: {job_id}"),
             AnalysisJobStatus::RunningExport { job_id } => format!("CSV 保存中: {job_id}"),
-            AnalysisJobStatus::Succeeded { summary } => format!("分析成功: {summary}"),
-            AnalysisJobStatus::Failed { summary } => format!("分析失敗: {summary}"),
+            AnalysisJobStatus::AnalysisSucceeded { summary } => format!("分析成功: {summary}"),
+            AnalysisJobStatus::ExportSucceeded { summary } => format!("CSV 保存成功: {summary}"),
+            AnalysisJobStatus::AnalysisFailed { summary } => format!("分析失敗: {summary}"),
+            AnalysisJobStatus::ExportFailed { summary } => format!("CSV 保存失敗: {summary}"),
         }
     }
 
@@ -498,6 +502,7 @@ pub(crate) struct App {
     analysis_process_host: Box<dyn AnalysisProcessHost>,
     pub(crate) logger: Box<dyn AppLogger>,
     records_source_label: String,
+    analysis_db_change_notice: Option<String>,
     db_viewer_state: DbViewerState,
     analysis_request_state: AnalysisRequestState,
     analysis_runtime_state: AnalysisRuntimeState,
@@ -524,6 +529,7 @@ impl App {
             analysis_process_host: Box::new(ThreadAnalysisProcessHost),
             logger: Box::new(StderrAppLogger),
             records_source_label: "分析結果なし".to_string(),
+            analysis_db_change_notice: None,
             db_viewer_state: DbViewerState::new(default_db_path),
             analysis_request_state,
             analysis_runtime_state: AnalysisRuntimeState::from_runtime(runtime),
@@ -594,6 +600,7 @@ impl App {
     fn replace_records(&mut self, records: Vec<AnalysisRecord>, source_label: String) {
         self.core.all_records = records;
         self.records_source_label = source_label;
+        self.analysis_db_change_notice = None;
         self.db_viewer_state.reset_loaded_state();
         self.core.filter_options = build_filter_options(&self.core.all_records);
         self.core.selected_filter_values.clear();
@@ -609,6 +616,28 @@ impl App {
         self.error_message = None;
         self.annotation_editor_state.status_message = None;
         self.annotation_editor_state.status_is_error = false;
+    }
+
+    fn set_current_analysis_db_path(&mut self, db_path: PathBuf) -> bool {
+        if self.db_viewer_state.db_path == db_path {
+            return false;
+        }
+
+        let notice = if self.records_source_label.starts_with("分析結果:") {
+            format!(
+                "分析 DB を切り替えました。表示中の分析結果は旧 DB の可能性があります。再分析を実行してください。 ({})",
+                db_path.display()
+            )
+        } else {
+            format!("分析 DB を切り替えました: {}", db_path.display())
+        };
+
+        self.db_viewer_state.db_path = db_path.clone();
+        self.db_viewer_state.reset_loaded_state();
+        self.analysis_runtime_state.last_export_context = None;
+        app_analysis_job::invalidate_session_analysis_cache(self);
+        self.analysis_db_change_notice = Some(notice);
+        true
     }
 
     fn apply_selection_change(&mut self, change: SelectionChange) -> bool {
@@ -968,8 +997,7 @@ impl App {
             .pending_switch_db_path
             .clone()
             .ok_or_else(|| "現在 DB に設定できる生成済み DB がありません".to_string())?;
-        self.db_viewer_state.db_path = db_path.clone();
-        self.db_viewer_state.reset_loaded_state();
+        self.set_current_analysis_db_path(db_path.clone());
         self.builder_request_state.analysis_db_path = db_path.clone();
         self.builder_runtime_state.pending_switch_db_path = None;
         self.builder_runtime_state.status = BuilderJobStatus::Succeeded {

@@ -44,6 +44,8 @@ pub(crate) struct FilterConfigDocument {
 pub(crate) struct ConditionEditorItem {
     #[serde(default)]
     pub(crate) condition_id: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) skip: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) categories: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,6 +318,10 @@ fn build_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(temp_name)
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn sanitize_optional_string(value: &mut Option<String>) {
     if let Some(text) = value.as_mut() {
         *text = text.trim().to_string();
@@ -457,6 +463,7 @@ fn legacy_token_clause_used(condition: &ConditionEditorItem) -> bool {
 }
 
 fn remove_condition_schema_keys_from_extra_fields(condition: &mut ConditionEditorItem) {
+    condition.extra_fields.remove("skip");
     condition.extra_fields.remove("forms");
     condition.extra_fields.remove("form_match_logic");
     condition.extra_fields.remove("search_scope");
@@ -790,6 +797,46 @@ mod tests {
         assert_eq!(condition.text_groups.len(), 1);
         assert_eq!(condition.text_groups[0].texts, vec!["別表第一"]);
         assert_eq!(condition.text_groups[0].match_logic.as_deref(), Some("or"));
+
+        fs::remove_file(&path).expect("temp file should be removable");
+    }
+
+    #[test]
+    fn skip_flag_round_trip_save_and_reload() {
+        let path = std::env::temp_dir().join(format!(
+            "condition-editor-skip-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let document = FilterConfigDocument {
+            cooccurrence_conditions: vec![
+                ConditionEditorItem {
+                    condition_id: "skip_me".to_string(),
+                    skip: true,
+                    forms: vec!["term".to_string()],
+                    ..Default::default()
+                },
+                ConditionEditorItem {
+                    condition_id: "keep_me".to_string(),
+                    forms: vec!["other".to_string()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        save_condition_document_atomic(&path, &document).expect("document should save");
+        let saved_text = fs::read_to_string(&path).expect("saved document should be readable");
+        assert!(saved_text.contains(r#""skip": true"#));
+        assert!(!saved_text.contains(r#""skip": false"#));
+
+        let (loaded, _) = load_condition_document(&path).expect("document should load");
+        assert_eq!(loaded.cooccurrence_conditions.len(), 2);
+        assert!(loaded.cooccurrence_conditions[0].skip);
+        assert!(!loaded.cooccurrence_conditions[1].skip);
 
         fs::remove_file(&path).expect("temp file should be removable");
     }

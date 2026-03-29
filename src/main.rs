@@ -8,6 +8,7 @@ mod app;
 mod app_host;
 mod app_logger;
 mod condition_editor;
+mod condition_editor_filter;
 mod condition_editor_view;
 mod csv_loader;
 mod db;
@@ -22,6 +23,7 @@ mod model;
 mod tagged_text;
 mod ui_helpers;
 mod viewer_core;
+mod viewer_export;
 
 use crate::app::App;
 use crate::app_host::{apply_host_startup_effects, build_native_options, APP_WINDOW_TITLE};

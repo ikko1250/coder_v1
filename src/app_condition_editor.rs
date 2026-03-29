@@ -10,7 +10,11 @@ use super::app_analysis_job;
 use super::App;
 use crate::condition_editor::{
     build_default_condition_item, load_condition_document, save_condition_document_atomic,
-    ConditionDocumentLoadInfo, FilterConfigDocument,
+    ConditionDocumentLoadInfo, ConditionEditorItem, FilterConfigDocument,
+};
+use crate::condition_editor_filter::{
+    build_condition_list_filter_options, condition_matches_list_filters,
+    normalize_condition_list_filter_search_text, ConditionListFilterColumn,
 };
 use crate::condition_editor_view::{
     draw_condition_editor_confirm_overlay as render_condition_editor_confirm_overlay,
@@ -18,14 +22,19 @@ use crate::condition_editor_view::{
     draw_condition_editor_global_settings as render_condition_editor_global_settings,
     draw_condition_editor_header_panel as render_condition_editor_header_panel,
     draw_condition_editor_list_panel as render_condition_editor_list_panel,
+    draw_condition_editor_skip_warning_overlay as render_condition_editor_skip_warning_overlay,
     draw_condition_editor_selected_condition as render_condition_editor_selected_condition,
     ConditionEditorDetailResponse, ConditionEditorFooterResponse, ConditionEditorHeaderResponse,
-    ConditionEditorListResponse, ConfirmOverlayResponse,
+    ConditionEditorListResponse, ConfirmOverlayResponse, SkipWarningOverlayResponse,
 };
+use crate::model::FilterOption;
 use eframe::egui;
 use egui::{Color32, RichText, ScrollArea, Ui};
 use egui_extras::{Size, StripBuilder};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
+
+const CONDITION_EDITOR_LIST_PANEL_WIDTH: f32 = 560.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ConditionEditorConfirmAction {
@@ -38,6 +47,14 @@ pub(super) enum ConditionEditorConfirmAction {
 enum ConditionEditorModalResponse {
     Continue,
     Cancel,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ConditionEditorSkipWarning {
+    target_indices: Vec<usize>,
+    target_condition_ids: Vec<String>,
+    immediate_referrer_ids: Vec<String>,
+    cascade_indices: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -53,7 +70,8 @@ struct ConditionEditorCommandDraft {
     should_add_condition: bool,
     should_delete_condition: Option<usize>,
     close_requested: bool,
-    modal_response: Option<ConditionEditorModalResponse>,
+    confirm_modal_response: Option<ConditionEditorModalResponse>,
+    skip_warning_response: Option<SkipWarningOverlayResponse>,
     select_clicked: bool,
 }
 
@@ -64,7 +82,21 @@ struct ConditionEditorWindowInputs {
     resolved_path_label: String,
     loaded_path_label: String,
     current_confirm_action: Option<ConditionEditorConfirmAction>,
+    current_skip_warning: Option<ConditionEditorSkipWarning>,
     panel_fill: Color32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ConditionEditorListPanelFilterInputs {
+    active_filter_column: ConditionListFilterColumn,
+    active_filter_count: usize,
+    filtered_indices: Vec<usize>,
+    total_count: usize,
+    matching_options: Vec<FilterOption>,
+    selected_non_matching_options: Vec<FilterOption>,
+    active_values: Vec<(ConditionListFilterColumn, String)>,
+    candidate_query: String,
+    has_any_options: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -78,10 +110,14 @@ pub(super) struct ConditionEditorState {
     selected_index: Option<usize>,
     selected_group_index: Option<usize>,
     projected_legacy_condition_count: usize,
+    list_active_filter_column: ConditionListFilterColumn,
+    list_selected_filter_values: HashMap<ConditionListFilterColumn, BTreeSet<String>>,
+    list_filter_candidate_queries: HashMap<ConditionListFilterColumn, String>,
     pub(super) status_message: Option<String>,
     pub(super) status_is_error: bool,
     pub(super) is_dirty: bool,
     confirm_action: Option<ConditionEditorConfirmAction>,
+    pending_skip_warning: Option<ConditionEditorSkipWarning>,
 }
 
 pub(super) fn focus_condition_editor_viewport(_app: &App, ctx: &egui::Context) {
@@ -130,10 +166,14 @@ fn apply_condition_editor_loaded_bundle(
         app.condition_editor_state.selected_index,
     );
     app.condition_editor_state.projected_legacy_condition_count = projected_count;
+    app.condition_editor_state.list_active_filter_column = ConditionListFilterColumn::default();
+    app.condition_editor_state.list_selected_filter_values.clear();
+    app.condition_editor_state.list_filter_candidate_queries.clear();
     app.condition_editor_state.status_message = Some(final_status_message);
     app.condition_editor_state.status_is_error = false;
     app.condition_editor_state.is_dirty = false;
     app.condition_editor_state.confirm_action = None;
+    app.condition_editor_state.pending_skip_warning = None;
 }
 
 fn load_condition_editor_from_path(
@@ -260,6 +300,157 @@ fn mark_condition_editor_dirty(app: &mut App) {
     app.condition_editor_state.status_is_error = false;
 }
 
+fn condition_reference_ids(condition: &ConditionEditorItem) -> impl Iterator<Item = &str> + '_ {
+    condition
+        .required_condition_ids_all
+        .iter()
+        .chain(condition.required_condition_ids_any.iter())
+        .chain(condition.excluded_condition_ids_any.iter())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+fn build_condition_reverse_reference_map(
+    document: &FilterConfigDocument,
+) -> HashMap<String, Vec<usize>> {
+    let mut reverse_map: HashMap<String, Vec<usize>> = HashMap::new();
+    for (condition_index, condition) in document.cooccurrence_conditions.iter().enumerate() {
+        for referenced_condition_id in condition_reference_ids(condition) {
+            reverse_map
+                .entry(referenced_condition_id.to_string())
+                .or_default()
+                .push(condition_index);
+        }
+    }
+    reverse_map
+}
+
+fn build_condition_skip_warning(
+    document: &FilterConfigDocument,
+    target_indices: &[usize],
+) -> Option<ConditionEditorSkipWarning> {
+    let reverse_reference_map = build_condition_reverse_reference_map(document);
+    let mut target_indices_set = BTreeSet::new();
+    let mut target_condition_ids = Vec::new();
+    let mut immediate_referrer_ids = BTreeSet::new();
+    let mut cascade_indices = BTreeSet::new();
+    let mut queued_condition_ids = BTreeSet::new();
+    let mut queue = VecDeque::new();
+
+    for &target_index in target_indices {
+        let Some(condition) = document.cooccurrence_conditions.get(target_index) else {
+            continue;
+        };
+        target_indices_set.insert(target_index);
+        cascade_indices.insert(target_index);
+        let condition_id = condition.condition_id.trim();
+        if condition_id.is_empty() {
+            continue;
+        }
+        target_condition_ids.push(condition_id.to_string());
+        if queued_condition_ids.insert(condition_id.to_string()) {
+            queue.push_back(condition_id.to_string());
+        }
+        if let Some(referrer_indices) = reverse_reference_map.get(condition_id) {
+            for &referrer_index in referrer_indices {
+                if target_indices_set.contains(&referrer_index) {
+                    continue;
+                }
+                if let Some(referrer) = document.cooccurrence_conditions.get(referrer_index) {
+                    let referrer_id = referrer.condition_id.trim();
+                    if !referrer_id.is_empty() {
+                        immediate_referrer_ids.insert(referrer_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if immediate_referrer_ids.is_empty() {
+        return None;
+    }
+
+    while let Some(condition_id) = queue.pop_front() {
+        let Some(referrer_indices) = reverse_reference_map.get(&condition_id) else {
+            continue;
+        };
+        for &referrer_index in referrer_indices {
+            if cascade_indices.insert(referrer_index) {
+                if let Some(referrer) = document.cooccurrence_conditions.get(referrer_index) {
+                    let referrer_id = referrer.condition_id.trim();
+                    if !referrer_id.is_empty()
+                        && queued_condition_ids.insert(referrer_id.to_string())
+                    {
+                        queue.push_back(referrer_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Some(ConditionEditorSkipWarning {
+        target_indices: target_indices_set.into_iter().collect(),
+        target_condition_ids,
+        immediate_referrer_ids: immediate_referrer_ids.into_iter().collect(),
+        cascade_indices: cascade_indices.into_iter().collect(),
+    })
+}
+
+fn apply_condition_skip_change(
+    app: &mut App,
+    condition_indices: &[usize],
+    skip: bool,
+    status_message: String,
+) {
+    let mut changed = false;
+    if let Some(document) = app.condition_editor_state.document.as_mut() {
+        for &condition_index in condition_indices {
+            let Some(condition) = document.cooccurrence_conditions.get_mut(condition_index) else {
+                continue;
+            };
+            if condition.skip != skip {
+                condition.skip = skip;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        mark_condition_editor_dirty(app);
+        app.condition_editor_state.status_message = Some(status_message);
+        app.condition_editor_state.status_is_error = false;
+    }
+}
+
+fn request_condition_skip_toggle(app: &mut App, condition_index: usize, skip: bool) {
+    if !skip {
+        apply_condition_skip_change(
+            app,
+            &[condition_index],
+            false,
+            "condition のスキップを解除しました。".to_string(),
+        );
+        app.condition_editor_state.pending_skip_warning = None;
+        return;
+    }
+
+    let warning = app
+        .condition_editor_state
+        .document
+        .as_ref()
+        .and_then(|document| build_condition_skip_warning(document, &[condition_index]));
+    if let Some(warning) = warning {
+        app.condition_editor_state.pending_skip_warning = Some(warning);
+        return;
+    }
+
+    apply_condition_skip_change(
+        app,
+        &[condition_index],
+        true,
+        "condition をスキップ対象にしました。".to_string(),
+    );
+}
+
 fn condition_editor_selection_draft(app: &App) -> ConditionEditorSelectionDraft {
     ConditionEditorSelectionDraft {
         requested_selection: app.condition_editor_state.selected_index,
@@ -286,6 +477,7 @@ fn condition_editor_window_inputs(app: &App, ctx: &egui::Context) -> ConditionEd
         resolved_path_label,
         loaded_path_label,
         current_confirm_action: app.condition_editor_state.confirm_action.clone(),
+        current_skip_warning: app.condition_editor_state.pending_skip_warning.clone(),
         panel_fill: ctx.style().visuals.panel_fill,
     }
 }
@@ -386,8 +578,12 @@ fn draw_condition_editor_body_panel(
     command_draft: &mut ConditionEditorCommandDraft,
 ) {
     let panel_fill = ui.style().visuals.panel_fill;
+    sync_condition_editor_selection_with_filters(app);
+    selection_draft.requested_selection = app.condition_editor_state.selected_index;
+    selection_draft.requested_group_selection = app.condition_editor_state.selected_group_index;
+    let list_filter_inputs = build_condition_editor_list_panel_filter_inputs(app);
     StripBuilder::new(ui)
-        .size(Size::exact(340.0))
+        .size(Size::exact(CONDITION_EDITOR_LIST_PANEL_WIDTH))
         .size(Size::remainder())
         .horizontal(|mut strip| {
             strip.cell(|ui| {
@@ -396,8 +592,25 @@ fn draw_condition_editor_body_panel(
                     can_modify,
                     app.condition_editor_state.document.as_ref(),
                     selection_draft.requested_selection,
+                    &list_filter_inputs.filtered_indices,
+                    list_filter_inputs.total_count,
+                    list_filter_inputs.active_filter_column,
+                    list_filter_inputs.active_filter_count,
+                    &list_filter_inputs.matching_options,
+                    &list_filter_inputs.selected_non_matching_options,
+                    app.condition_editor_state
+                        .list_selected_filter_values
+                        .get(&list_filter_inputs.active_filter_column),
+                    &list_filter_inputs.active_values,
+                    &list_filter_inputs.candidate_query,
+                    list_filter_inputs.has_any_options,
                 );
-                apply_condition_editor_list_response(selection_draft, command_draft, list_response);
+                apply_condition_editor_list_response(
+                    app,
+                    selection_draft,
+                    command_draft,
+                    list_response,
+                );
             });
 
             strip.cell(|ui| {
@@ -411,6 +624,117 @@ fn draw_condition_editor_body_panel(
                 );
             });
         });
+}
+
+fn build_condition_editor_list_panel_filter_inputs(
+    app: &App,
+) -> ConditionEditorListPanelFilterInputs {
+    let Some(document) = app.condition_editor_state.document.as_ref() else {
+        return ConditionEditorListPanelFilterInputs::default();
+    };
+
+    let filtered_indices = condition_editor_filtered_indices(app);
+    let active_filter_column = app.condition_editor_state.list_active_filter_column;
+    let filter_options = build_condition_list_filter_options(&document.cooccurrence_conditions);
+    let options = filter_options
+        .get(&active_filter_column)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let selected_values = app
+        .condition_editor_state
+        .list_selected_filter_values
+        .get(&active_filter_column);
+    let candidate_query = app
+        .condition_editor_state
+        .list_filter_candidate_queries
+        .get(&active_filter_column)
+        .cloned()
+        .unwrap_or_default();
+    let normalized_query = normalize_condition_list_filter_search_text(&candidate_query);
+
+    let mut matching_options = Vec::new();
+    let mut selected_non_matching_options = Vec::new();
+    for option in options {
+        let is_selected = selected_values.is_some_and(|values| values.contains(&option.value));
+        let matches_query = normalized_query.is_empty()
+            || normalize_condition_list_filter_search_text(&option.value)
+                .contains(&normalized_query);
+
+        if matches_query {
+            matching_options.push(option.clone());
+        } else if is_selected {
+            selected_non_matching_options.push(option.clone());
+        }
+    }
+
+    let active_values = app
+        .condition_editor_state
+        .list_selected_filter_values
+        .iter()
+        .flat_map(|(column, values)| {
+            values
+                .iter()
+                .cloned()
+                .map(|value| (*column, value))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    ConditionEditorListPanelFilterInputs {
+        active_filter_column,
+        active_filter_count: app
+            .condition_editor_state
+            .list_selected_filter_values
+            .values()
+            .map(BTreeSet::len)
+            .sum(),
+        filtered_indices,
+        total_count: document.cooccurrence_conditions.len(),
+        matching_options,
+        selected_non_matching_options,
+        active_values,
+        candidate_query,
+        has_any_options: !options.is_empty(),
+    }
+}
+
+fn condition_editor_filtered_indices(app: &App) -> Vec<usize> {
+    let Some(document) = app.condition_editor_state.document.as_ref() else {
+        return Vec::new();
+    };
+
+    document
+        .cooccurrence_conditions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, condition)| {
+            condition_matches_list_filters(
+                condition,
+                &app.condition_editor_state.list_selected_filter_values,
+            )
+            .then_some(index)
+        })
+        .collect()
+}
+
+fn sync_condition_editor_selection_with_filters(app: &mut App) {
+    let filtered_indices = condition_editor_filtered_indices(app);
+    let current_selection = app.condition_editor_state.selected_index;
+    let current_group_selection = app.condition_editor_state.selected_group_index;
+    let next_selection = match (current_selection, filtered_indices.first()) {
+        (_, None) => None,
+        (Some(selected_index), Some(_))
+            if filtered_indices.iter().any(|index| *index == selected_index) =>
+        {
+            Some(selected_index)
+        }
+        (_, Some(first_visible)) => Some(*first_visible),
+    };
+
+    let next_group_selection =
+        clamp_condition_editor_group_selection(app, current_group_selection, next_selection);
+    app.condition_editor_state.selected_index = next_selection;
+    app.condition_editor_state.selected_group_index = next_group_selection;
 }
 
 fn draw_condition_editor_detail_panel(
@@ -532,6 +856,26 @@ fn condition_editor_confirm_message(confirm_action: &ConditionEditorConfirmActio
             "未保存の変更があります。次の条件 JSON を開くと変更は破棄されます。\n{}",
             path.display()
         ),
+    }
+}
+
+fn condition_editor_skip_warning_message(skip_warning: &ConditionEditorSkipWarning) -> String {
+    let target_ids = skip_warning.target_condition_ids.join(", ");
+    let referrer_ids = skip_warning.immediate_referrer_ids.join(", ");
+    let cascade_only_count = skip_warning
+        .cascade_indices
+        .len()
+        .saturating_sub(skip_warning.target_indices.len());
+
+    if cascade_only_count > 0 {
+        format!(
+            "condition_id [{target_ids}] は他の condition_id から参照されています。\n参照元: {referrer_ids}\n無視して選択中の condition だけをスキップするか、参照元連鎖を含む {} 件を一括スキップするか選択してください。",
+            skip_warning.cascade_indices.len()
+        )
+    } else {
+        format!(
+            "condition_id [{target_ids}] は他の condition_id から参照されています。\n参照元: {referrer_ids}\n無視して選択中の condition だけをスキップするか、参照元も一括スキップするか選択してください。"
+        )
     }
 }
 
@@ -686,14 +1030,22 @@ fn apply_condition_editor_confirm_overlay_response(
     command_draft: &mut ConditionEditorCommandDraft,
     response: Option<ConfirmOverlayResponse>,
 ) {
-    command_draft.modal_response = match response {
+    command_draft.confirm_modal_response = match response {
         Some(ConfirmOverlayResponse::Continue) => Some(ConditionEditorModalResponse::Continue),
         Some(ConfirmOverlayResponse::Cancel) => Some(ConditionEditorModalResponse::Cancel),
-        None => command_draft.modal_response,
+        None => command_draft.confirm_modal_response,
     };
 }
 
+fn apply_condition_editor_skip_warning_overlay_response(
+    command_draft: &mut ConditionEditorCommandDraft,
+    response: Option<SkipWarningOverlayResponse>,
+) {
+    command_draft.skip_warning_response = response.or(command_draft.skip_warning_response);
+}
+
 fn apply_condition_editor_list_response(
+    app: &mut App,
     selection_draft: &mut ConditionEditorSelectionDraft,
     command_draft: &mut ConditionEditorCommandDraft,
     list_response: ConditionEditorListResponse,
@@ -701,9 +1053,77 @@ fn apply_condition_editor_list_response(
     if list_response.add_clicked {
         command_draft.should_add_condition = true;
     }
+    let response_column = app.condition_editor_state.list_active_filter_column;
+    if let Some(updated_query) = list_response.updated_query {
+        if updated_query.is_empty() {
+            app.condition_editor_state
+                .list_filter_candidate_queries
+                .remove(&response_column);
+        } else {
+            app.condition_editor_state
+                .list_filter_candidate_queries
+                .insert(response_column, updated_query);
+        }
+    }
+    if let Some(selected_column) = list_response.selected_filter_column {
+        app.condition_editor_state.list_active_filter_column = selected_column;
+    }
+    if list_response.clear_column_clicked {
+        app.condition_editor_state
+            .list_selected_filter_values
+            .remove(&app.condition_editor_state.list_active_filter_column);
+    }
+    if list_response.clear_all_clicked {
+        app.condition_editor_state.list_selected_filter_values.clear();
+    }
+    for (value, selected) in list_response.toggled_filter_options {
+        let active_column = app.condition_editor_state.list_active_filter_column;
+        let mut should_remove_entry = false;
+        {
+            let selected_values = app
+                .condition_editor_state
+                .list_selected_filter_values
+                .entry(active_column)
+                .or_default();
+            if selected {
+                selected_values.insert(value);
+            } else {
+                selected_values.remove(&value);
+                should_remove_entry = selected_values.is_empty();
+            }
+        }
+        if should_remove_entry {
+            app.condition_editor_state
+                .list_selected_filter_values
+                .remove(&active_column);
+        }
+    }
+    for (column, value) in list_response.removed_active_filter_values {
+        let mut should_remove_entry = false;
+        if let Some(selected_values) = app
+            .condition_editor_state
+            .list_selected_filter_values
+            .get_mut(&column)
+        {
+            selected_values.remove(&value);
+            should_remove_entry = selected_values.is_empty();
+        }
+        if should_remove_entry {
+            app.condition_editor_state
+                .list_selected_filter_values
+                .remove(&column);
+        }
+    }
+    for (condition_index, skip) in list_response.toggled_skip {
+        request_condition_skip_toggle(app, condition_index, skip);
+    }
     if let Some(selected_index) = list_response.selected_index {
         selection_draft.requested_selection = Some(selected_index);
         selection_draft.requested_group_selection = list_response.selected_group_index;
+    } else {
+        sync_condition_editor_selection_with_filters(app);
+        selection_draft.requested_selection = app.condition_editor_state.selected_index;
+        selection_draft.requested_group_selection = app.condition_editor_state.selected_group_index;
     }
 }
 
@@ -782,9 +1202,9 @@ fn apply_condition_editor_modal_response(
     app: &mut App,
     ctx: &egui::Context,
     viewport_id: egui::ViewportId,
-    modal_response: Option<ConditionEditorModalResponse>,
+    confirm_modal_response: Option<ConditionEditorModalResponse>,
 ) {
-    let Some(response) = modal_response else {
+    let Some(response) = confirm_modal_response else {
         return;
     };
 
@@ -820,6 +1240,44 @@ fn apply_condition_editor_modal_response(
     }
 }
 
+fn apply_condition_editor_skip_warning_response(
+    app: &mut App,
+    skip_warning_response: Option<SkipWarningOverlayResponse>,
+) {
+    let Some(response) = skip_warning_response else {
+        return;
+    };
+
+    let Some(skip_warning) = app.condition_editor_state.pending_skip_warning.clone() else {
+        return;
+    };
+
+    match response {
+        SkipWarningOverlayResponse::Ignore => {
+            apply_condition_skip_change(
+                app,
+                &skip_warning.target_indices,
+                true,
+                "condition をスキップ対象にしました。参照元はそのまま残しています。".to_string(),
+            );
+        }
+        SkipWarningOverlayResponse::Cascade => {
+            apply_condition_skip_change(
+                app,
+                &skip_warning.cascade_indices,
+                true,
+                format!(
+                    "参照元を含む {} 件の condition をスキップ対象にしました。",
+                    skip_warning.cascade_indices.len()
+                ),
+            );
+        }
+        SkipWarningOverlayResponse::Cancel => {}
+    }
+
+    app.condition_editor_state.pending_skip_warning = None;
+}
+
 fn apply_condition_editor_command_draft(
     app: &mut App,
     ctx: &egui::Context,
@@ -834,8 +1292,17 @@ fn apply_condition_editor_command_draft(
     apply_condition_editor_delete_request(app, command_draft.should_delete_condition);
 
     // §12.0: モーダル応答があるフレームでは save / reload / pick と競合させない。
-    if command_draft.modal_response.is_some() {
-        apply_condition_editor_modal_response(app, ctx, viewport_id, command_draft.modal_response);
+    if command_draft.confirm_modal_response.is_some() {
+        apply_condition_editor_modal_response(
+            app,
+            ctx,
+            viewport_id,
+            command_draft.confirm_modal_response,
+        );
+        return None;
+    }
+    if command_draft.skip_warning_response.is_some() {
+        apply_condition_editor_skip_warning_response(app, command_draft.skip_warning_response);
         return None;
     }
 
@@ -913,6 +1380,10 @@ pub(super) fn draw_condition_editor_window(app: &mut App, ctx: &egui::Context) {
             let message = condition_editor_confirm_message(confirm_action);
             let response = render_condition_editor_confirm_overlay(viewport_ctx, &message);
             apply_condition_editor_confirm_overlay_response(&mut command_draft, response);
+        } else if let Some(skip_warning) = window_inputs.current_skip_warning.as_ref() {
+            let message = condition_editor_skip_warning_message(skip_warning);
+            let response = render_condition_editor_skip_warning_overlay(viewport_ctx, &message);
+            apply_condition_editor_skip_warning_overlay_response(&mut command_draft, response);
         }
     });
 

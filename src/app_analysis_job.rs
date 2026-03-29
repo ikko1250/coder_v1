@@ -6,19 +6,23 @@ use super::{
 };
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, resolve_filter_config_path,
-    AnalysisDbBuildRequest, AnalysisDbBuildSuccess, AnalysisExportRequest, AnalysisExportSuccess,
-    AnalysisJobEvent, AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisMeta,
+    AnalysisDbBuildRequest, AnalysisDbBuildSuccess, AnalysisExportSuccess, AnalysisJobEvent,
+    AnalysisJobFailure, AnalysisJobRequest, AnalysisJobSuccess, AnalysisMeta,
     AnalysisRuntimeConfig, AnalysisWarningMessage,
 };
 use crate::analysis_session_cache::{
     build_session_cache_key, AnalysisResultSnapshot, AnalysisSessionCacheKey,
 };
+use crate::model::{AnalysisRecord, AnalysisUnit};
 use crate::viewer_core::{ViewerCoreCloseInput, ViewerCoreMessage};
+use crate::viewer_export::write_visible_records_csv;
 use eframe::egui::{self, RichText, ScrollArea};
 use egui::TextWrapMode;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::mpsc::TryRecvError;
-use std::time::Duration;
+use std::sync::mpsc::{self, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Default)]
 pub(super) struct AnalysisJobPollOutput {
@@ -33,7 +37,7 @@ pub(super) fn try_cleanup_analysis_jobs(app: &mut App) {
     };
 
     if let Err(error) = cleanup_job_directories(&runtime.jobs_root) {
-        app.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary: error };
+        app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisFailed { summary: error };
     }
 }
 
@@ -190,7 +194,7 @@ fn apply_session_cache_hit(app: &mut App, snapshot: &AnalysisResultSnapshot) -> 
         annotation_csv_path: snapshot.annotation_csv_path.clone(),
     });
     let summary = format!("前回結果を再表示（{}）", snapshot.status_summary);
-    app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisSucceeded { summary };
     app.logger
         .info("session analysis cache hit; skipped Python worker analyze request");
     let _ = app.apply_event(ViewerCoreMessage::ReplaceRecords {
@@ -205,23 +209,47 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
         return Err("別のジョブが既に実行中です".to_string());
     }
 
-    let runtime = app
+    let export_snapshot = build_visible_export_snapshot(app)?;
+    let job_id = build_local_job_id();
+    let request_job_id = job_id.clone();
+    let db_path = app.db_viewer_state.db_path.clone();
+    let filter_config_path = app
         .analysis_runtime_state
         .runtime
-        .clone()
-        .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
-    let export_context = app
-        .analysis_runtime_state
-        .last_export_context
-        .clone()
-        .ok_or_else(|| "保存対象の分析結果がありません".to_string())?;
-
-    let (job_id, receiver) = app.analysis_process_host.spawn_export_job(AnalysisExportRequest {
-        db_path: export_context.db_path,
-        filter_config_path: export_context.filter_config_path,
-        annotation_csv_path: export_context.annotation_csv_path,
-        output_csv_path,
-        runtime,
+        .as_ref()
+        .map(|runtime| runtime.filter_config_path.clone())
+        .or_else(|| resolved_filter_config_path(app).ok())
+        .unwrap_or_default();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let started_at = current_timestamp_marker();
+        let started = Instant::now();
+        let result = write_visible_records_csv(&output_csv_path, &export_snapshot.records);
+        let finished_at = current_timestamp_marker();
+        let duration_seconds = started.elapsed().as_secs_f64();
+        let meta = build_synthetic_export_meta(
+            &request_job_id,
+            &export_snapshot,
+            &db_path,
+            &filter_config_path,
+            &output_csv_path,
+            &started_at,
+            &finished_at,
+            duration_seconds,
+            result.as_ref().err().map(String::as_str).unwrap_or(""),
+        );
+        let event = match result {
+            Ok(()) => AnalysisJobEvent::ExportCompleted(Ok(AnalysisExportSuccess {
+                meta,
+                output_csv_path,
+            })),
+            Err(message) => AnalysisJobEvent::ExportCompleted(Err(AnalysisJobFailure {
+                meta: Some(meta),
+                stderr: String::new(),
+                message,
+            })),
+        };
+        let _ = sender.send(event);
     });
 
     app.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
@@ -231,6 +259,114 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
     app.core.set_expected_job_id(job_id.clone());
     app.logger.info(&format!("export job started: {job_id}"));
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct VisibleExportSnapshot {
+    records: Vec<AnalysisRecord>,
+    analysis_unit: AnalysisUnit,
+    selected_paragraph_count: usize,
+    selected_sentence_count: usize,
+}
+
+fn build_visible_export_snapshot(app: &App) -> Result<VisibleExportSnapshot, String> {
+    let filtered_indices = app.core.filtered_indices.clone();
+    if filtered_indices.is_empty() {
+        return Err("保存対象の表示レコードがありません".to_string());
+    }
+
+    let records: Vec<AnalysisRecord> = filtered_indices
+        .iter()
+        .map(|&index| {
+            app.core
+                .all_records
+                .get(index)
+                .cloned()
+                .ok_or_else(|| format!("表示レコードの参照が不正です: index={index}"))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let Some(first_record) = records.first() else {
+        return Err("保存対象の表示レコードがありません".to_string());
+    };
+    let analysis_unit = first_record.analysis_unit;
+    if records
+        .iter()
+        .any(|record| record.analysis_unit != analysis_unit)
+    {
+        return Err("保存対象の表示レコードに paragraph / sentence が混在しています".to_string());
+    }
+
+    let selected_sentence_count = if analysis_unit == AnalysisUnit::Sentence {
+        records.len()
+    } else {
+        0
+    };
+    let selected_paragraph_count = if analysis_unit == AnalysisUnit::Paragraph {
+        records.len()
+    } else {
+        records
+            .iter()
+            .map(|record| record.paragraph_id.clone())
+            .collect::<BTreeSet<_>>()
+            .len()
+    };
+
+    Ok(VisibleExportSnapshot {
+        records,
+        analysis_unit,
+        selected_paragraph_count,
+        selected_sentence_count,
+    })
+}
+
+fn build_synthetic_export_meta(
+    job_id: &str,
+    snapshot: &VisibleExportSnapshot,
+    db_path: &std::path::Path,
+    filter_config_path: &std::path::Path,
+    output_csv_path: &std::path::Path,
+    started_at: &str,
+    finished_at: &str,
+    duration_seconds: f64,
+    error_summary: &str,
+) -> AnalysisMeta {
+    AnalysisMeta {
+        job_id: job_id.to_string(),
+        status: if error_summary.is_empty() {
+            "succeeded".to_string()
+        } else {
+            "failed".to_string()
+        },
+        started_at: started_at.to_string(),
+        finished_at: finished_at.to_string(),
+        duration_seconds,
+        db_path: db_path.display().to_string(),
+        filter_config_path: filter_config_path.display().to_string(),
+        output_csv_path: output_csv_path.display().to_string(),
+        analysis_unit: snapshot.analysis_unit,
+        target_paragraph_count: snapshot.selected_paragraph_count,
+        selected_paragraph_count: snapshot.selected_paragraph_count,
+        selected_sentence_count: snapshot.selected_sentence_count,
+        warning_messages: Vec::new(),
+        error_summary: error_summary.to_string(),
+    }
+}
+
+fn build_local_job_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("job-{millis}")
+}
+
+fn current_timestamp_marker() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
 }
 
 fn parse_builder_limit(limit_input: &str) -> Result<Option<usize>, String> {
@@ -402,7 +538,7 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                         };
                     }
                     app.core.clear_expected_job_id();
-                    handle_analysis_failure(app, failure);
+                    handle_export_failure(app, failure);
                     return AnalysisJobPollOutput {
                         core_event: None,
                         needs_repaint: true,
@@ -419,9 +555,10 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
         Ok(AnalysisJobEvent::BuildCompleted(_)) => {
             app.analysis_runtime_state.current_job = None;
             app.core.clear_expected_job_id();
-            app.analysis_runtime_state.status = AnalysisJobStatus::Failed {
-                summary: "想定外の builder 完了イベントを受信しました".to_string(),
-            };
+            set_failed_status_for_current_job(
+                app,
+                "想定外の builder 完了イベントを受信しました".to_string(),
+            );
             AnalysisJobPollOutput {
                 core_event: None,
                 needs_repaint: true,
@@ -431,9 +568,10 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
         Err(TryRecvError::Disconnected) => {
             app.analysis_runtime_state.current_job = None;
             app.core.clear_expected_job_id();
-            app.analysis_runtime_state.status = AnalysisJobStatus::Failed {
-                summary: "分析ジョブの完了通知を受け取れませんでした".to_string(),
-            };
+            set_failed_status_for_current_job(
+                app,
+                "分析ジョブの完了通知を受け取れませんでした".to_string(),
+            );
             app.logger
                 .error("analysis job channel disconnected while waiting for completion");
             AnalysisJobPollOutput {
@@ -513,7 +651,7 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> Viewer
         filter_config_path: PathBuf::from(&success.meta.filter_config_path),
         annotation_csv_path,
     });
-    app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded { summary };
+    app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisSucceeded { summary };
     app.logger
         .info(&format!("analysis job succeeded: {}", success.meta.job_id));
     ViewerCoreMessage::ReplaceRecords {
@@ -524,7 +662,7 @@ fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> Viewer
 
 fn handle_export_success(app: &mut App, success: AnalysisExportSuccess) {
     app.logger.info("export job succeeded");
-    app.analysis_runtime_state.status = AnalysisJobStatus::Succeeded {
+    app.analysis_runtime_state.status = AnalysisJobStatus::ExportSucceeded {
         summary: format!("CSV 保存完了: {}", success.output_csv_path.display()),
     };
     app.error_message = Some(format!(
@@ -566,8 +704,8 @@ fn handle_analysis_failure(app: &mut App, failure: AnalysisJobFailure) {
         .map(|meta| meta.warning_messages.clone())
         .unwrap_or_default();
     let summary = failure.message.clone();
-    app.analysis_runtime_state.status = AnalysisJobStatus::Failed { summary };
-    app.logger.error("analysis or export job failed");
+    app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisFailed { summary };
+    app.logger.error("analysis job failed");
     app.analysis_runtime_state.last_warnings = warnings;
     app.analysis_runtime_state.warning_window_open = false;
 
@@ -583,6 +721,40 @@ fn handle_analysis_failure(app: &mut App, failure: AnalysisJobFailure) {
         }
     }
     app.error_message = Some(error_message);
+}
+
+fn handle_export_failure(app: &mut App, failure: AnalysisJobFailure) {
+    let summary = failure.message.clone();
+    app.analysis_runtime_state.status = AnalysisJobStatus::ExportFailed { summary };
+    app.logger.error("export job failed");
+    app.analysis_runtime_state.warning_window_open = false;
+
+    let mut error_message = failure.message;
+    if !failure.stderr.is_empty() {
+        error_message.push_str("\n\nstderr:\n");
+        error_message.push_str(&failure.stderr);
+    }
+    if let Some(meta) = failure.meta {
+        if !meta.error_summary.trim().is_empty() {
+            error_message.push_str("\n\nmeta.errorSummary:\n");
+            error_message.push_str(&meta.error_summary);
+        }
+    }
+    app.error_message = Some(error_message);
+}
+
+fn set_failed_status_for_current_job(app: &mut App, summary: String) {
+    let is_export_status = matches!(
+        &app.analysis_runtime_state.status,
+        AnalysisJobStatus::RunningExport { .. }
+            | AnalysisJobStatus::ExportSucceeded { .. }
+            | AnalysisJobStatus::ExportFailed { .. }
+    );
+    app.analysis_runtime_state.status = if is_export_status {
+        AnalysisJobStatus::ExportFailed { summary }
+    } else {
+        AnalysisJobStatus::AnalysisFailed { summary }
+    };
 }
 
 fn warning_headline(warning: &AnalysisWarningMessage) -> String {

@@ -45,9 +45,7 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
 
         ui.horizontal_wrapped(|ui| {
             let can_start = app.analysis_runtime_state.runtime.is_some() && !app.is_any_job_running();
-            let can_export = app.analysis_runtime_state.runtime.is_some()
-                && !app.is_any_job_running()
-                && app.analysis_runtime_state.last_export_context.is_some();
+            let can_export = !app.is_any_job_running() && !app.core.filtered_indices.is_empty();
             let can_build = app.builder_runtime_state.runtime.is_some() && !app.is_any_job_running();
             let settings_enabled = !app.is_any_job_running();
             let python_label = app
@@ -113,7 +111,8 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
             }
 
             if ui
-                .add_enabled(can_export, egui::Button::new("CSV保存(全件)"))
+                .add_enabled(can_export, egui::Button::new("CSV保存(表示中)"))
+                .on_hover_text("現在一覧に表示中のレコードを、その並び順のまま保存します")
                 .clicked()
             {
                 if let Some(path) = app.file_dialog_host.pick_save_analysis_result_csv() {
@@ -175,7 +174,10 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
             ui.label(format!("Python: {python_label}"));
             ui.label(format!("Builder Python: {builder_python_label}"));
             if can_export {
-                ui.label("保存対象は直近分析結果の全件です");
+                ui.label("保存対象は画面に表示中のレコードです");
+            }
+            if let Some(notice) = app.analysis_db_change_notice.as_ref() {
+                ui.label(RichText::new(notice).color(Color32::from_rgb(180, 120, 20)));
             }
             if app.analysis_runtime_state.has_warning_details() && ui.button("警告詳細").clicked()
             {
@@ -196,7 +198,9 @@ fn analysis_status_color(ui: &Ui, status: &AnalysisJobStatus) -> Color32 {
         AnalysisJobStatus::RunningAnalysis { .. } | AnalysisJobStatus::RunningExport { .. } => {
             Color32::from_rgb(70, 130, 180)
         }
-        AnalysisJobStatus::Succeeded { .. } => Color32::from_rgb(70, 130, 70),
-        AnalysisJobStatus::Failed { .. } => Color32::from_rgb(200, 64, 64),
+        AnalysisJobStatus::AnalysisSucceeded { .. }
+        | AnalysisJobStatus::ExportSucceeded { .. } => Color32::from_rgb(70, 130, 70),
+        AnalysisJobStatus::AnalysisFailed { .. }
+        | AnalysisJobStatus::ExportFailed { .. } => Color32::from_rgb(200, 64, 64),
     }
 }
