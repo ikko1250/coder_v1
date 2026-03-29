@@ -15,9 +15,8 @@ class BuildGuiRecordsTest(unittest.TestCase):
             {
                 "paragraph_id": [101],
                 "document_id": [202],
-                "municipality_name": ["札幌市"],
-                "ordinance_or_rule": ["条例"],
-                "doc_type": [None],
+                "category1": ["札幌市"],
+                "category2": ["条例"],
                 "sentence_count": [3],
                 "paragraph_text": ["本文"],
                 "paragraph_text_tagged": ["<hit>本文</hit>"],
@@ -45,9 +44,8 @@ class BuildGuiRecordsTest(unittest.TestCase):
                 {
                     "paragraph_id": "101",
                     "document_id": "202",
-                    "municipality_name": "札幌市",
-                    "ordinance_or_rule": "条例",
-                    "doc_type": "",
+                    "category1": "札幌市",
+                    "category2": "条例",
                     "sentence_count": "3",
                     "paragraph_text": "本文",
                     "paragraph_text_tagged": "<hit>本文</hit>",

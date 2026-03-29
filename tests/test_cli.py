@@ -53,8 +53,8 @@ def build_test_db(db_path: Path) -> None:
             """
             CREATE TABLE analysis_documents (
                 document_id INTEGER,
-                municipality_name TEXT,
-                doc_type TEXT
+                category1 TEXT,
+                category2 TEXT
             )
             """
         )
@@ -172,8 +172,8 @@ def build_large_distance_test_db(db_path: Path) -> None:
             """
             CREATE TABLE analysis_documents (
                 document_id INTEGER,
-                municipality_name TEXT,
-                doc_type TEXT
+                category1 TEXT,
+                category2 TEXT
             )
             """
         )
@@ -246,8 +246,8 @@ def build_table_paragraph_test_db(db_path: Path) -> None:
             """
             CREATE TABLE analysis_documents (
                 document_id INTEGER,
-                municipality_name TEXT,
-                doc_type TEXT
+                category1 TEXT,
+                category2 TEXT
             )
             """
         )
@@ -318,8 +318,8 @@ def build_sentence_unit_empty_sentence_test_db(db_path: Path) -> None:
             """
             CREATE TABLE analysis_documents (
                 document_id INTEGER,
-                municipality_name TEXT,
-                doc_type TEXT
+                category1 TEXT,
+                category2 TEXT
             )
             """
         )
@@ -755,9 +755,13 @@ class CliContractTests(unittest.TestCase):
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(meta["status"], "failed")
             self.assertEqual(meta["jobId"], "metadata-failure-job")
-            self.assertEqual(len(meta["warningMessages"]), 1)
-            self.assertEqual(meta["warningMessages"][0]["code"], "sqlite_metadata_read_failed")
-            self.assertEqual(meta["warningMessages"][0]["queryName"], "paragraph_document_metadata")
+            warning_codes = [warning["code"] for warning in meta["warningMessages"]]
+            self.assertIn("sqlite_metadata_read_failed", warning_codes)
+            metadata_warning = next(
+                warning for warning in meta["warningMessages"]
+                if warning["code"] == "sqlite_metadata_read_failed"
+            )
+            self.assertEqual(metadata_warning["queryName"], "paragraph_document_metadata")
             self.assertIn("SQLite metadata read failed", meta["errorSummary"])
             self.assertIn("SQLite metadata read failed", stderr_buffer.getvalue())
 
@@ -798,7 +802,10 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(meta["jobId"], "success-job")
             self.assertEqual(meta["selectedParagraphCount"], 1)
             self.assertEqual(meta["outputCsvPath"], str(csv_path))
-            self.assertEqual(meta["warningMessages"], [])
+            self.assertEqual(
+                [warning["code"] for warning in meta["warningMessages"]],
+                ["legacy_schema_migrated"],
+            )
             self.assertEqual(stderr_buffer.getvalue(), "")
             self.assertIn('"status": "succeeded"', stdout_buffer.getvalue())
 
@@ -811,9 +818,8 @@ class CliContractTests(unittest.TestCase):
                 [
                     "paragraph_id",
                     "document_id",
-                    "municipality_name",
-                    "ordinance_or_rule",
-                    "doc_type",
+                    "category1",
+                    "category2",
                     "sentence_count",
                     "paragraph_text",
                     "paragraph_text_tagged",
@@ -834,7 +840,8 @@ class CliContractTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(rows[0]["paragraph_id"], "1")
-            self.assertEqual(rows[0]["municipality_name"], "テスト市")
+            self.assertEqual(rows[0]["category1"], "テスト市")
+            self.assertEqual(rows[0]["category2"], "条例")
             self.assertEqual(rows[0]["matched_condition_ids_text"], "suppress_area")
             self.assertEqual(rows[0]["matched_categories_text"], "概念:抑制区域")
             self.assertEqual(rows[0]["manual_annotation_count"], "0")
@@ -874,10 +881,9 @@ class CliContractTests(unittest.TestCase):
 
             payload = json.loads(stdout_buffer.getvalue())
             self.assertEqual(payload["meta"]["status"], "succeeded")
-            self.assertEqual(len(payload["meta"]["warningMessages"]), 1)
             self.assertEqual(
-                payload["meta"]["warningMessages"][0]["code"],
-                "annotation_duplicate_deduplicated",
+                {warning["code"] for warning in payload["meta"]["warningMessages"]},
+                {"legacy_schema_migrated", "annotation_duplicate_deduplicated"},
             )
             self.assertEqual(len(payload["records"]), 1)
             first_record = payload["records"][0]
@@ -1059,9 +1065,8 @@ class CliContractTests(unittest.TestCase):
                     "sentence_id",
                     "paragraph_id",
                     "document_id",
-                    "municipality_name",
-                    "ordinance_or_rule",
-                    "doc_type",
+                    "category1",
+                    "category2",
                     "sentence_no_in_paragraph",
                     "sentence_no_in_document",
                     "sentence_text",
@@ -1317,8 +1322,14 @@ class CliContractTests(unittest.TestCase):
             meta_path = output_dir / "meta.json"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(meta["status"], "succeeded")
-            self.assertEqual(len(meta["warningMessages"]), 1)
-            warning = meta["warningMessages"][0]
+            self.assertEqual(
+                {warning["code"] for warning in meta["warningMessages"]},
+                {"legacy_schema_migrated", "distance_match_fallback"},
+            )
+            warning = next(
+                warning for warning in meta["warningMessages"]
+                if warning["code"] == "distance_match_fallback"
+            )
             self.assertEqual(warning["code"], "distance_match_fallback")
             self.assertEqual(warning["conditionId"], "suppress_area")
             self.assertEqual(warning["requestedMode"], "auto-approx")
@@ -1358,7 +1369,11 @@ class CliContractTests(unittest.TestCase):
             meta_path = output_dir / "meta.json"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(meta["status"], "succeeded")
-            self.assertEqual(len(meta["warningMessages"]), 5)
+            self.assertEqual(len(meta["warningMessages"]), 6)
+            self.assertIn(
+                "legacy_schema_migrated",
+                [warning["code"] for warning in meta["warningMessages"]],
+            )
             first_warning = meta["warningMessages"][0]
             self.assertEqual(first_warning["code"], "condition_match_logic_defaulted")
             self.assertEqual(first_warning["scope"], "filter_config")

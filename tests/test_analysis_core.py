@@ -152,6 +152,36 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(config.distance_match_strict_safety_limit, 1000000)
         self.assertIn("condition_id", config.cooccurrence_conditions[0])
 
+    def test_load_filter_config_excludes_conditions_marked_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            filter_config_path = Path(tmp_dir) / "skip-conditions.json"
+            filter_config_path.write_text(
+                json.dumps(
+                    {
+                        "cooccurrence_conditions": [
+                            {
+                                "condition_id": "keep_me",
+                                "forms": ["抑制"],
+                            },
+                            {
+                                "condition_id": "skip_me",
+                                "skip": True,
+                                "forms": ["区域"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = analysis_core.load_filter_config(filter_config_path)
+
+        self.assertEqual(config.loaded_condition_count, 2)
+        self.assertEqual(
+            [condition["condition_id"] for condition in config.cooccurrence_conditions],
+            ["keep_me"],
+        )
+
     def test_condition_hit_result_defaults_to_empty_warning_messages(self) -> None:
         result = condition_model.ConditionHitResult(
             condition_hit_tokens_df=pl.DataFrame(schema={"paragraph_id": pl.Int64}),
@@ -187,6 +217,26 @@ class AnalysisCoreContractTests(unittest.TestCase):
         self.assertEqual(normalized_conditions[0].forms, ["抑制", "区域"])
         self.assertEqual(normalized_conditions[1].condition_id, "duplicate_2")
         self.assertEqual(normalized_conditions[1].categories, ["未分類"])
+
+    def test_normalize_cooccurrence_conditions_ignores_skipped_conditions(self) -> None:
+        normalized_conditions = condition_evaluator.normalize_cooccurrence_conditions(
+            [
+                {
+                    "condition_id": "keep_me",
+                    "forms": ["抑制"],
+                },
+                {
+                    "condition_id": "skip_me",
+                    "skip": True,
+                    "forms": ["区域"],
+                },
+            ]
+        )
+
+        self.assertEqual(
+            [condition.condition_id for condition in normalized_conditions],
+            ["keep_me"],
+        )
 
     def test_normalize_cooccurrence_conditions_result_reports_issues_without_breaking_legacy_output(self) -> None:
         raw_conditions = [
@@ -3142,9 +3192,8 @@ class AnalysisCoreContractTests(unittest.TestCase):
             {
                 "paragraph_id": [1],
                 "document_id": [10],
-                "municipality_name": ["テスト市"],
-                "ordinance_or_rule": ["条例"],
-                "doc_type": ["条例"],
+                "category1": ["テスト市"],
+                "category2": ["条例"],
                 "sentence_count": [1],
                 "paragraph_text": ["抑制区域を指定する。"],
                 "paragraph_text_tagged": ['[[HIT condition_ids="a" categories="b" groups="c"]]抑制区域[[/HIT]]を指定する。'],
@@ -3173,9 +3222,8 @@ class AnalysisCoreContractTests(unittest.TestCase):
             [
                 "paragraph_id",
                 "document_id",
-                "municipality_name",
-                "ordinance_or_rule",
-                "doc_type",
+                "category1",
+                "category2",
                 "sentence_count",
                 "paragraph_text",
                 "paragraph_text_tagged",
@@ -3203,9 +3251,8 @@ class AnalysisCoreContractTests(unittest.TestCase):
             schema={
                 "paragraph_id": pl.Int64,
                 "document_id": pl.Int64,
-                "municipality_name": pl.String,
-                "ordinance_or_rule": pl.String,
-                "doc_type": pl.String,
+                "category1": pl.String,
+                "category2": pl.String,
                 "sentence_count": pl.UInt32,
                 "paragraph_text": pl.String,
                 "paragraph_text_tagged": pl.String,
@@ -3228,7 +3275,6 @@ class AnalysisCoreContractTests(unittest.TestCase):
                     1,
                     10,
                     "テスト市",
-                    "条例",
                     "条例",
                     1,
                     "抑制区域を指定する。",

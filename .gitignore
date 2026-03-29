@@ -7,3 +7,4 @@ csv_highlight_viewer_rust.zip
 /.venv
 /.venv-win
 analysis_backend/__pycache__
+/docs
