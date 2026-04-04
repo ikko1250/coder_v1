@@ -12,13 +12,13 @@ from google import genai
 from google.genai import types
 
 
-def loadDotenv(dotenvPath: str) -> None:
-    if not os.path.exists(dotenvPath):
+def load_dotenv(dotenv_path: str) -> None:
+    if not os.path.exists(dotenv_path):
         return
 
-    with open(dotenvPath, encoding="utf-8") as dotenvFile:
-        for rawLine in dotenvFile:
-            line = rawLine.strip()
+    with open(dotenv_path, encoding="utf-8") as dotenv_file:
+        for raw_line in dotenv_file:
+            line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
 
@@ -32,7 +32,7 @@ DEFAULT_MODEL = "gemma-4-31b-it"
 DEFAULT_API_KEY_ENV = "GEMINI_API_KEY"
 
 
-def parseArgs() -> argparse.Namespace:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high)."
     )
@@ -57,19 +57,19 @@ def parseArgs() -> argparse.Namespace:
 
 
 def main() -> int:
-    args = parseArgs()
-    dotenvPath = os.path.join(os.path.dirname(__file__), ".env")
-    loadDotenv(dotenvPath)
+    args = parse_args()
+    dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
+    load_dotenv(dotenv_path)
 
-    apiKey = os.getenv(args.api_key_env, "").strip()
-    if not apiKey:
+    api_key = os.getenv(args.api_key_env, "").strip()
+    if not api_key:
         print(
             f"Error: {args.api_key_env} is not set. Add it to pdf_converter/.env or the environment.",
             file=sys.stderr,
         )
         return 1
 
-    client = genai.Client(api_key=apiKey)
+    client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
         model=args.model,
