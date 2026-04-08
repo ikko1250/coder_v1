@@ -303,6 +303,20 @@ def select_latest_auto_matched_markdown_candidate(candidates: list[Path]) -> Pat
     return latest_candidate
 
 
+def ensure_path_within_directory(path: Path, allowed_dir: Path, label: str) -> Path:
+    """解決済み path が許可ディレクトリ配下かを検証する。"""
+    resolved_path = path.expanduser().resolve()
+    resolved_allowed_dir = allowed_dir.expanduser().resolve()
+
+    if resolved_allowed_dir == resolved_path or resolved_allowed_dir in resolved_path.parents:
+        return resolved_path
+
+    raise MarkdownResolutionError(
+        f"エラー: {label} が許可ディレクトリ外です: {resolved_path} "
+        f"(許可: {resolved_allowed_dir})"
+    )
+
+
 def validate_markdown_path(markdown_path: str) -> Path:
     """明示指定された Markdown パスを検証して解決済み Path を返す。"""
     path = Path(markdown_path).expanduser().resolve()
@@ -314,7 +328,35 @@ def validate_markdown_path(markdown_path: str) -> Path:
     if path.suffix.lower() != ".md":
         raise MarkdownResolutionError(f"エラー: .md ファイルのみ対応しています: {path}")
 
-    return path
+    return ensure_path_within_directory(path, DEFAULT_MANUAL_MARKDOWN_DIR, "Markdown パス")
+
+
+def resolve_auto_matched_markdown_path(
+    pdf_path: Path,
+    markdown_dir: Path | None = None,
+) -> Path:
+    """PDF から OCR Markdown を自動解決し、失敗理由を例外で返す。"""
+    search_dir = markdown_dir or DEFAULT_MANUAL_MARKDOWN_DIR
+    allowed_search_dir = ensure_path_within_directory(
+        search_dir,
+        DEFAULT_MANUAL_MARKDOWN_DIR,
+        "Markdown ディレクトリ",
+    )
+    candidates = find_auto_matched_markdown_candidates(pdf_path, markdown_dir=allowed_search_dir)
+    if not candidates:
+        raise MarkdownResolutionError(
+            "エラー: 対応する OCR Markdown が見つかりません: "
+            f"{pdf_path.stem} (検索先: {allowed_search_dir})"
+        )
+
+    latest_candidate = select_latest_auto_matched_markdown_candidate(candidates)
+    if latest_candidate is None:
+        raise MarkdownResolutionError(
+            "エラー: OCR Markdown 候補から最新ファイルを決定できませんでした: "
+            f"{pdf_path.stem} (候補数: {len(candidates)})"
+        )
+
+    return latest_candidate
 
 
 def resolve_ocr_markdown_path(
@@ -331,8 +373,7 @@ def resolve_ocr_markdown_path(
     if pdf_path is None:
         return None
 
-    candidates = find_auto_matched_markdown_candidates(pdf_path, markdown_dir=markdown_dir)
-    return select_latest_auto_matched_markdown_candidate(candidates)
+    return resolve_auto_matched_markdown_path(pdf_path, markdown_dir=markdown_dir)
 
 
 def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
