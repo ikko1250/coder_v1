@@ -28,6 +28,7 @@ def load_dotenv(dotenv_path: str) -> None:
             os.environ.setdefault(key, value)
 
 
+# CLI 既定モデル（設計上の標準）。--model で上書きし、PDF inline 不調時の切り分けに使う。
 DEFAULT_MODEL = "gemma-4-31b-it"
 DEFAULT_API_KEY_ENV = "GEMINI_API_KEY"
 DEFAULT_PROMPT_TEXT_ONLY = "水の化学式は何ですか？簡潔に答えてください。"
@@ -71,7 +72,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Model id (default: {DEFAULT_MODEL}).",
+        metavar="MODEL",
+        help=(
+            f"Model id passed to generate_content (default: {DEFAULT_MODEL}). "
+            "Use another id for troubleshooting or comparison when behaviour differs by model."
+        ),
     )
     return parser.parse_args()
 
@@ -83,6 +88,7 @@ def main() -> int:
 
     pdf_path = (args.pdf_path or "").strip() or None
     user_prompt = resolve_prompt(args.prompt, pdf_path)
+    model_id = (args.model or "").strip() or DEFAULT_MODEL
 
     api_key = os.getenv(args.api_key_env, "").strip()
     if not api_key:
@@ -95,7 +101,7 @@ def main() -> int:
     client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
-        model=args.model,
+        model=model_id,
         contents=user_prompt,
         config=types.GenerateContentConfig(
             thinking_config=types.ThinkingConfig(thinking_level="high"),
