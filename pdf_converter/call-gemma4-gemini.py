@@ -7,6 +7,7 @@ Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼
 import argparse
 import os
 import re
+import secrets
 import shutil
 import sys
 from datetime import datetime
@@ -373,18 +374,29 @@ def resolve_working_directory(working_dir: str | None) -> Path:
 
 
 def build_working_markdown_copy_path(source_markdown_path: Path, working_dir: Path) -> Path:
-    """Task 2-2 用の複製先パス。Task 2-3 で一意化規則へ差し替える前提。"""
-    return working_dir / source_markdown_path.name
+    """作業用 Markdown の一意な複製先パスを生成する。"""
+    timestamp_text = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    destination_stem = f"{source_markdown_path.stem}-working-{timestamp_text}"
+    destination_path = working_dir / f"{destination_stem}{source_markdown_path.suffix.lower()}"
+
+    if not destination_path.exists():
+        return destination_path
+
+    for _ in range(8):
+        random_suffix = secrets.token_hex(3)
+        retry_path = working_dir / f"{destination_stem}-{random_suffix}{source_markdown_path.suffix.lower()}"
+        if not retry_path.exists():
+            return retry_path
+
+    raise WorkingMarkdownError(
+        "エラー: 作業用 Markdown の保存先を一意に決定できませんでした: "
+        f"{working_dir}"
+    )
 
 
 def copy_markdown_to_working_directory(source_markdown_path: Path, working_dir: Path) -> Path:
     """元 OCR Markdown を work ディレクトリへ初期状態のまま複製する。"""
     destination_path = build_working_markdown_copy_path(source_markdown_path, working_dir)
-
-    if destination_path.exists():
-        raise WorkingMarkdownError(
-            f"エラー: 作業用 Markdown が既に存在します: {destination_path}"
-        )
 
     try:
         shutil.copyfile(source_markdown_path, destination_path)
