@@ -42,6 +42,7 @@ DEFAULT_TASK = "single-shot"
 OCR_CORRECTION_TASK = "ocr-correct"
 DEFAULT_MANUAL_ROOT = Path(__file__).resolve().parent.parent / "asset" / "texts_2nd" / "manual"
 DEFAULT_MANUAL_MARKDOWN_DIR = DEFAULT_MANUAL_ROOT / "md"
+DEFAULT_MANUAL_WORK_DIR = DEFAULT_MANUAL_ROOT / "work"
 
 PDF_MAGIC_PREFIX = b"%PDF-"
 MAX_INLINE_PDF_BYTES = 50 * 1024 * 1024
@@ -72,6 +73,10 @@ class PdfValidationError(Exception):
 
 class MarkdownResolutionError(Exception):
     """OCR Markdown の解決に失敗したとき。メッセージはそのまま標準エラーに出す。"""
+
+
+class WorkingDirectoryError(Exception):
+    """OCR 修正用 work ディレクトリの解決に失敗したとき。"""
 
 
 class ResponseTextError(Exception):
@@ -303,7 +308,12 @@ def select_latest_auto_matched_markdown_candidate(candidates: list[Path]) -> Pat
     return latest_candidate
 
 
-def ensure_path_within_directory(path: Path, allowed_dir: Path, label: str) -> Path:
+def ensure_path_within_directory(
+    path: Path,
+    allowed_dir: Path,
+    label: str,
+    error_cls: type[Exception] = MarkdownResolutionError,
+) -> Path:
     """解決済み path が許可ディレクトリ配下かを検証する。"""
     resolved_path = path.expanduser().resolve()
     resolved_allowed_dir = allowed_dir.expanduser().resolve()
@@ -311,7 +321,7 @@ def ensure_path_within_directory(path: Path, allowed_dir: Path, label: str) -> P
     if resolved_allowed_dir == resolved_path or resolved_allowed_dir in resolved_path.parents:
         return resolved_path
 
-    raise MarkdownResolutionError(
+    raise error_cls(
         f"エラー: {label} が許可ディレクトリ外です: {resolved_path} "
         f"(許可: {resolved_allowed_dir})"
     )
@@ -329,6 +339,32 @@ def validate_markdown_path(markdown_path: str) -> Path:
         raise MarkdownResolutionError(f"エラー: .md ファイルのみ対応しています: {path}")
 
     return ensure_path_within_directory(path, DEFAULT_MANUAL_MARKDOWN_DIR, "Markdown パス")
+
+
+def resolve_working_directory(working_dir: str | None) -> Path:
+    """OCR 修正用の work ディレクトリを解決し、必要なら作成する。"""
+    raw_path = (working_dir or "").strip()
+    candidate_dir = Path(raw_path).expanduser() if raw_path else DEFAULT_MANUAL_WORK_DIR
+    resolved_dir = ensure_path_within_directory(
+        candidate_dir,
+        DEFAULT_MANUAL_ROOT,
+        "作業ディレクトリ",
+        error_cls=WorkingDirectoryError,
+    )
+
+    if resolved_dir.exists() and not resolved_dir.is_dir():
+        raise WorkingDirectoryError(
+            f"エラー: 作業ディレクトリのパスがディレクトリではありません: {resolved_dir}"
+        )
+
+    try:
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkingDirectoryError(
+            f"エラー: 作業ディレクトリの作成に失敗しました: {resolved_dir}: {exc}"
+        ) from exc
+
+    return resolved_dir
 
 
 def resolve_auto_matched_markdown_path(
@@ -460,7 +496,8 @@ def parse_args() -> argparse.Namespace:
             "Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high). "
             "Optional --pdf-path attaches a local PDF as inline input (application/pdf). "
             "Use --task to switch between the existing single-shot flow and future OCR correction mode. "
-            "OCR correction mode can also take --markdown-path to override auto matching."
+            "OCR correction mode can also take --markdown-path to override auto matching "
+            "and --working-dir to override the default work directory."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -471,6 +508,7 @@ def parse_args() -> argparse.Namespace:
             "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --pdf-path path/to/file.pdf\n"
             "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --pdf-path path/to/file.pdf "
             "--markdown-path path/to/file.md\n"
+            "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --working-dir asset/texts_2nd/manual/work\n"
             "\n"
             "If --pdf-path is omitted, only the text prompt is sent (no PDF)."
         ),
@@ -504,6 +542,16 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional path to an OCR Markdown file. In OCR correction mode, an explicit value "
             "overrides PDF-based auto matching."
+        ),
+    )
+    parser.add_argument(
+        "--working-dir",
+        default=None,
+        metavar="PATH",
+        dest="working_dir",
+        help=(
+            "Optional work directory for OCR correction mode. When omitted, "
+            f"the default is {DEFAULT_MANUAL_WORK_DIR}."
         ),
     )
     parser.add_argument(
@@ -623,6 +671,11 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
         except MarkdownResolutionError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+    try:
+        _resolved_working_dir = resolve_working_directory(_args.working_dir)
+    except WorkingDirectoryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     print(
         "エラー: OCR Markdown 修正モードはまだ未実装です。"
         "Task 0-1 では実行経路の分離のみを行います。",
