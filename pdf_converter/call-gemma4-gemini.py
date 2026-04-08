@@ -36,12 +36,18 @@ DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
 
 
 def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
-    """位置引数が省略されたときだけ、PDF の有無に応じた既定プロンプトを使う。"""
+    """位置引数が省略されたときだけ、PDF パス有無に応じた既定プロンプトを返す（CLI 以外の単体テスト用にも使う）。"""
     if prompt is not None:
         return prompt
     if pdf_path:
         return DEFAULT_PROMPT_WITH_PDF
     return DEFAULT_PROMPT_TEXT_ONLY
+
+
+def resolve_prompt_from_args(args: argparse.Namespace) -> tuple[str, str | None]:
+    """`main` 用: `--pdf-path` の正規化と `resolve_prompt` をまとめて行い、(プロンプト文字列, 正規化済み PDF パス) を返す。"""
+    pdf_path = (args.pdf_path or "").strip() or None
+    return resolve_prompt(args.prompt, pdf_path), pdf_path
 
 
 def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
@@ -111,8 +117,7 @@ def main() -> int:
     dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
     load_dotenv(dotenv_path)
 
-    pdf_path = (args.pdf_path or "").strip() or None
-    user_prompt = resolve_prompt(args.prompt, pdf_path)
+    user_prompt, pdf_path = resolve_prompt_from_args(args)
     model_id = (args.model or "").strip() or DEFAULT_MODEL
 
     api_key = os.getenv(args.api_key_env, "").strip()
