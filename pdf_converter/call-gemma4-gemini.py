@@ -45,6 +45,7 @@ OCR_CORRECTION_TASK = "ocr-correct"
 DEFAULT_MANUAL_ROOT = Path(__file__).resolve().parent.parent / "asset" / "texts_2nd" / "manual"
 DEFAULT_MANUAL_MARKDOWN_DIR = DEFAULT_MANUAL_ROOT / "md"
 DEFAULT_MANUAL_WORK_DIR = DEFAULT_MANUAL_ROOT / "work"
+DEFAULT_OCR_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 PDF_MAGIC_PREFIX = b"%PDF-"
 MAX_INLINE_PDF_BYTES = 50 * 1024 * 1024
@@ -343,8 +344,21 @@ def validate_markdown_path(markdown_path: str) -> Path:
         raise MarkdownResolutionError(f"エラー: Markdown パスがファイルではありません: {path}")
     if path.suffix.lower() != ".md":
         raise MarkdownResolutionError(f"エラー: .md ファイルのみ対応しています: {path}")
+    if is_path_within_directory(path, DEFAULT_OCR_OUTPUT_DIR):
+        raise MarkdownResolutionError(
+            "エラー: OCR Markdown 修正フローは pdf_converter.py の output/ を自動入力元にしません: "
+            f"{path}。入力は {DEFAULT_MANUAL_MARKDOWN_DIR} 配下に固定です。"
+            " 必要なら output/ から manual/md へ移動またはコピーしてから指定してください。"
+        )
 
     return ensure_path_within_directory(path, DEFAULT_MANUAL_MARKDOWN_DIR, "Markdown パス")
+
+
+def is_path_within_directory(path: Path, allowed_dir: Path) -> bool:
+    """解決済み path が allowed_dir 配下なら True。"""
+    resolved_path = path.expanduser().resolve()
+    resolved_allowed_dir = allowed_dir.expanduser().resolve()
+    return resolved_allowed_dir == resolved_path or resolved_allowed_dir in resolved_path.parents
 
 
 def resolve_working_directory(working_dir: str | None) -> Path:
@@ -424,7 +438,9 @@ def resolve_auto_matched_markdown_path(
     if not candidates:
         raise MarkdownResolutionError(
             "エラー: 対応する OCR Markdown が見つかりません: "
-            f"{pdf_path.stem} (検索先: {allowed_search_dir})"
+            f"{pdf_path.stem} (検索先: {allowed_search_dir})。"
+            " OCR Markdown 修正フローは pdf_converter.py の output/ を自動検索しません。"
+            f" 入力に使う Markdown は {DEFAULT_MANUAL_MARKDOWN_DIR} 配下へ配置してください。"
         )
 
     latest_candidate = select_latest_auto_matched_markdown_candidate(candidates)
@@ -539,7 +555,9 @@ def parse_args() -> argparse.Namespace:
             "Optional --pdf-path attaches a local PDF as inline input (application/pdf). "
             "Use --task to switch between the existing single-shot flow and future OCR correction mode. "
             "OCR correction mode can also take --markdown-path to override auto matching "
-            "and --working-dir to override the default work directory."
+            "and --working-dir to override the default work directory. "
+            "OCR correction mode only reads Markdown from asset/texts_2nd/manual/md; "
+            "pdf_converter.py output/ is not auto-connected."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -552,7 +570,8 @@ def parse_args() -> argparse.Namespace:
             "--markdown-path path/to/file.md\n"
             "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --working-dir asset/texts_2nd/manual/work\n"
             "\n"
-            "If --pdf-path is omitted, only the text prompt is sent (no PDF)."
+            "If --pdf-path is omitted, only the text prompt is sent (no PDF).\n"
+            "OCR correction mode does not automatically import Markdown from pdf_converter.py output/."
         ),
     )
     parser.add_argument(
@@ -583,7 +602,8 @@ def parse_args() -> argparse.Namespace:
         dest="markdown_path",
         help=(
             "Optional path to an OCR Markdown file. In OCR correction mode, an explicit value "
-            "overrides PDF-based auto matching."
+            "overrides PDF-based auto matching. The file must live under "
+            f"{DEFAULT_MANUAL_MARKDOWN_DIR}; pdf_converter.py output/ is not auto-connected."
         ),
     )
     parser.add_argument(
@@ -593,7 +613,7 @@ def parse_args() -> argparse.Namespace:
         dest="working_dir",
         help=(
             "Optional work directory for OCR correction mode. When omitted, "
-            f"the default is {DEFAULT_MANUAL_WORK_DIR}."
+            f"the default is {DEFAULT_MANUAL_WORK_DIR}. This is independent from pdf_converter.py output/."
         ),
     )
     parser.add_argument(
