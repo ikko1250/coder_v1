@@ -44,6 +44,12 @@ WARN_INLINE_PDF_BYTES = 20 * 1024 * 1024
 # generate_content 向け HTTP タイムアウト（HttpOptions はミリ秒）。設計書の初期値 120 秒。
 DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 120_000
 
+# Task 3-4（thinking フォールバック）:
+# Phase 0 Task 0-2（verify-task-0-2-pdf-inline-thinking.py）で gemma-4-31b-it の
+# PDF inline + thinking_level=high は成功済み。既定 False のまま PDF 時も thinking を付ける。
+# 別モデル等で API が併用拒否する場合のみ True にし、PDF 添付時は thinking_config なしで送る。
+OMIT_THINKING_CONFIG_WHEN_PDF_ATTACHED = False
+
 
 class PdfValidationError(Exception):
     """PDF 事前検証に失敗したとき。メッセージはそのまま標準エラーに出す。"""
@@ -235,6 +241,15 @@ def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
     return [pdf_part, prompt]
 
 
+def build_generation_config(pdf_part: types.Part | None) -> types.GenerateContentConfig:
+    """thinking_config の有無を Task 3-4 定数に従って決める。"""
+    if pdf_part is not None and OMIT_THINKING_CONFIG_WHEN_PDF_ATTACHED:
+        return types.GenerateContentConfig()
+    return types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level="high"),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -337,13 +352,19 @@ def main() -> int:
 
     contents = build_contents(user_prompt, pdf_part)
 
+    gen_config = build_generation_config(pdf_part)
+    if pdf_part is not None and OMIT_THINKING_CONFIG_WHEN_PDF_ATTACHED:
+        print(
+            "警告: PDF 指定時は thinking_config をオフにしています"
+            "（OMIT_THINKING_CONFIG_WHEN_PDF_ATTACHED=True）。",
+            file=sys.stderr,
+        )
+
     try:
         response = client.models.generate_content(
             model=model_id,
             contents=contents,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_level="high"),
-            ),
+            config=gen_config,
         )
     except Exception as exc:
         print(format_generate_content_error(exc), file=sys.stderr)
