@@ -30,6 +30,17 @@ def load_dotenv(dotenv_path: str) -> None:
 
 DEFAULT_MODEL = "gemma-4-31b-it"
 DEFAULT_API_KEY_ENV = "GEMINI_API_KEY"
+DEFAULT_PROMPT_TEXT_ONLY = "水の化学式は何ですか？簡潔に答えてください。"
+DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
+
+
+def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
+    """位置引数が省略されたときだけ、PDF の有無に応じた既定プロンプトを使う。"""
+    if prompt is not None:
+        return prompt
+    if pdf_path:
+        return DEFAULT_PROMPT_WITH_PDF
+    return DEFAULT_PROMPT_TEXT_ONLY
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,8 +50,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "prompt",
         nargs="?",
-        default="水の化学式は何ですか？簡潔に答えてください。",
-        help="User prompt (default: short demo question).",
+        default=None,
+        help=(
+            "User prompt. If omitted: without --pdf-path, use a short demo question; "
+            "with --pdf-path, default to summarizing the PDF."
+        ),
+    )
+    parser.add_argument(
+        "--pdf-path",
+        default=None,
+        metavar="PATH",
+        help="Optional PDF file path (inline input). If set without prompt, defaults to PDF summary.",
     )
     parser.add_argument(
         "--api-key-env",
@@ -61,6 +81,9 @@ def main() -> int:
     dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
     load_dotenv(dotenv_path)
 
+    pdf_path = (args.pdf_path or "").strip() or None
+    user_prompt = resolve_prompt(args.prompt, pdf_path)
+
     api_key = os.getenv(args.api_key_env, "").strip()
     if not api_key:
         print(
@@ -73,7 +96,7 @@ def main() -> int:
 
     response = client.models.generate_content(
         model=args.model,
-        contents=args.prompt,
+        contents=user_prompt,
         config=types.GenerateContentConfig(
             thinking_config=types.ThinkingConfig(thinking_level="high"),
         ),
