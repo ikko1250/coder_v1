@@ -105,7 +105,11 @@ def resolve_prompt_from_args(args: argparse.Namespace) -> tuple[str, str | None]
 
 
 def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
-    """generate_content 向け contents。常に list（テキストのみは [prompt]、PDF ありは [pdf_part, prompt]）。"""
+    """generate_content 向け contents。戻り値は常に list。
+
+    pdf_part が None のときは [prompt] のみ（--pdf-path 未指定時のテキスト専用経路。PDF の検証・読込は行わない）。
+    pdf_part があるときは [pdf_part, prompt]。
+    """
     if pdf_part is None:
         return [prompt]
     return [pdf_part, prompt]
