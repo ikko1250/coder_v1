@@ -39,6 +39,9 @@ PDF_MAGIC_PREFIX = b"%PDF-"
 MAX_INLINE_PDF_BYTES = 50 * 1024 * 1024
 WARN_INLINE_PDF_BYTES = 20 * 1024 * 1024
 
+# generate_content 向け HTTP タイムアウト（HttpOptions はミリ秒）。設計書の初期値 120 秒。
+DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 120_000
+
 
 class PdfValidationError(Exception):
     """PDF 事前検証に失敗したとき。メッセージはそのまま標準エラーに出す。"""
@@ -202,7 +205,10 @@ def main() -> int:
         )
         return 1
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=DEFAULT_GENERATE_CONTENT_TIMEOUT_MS),
+    )
 
     pdf_part: types.Part | None = None
     if validated_pdf_path is not None:
