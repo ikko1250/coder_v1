@@ -43,6 +43,7 @@ DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
 DEFAULT_TASK = "single-shot"
 OCR_CORRECTION_TASK = "ocr-correct"
 DEFAULT_MANUAL_ROOT = Path(__file__).resolve().parent.parent / "asset" / "texts_2nd" / "manual"
+DEFAULT_MANUAL_PDF_DIR = DEFAULT_MANUAL_ROOT / "pdf"
 DEFAULT_MANUAL_MARKDOWN_DIR = DEFAULT_MANUAL_ROOT / "md"
 DEFAULT_MANUAL_WORK_DIR = DEFAULT_MANUAL_ROOT / "work"
 DEFAULT_OCR_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
@@ -88,6 +89,10 @@ class WorkingMarkdownError(Exception):
 
 class ToolPathResolutionError(Exception):
     """read / write tool 用のパス正規化に失敗したとき。"""
+
+
+class ToolReadError(Exception):
+    """read tool の読取に失敗したとき。"""
 
 
 class ResponseTextError(Exception):
@@ -388,6 +393,43 @@ def resolve_tool_path(
     raise ToolPathResolutionError(
         f"エラー: {label} が許可ディレクトリ外です: {resolved_path} (許可: {allowed_text})"
     )
+
+
+def read_tool_text(raw_path: str) -> str:
+    """read tool 用: md/ と work/ の UTF-8 テキストだけを返す。"""
+    normalized_input = (raw_path or "").strip()
+    candidate_path = Path(normalized_input).expanduser()
+    joined_candidate = (
+        candidate_path if candidate_path.is_absolute() else DEFAULT_MANUAL_ROOT / candidate_path
+    )
+    resolved_candidate = joined_candidate.resolve()
+
+    if (
+        resolved_candidate.suffix.lower() == ".pdf"
+        or is_path_within_directory(resolved_candidate, DEFAULT_MANUAL_PDF_DIR)
+    ):
+        raise ToolReadError(f"エラー: read tool は PDF を読めません: {resolved_candidate}")
+
+    try:
+        resolved_path = resolve_tool_path(
+            raw_path,
+            [DEFAULT_MANUAL_MARKDOWN_DIR, DEFAULT_MANUAL_WORK_DIR],
+            "read path",
+        )
+    except ToolPathResolutionError as exc:
+        raise ToolReadError(str(exc)) from exc
+
+    if not resolved_path.exists():
+        raise ToolReadError(f"エラー: read 対象ファイルが見つかりません: {resolved_path}")
+    if not resolved_path.is_file():
+        raise ToolReadError(f"エラー: read 対象パスがファイルではありません: {resolved_path}")
+
+    try:
+        return resolved_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ToolReadError(
+            f"エラー: read tool のファイル読取に失敗しました: {resolved_path}: {exc}"
+        ) from exc
 
 
 def resolve_working_directory(working_dir: str | None) -> Path:
