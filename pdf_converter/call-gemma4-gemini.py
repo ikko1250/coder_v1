@@ -86,6 +86,10 @@ class WorkingMarkdownError(Exception):
     """OCR 修正用 Markdown 複製に失敗したとき。"""
 
 
+class ToolPathResolutionError(Exception):
+    """read / write tool 用のパス正規化に失敗したとき。"""
+
+
 class ResponseTextError(Exception):
     """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
 
@@ -359,6 +363,31 @@ def is_path_within_directory(path: Path, allowed_dir: Path) -> bool:
     resolved_path = path.expanduser().resolve()
     resolved_allowed_dir = allowed_dir.expanduser().resolve()
     return resolved_allowed_dir == resolved_path or resolved_allowed_dir in resolved_path.parents
+
+
+def resolve_tool_path(
+    raw_path: str,
+    allowed_dirs: list[Path],
+    label: str,
+) -> Path:
+    """tool 入力パスを manual ルート基準で正規化し、許可ルート配下だけ通す。"""
+    normalized_input = (raw_path or "").strip()
+    if not normalized_input:
+        raise ToolPathResolutionError(f"エラー: {label} が空です。")
+
+    input_path = Path(normalized_input).expanduser()
+    joined_path = input_path if input_path.is_absolute() else DEFAULT_MANUAL_ROOT / input_path
+    resolved_path = joined_path.resolve()
+    resolved_allowed_dirs = [allowed_dir.expanduser().resolve() for allowed_dir in allowed_dirs]
+
+    for allowed_dir in resolved_allowed_dirs:
+        if is_path_within_directory(resolved_path, allowed_dir):
+            return resolved_path
+
+    allowed_text = ", ".join(str(path) for path in resolved_allowed_dirs)
+    raise ToolPathResolutionError(
+        f"エラー: {label} が許可ディレクトリ外です: {resolved_path} (許可: {allowed_text})"
+    )
 
 
 def resolve_working_directory(working_dir: str | None) -> Path:
