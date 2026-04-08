@@ -95,6 +95,10 @@ class ToolReadError(Exception):
     """read tool の読取に失敗したとき。"""
 
 
+class ToolWriteError(Exception):
+    """write tool の書込に失敗したとき。"""
+
+
 class ResponseTextError(Exception):
     """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
 
@@ -430,6 +434,39 @@ def read_tool_text(raw_path: str) -> str:
         raise ToolReadError(
             f"エラー: read tool のファイル読取に失敗しました: {resolved_path}: {exc}"
         ) from exc
+
+
+def write_tool_text(raw_path: str, new_text: str) -> Path:
+    """write tool 用: work/ 配下の UTF-8 テキストだけを書き換える。"""
+    normalized_input = (raw_path or "").strip()
+    candidate_path = Path(normalized_input).expanduser()
+    joined_candidate = (
+        candidate_path if candidate_path.is_absolute() else DEFAULT_MANUAL_ROOT / candidate_path
+    )
+    resolved_candidate = joined_candidate.resolve()
+
+    if (
+        is_path_within_directory(resolved_candidate, DEFAULT_MANUAL_MARKDOWN_DIR)
+        or is_path_within_directory(resolved_candidate, DEFAULT_MANUAL_PDF_DIR)
+    ):
+        raise ToolWriteError(f"エラー: write tool は work/ 以外へ書けません: {resolved_candidate}")
+
+    try:
+        resolved_path = resolve_tool_path(raw_path, [DEFAULT_MANUAL_WORK_DIR], "write path")
+    except ToolPathResolutionError as exc:
+        raise ToolWriteError(str(exc)) from exc
+
+    if resolved_path.exists() and not resolved_path.is_file():
+        raise ToolWriteError(f"エラー: write 対象パスがファイルではありません: {resolved_path}")
+
+    try:
+        resolved_path.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        raise ToolWriteError(
+            f"エラー: write tool のファイル書込に失敗しました: {resolved_path}: {exc}"
+        ) from exc
+
+    return resolved_path
 
 
 def resolve_working_directory(working_dir: str | None) -> Path:
