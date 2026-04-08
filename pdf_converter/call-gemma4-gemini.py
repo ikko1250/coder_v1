@@ -9,7 +9,9 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
 from google import genai
+from google.genai import errors
 from google.genai import types
 
 
@@ -108,6 +110,57 @@ def extract_response_text(response: types.GenerateContentResponse) -> str:
         )
     raise ResponseTextError(
         f"エラー: 応答テキストが空です（終了理由: {reason_label}）。"
+    )
+
+
+def _brief_api_error_message(exc: errors.APIError, max_len: int = 400) -> str:
+    msg = (exc.message or "").strip()
+    if not msg and exc.status is not None:
+        msg = str(exc.status).strip()
+    if len(msg) > max_len:
+        return msg[: max_len - 1] + "…"
+    return msg
+
+
+def format_generate_content_error(exc: BaseException) -> str:
+    """generate_content 失敗をスタックトレースなしの CLI 向けメッセージに変換する。"""
+    if isinstance(exc, httpx.TimeoutException):
+        return "エラー: API リクエストがタイムアウトしました。"
+
+    if isinstance(exc, httpx.RequestError):
+        return f"エラー: API への通信に失敗しました（{type(exc).__name__}）。"
+
+    if isinstance(exc, errors.ClientError):
+        detail = _brief_api_error_message(exc)
+        if exc.code in (401, 403):
+            head = f"エラー: API キーまたは認証に失敗しました（HTTP {exc.code}）。"
+            return f"{head} {detail}".rstrip() if detail else head
+        if exc.code == 429:
+            return (
+                "エラー: API の利用制限（レート制限）に達しました（HTTP 429）。"
+                "しばらく待ってから再試行してください。"
+            )
+        status_u = str(exc.status or "").upper()
+        if exc.code == 400 and "INVALID_ARGUMENT" in status_u:
+            head = "エラー: リクエストが無効です（INVALID_ARGUMENT）。"
+            return f"{head} {detail}".rstrip() if detail else head
+        head = f"エラー: API リクエストに失敗しました（HTTP {exc.code}）。"
+        return f"{head} {detail}".rstrip() if detail else head
+
+    if isinstance(exc, errors.ServerError):
+        return (
+            "エラー: API サーバー側でエラーが発生しました（HTTP "
+            f"{exc.code}）。時間をおいて再試行してください。"
+        )
+
+    if isinstance(exc, errors.APIError):
+        detail = _brief_api_error_message(exc)
+        head = f"エラー: API リクエストに失敗しました（HTTP {exc.code}）。"
+        return f"{head} {detail}".rstrip() if detail else head
+
+    return (
+        "エラー: API 呼び出し中に予期しないエラーが発生しました: "
+        f"{type(exc).__name__}: {exc}"
     )
 
 
@@ -284,13 +337,17 @@ def main() -> int:
 
     contents = build_contents(user_prompt, pdf_part)
 
-    response = client.models.generate_content(
-        model=model_id,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=model_id,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_level="high"),
+            ),
+        )
+    except Exception as exc:
+        print(format_generate_content_error(exc), file=sys.stderr)
+        return 1
 
     try:
         out_text = extract_response_text(response)
