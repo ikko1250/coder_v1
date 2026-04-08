@@ -36,6 +36,8 @@ DEFAULT_MODEL = "gemma-4-31b-it"
 DEFAULT_API_KEY_ENV = "GEMINI_API_KEY"
 DEFAULT_PROMPT_TEXT_ONLY = "水の化学式は何ですか？簡潔に答えてください。"
 DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
+DEFAULT_TASK = "single-shot"
+OCR_CORRECTION_TASK = "ocr-correct"
 
 PDF_MAGIC_PREFIX = b"%PDF-"
 MAX_INLINE_PDF_BYTES = 50 * 1024 * 1024
@@ -254,7 +256,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high). "
-            "Optional --pdf-path attaches a local PDF as inline input (application/pdf)."
+            "Optional --pdf-path attaches a local PDF as inline input (application/pdf). "
+            "Use --task to switch between the existing single-shot flow and future OCR correction mode."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -262,6 +265,7 @@ def parse_args() -> argparse.Namespace:
             '  python pdf_converter/call-gemma4-gemini.py "Summarize this PDF" '
             "--pdf-path path/to/file.pdf\n"
             "  python pdf_converter/call-gemma4-gemini.py --pdf-path path/to/file.pdf\n"
+            "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --pdf-path path/to/file.pdf\n"
             "\n"
             "If --pdf-path is omitted, only the text prompt is sent (no PDF)."
         ),
@@ -285,6 +289,16 @@ def parse_args() -> argparse.Namespace:
             "read and sent as an inline Part (mime type application/pdf) together with the prompt. "
             "When omitted, the CLI runs in text-only mode. If you omit the positional prompt but "
             "set this option, the default prompt switches to summarizing the PDF."
+        ),
+    )
+    parser.add_argument(
+        "--task",
+        default=DEFAULT_TASK,
+        choices=[DEFAULT_TASK, OCR_CORRECTION_TASK],
+        metavar="TASK",
+        help=(
+            f"Execution mode (default: {DEFAULT_TASK}). "
+            f"Use {OCR_CORRECTION_TASK} for the OCR Markdown correction flow."
         ),
     )
     parser.add_argument(
@@ -315,6 +329,13 @@ def main() -> int:
         pass
 
     args = parse_args()
+    if args.task == OCR_CORRECTION_TASK:
+        return run_ocr_correction_mode(args)
+    return run_single_shot_mode(args)
+
+
+def run_single_shot_mode(args: argparse.Namespace) -> int:
+    """Existing one-shot text/PDF flow."""
     dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
     load_dotenv(dotenv_path)
 
@@ -378,6 +399,16 @@ def main() -> int:
 
     print(out_text)
     return 0
+
+
+def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
+    """Dedicated entry point for the future OCR correction flow."""
+    print(
+        "エラー: OCR Markdown 修正モードはまだ未実装です。"
+        "Task 0-1 では実行経路の分離のみを行います。",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":
