@@ -252,6 +252,40 @@ def build_generation_config(pdf_part: types.Part | None) -> types.GenerateConten
     )
 
 
+def get_api_key_or_exit(env_name: str) -> str | None:
+    """Resolve the API key from the configured environment variable."""
+    api_key = os.getenv(env_name, "").strip()
+    if api_key:
+        return api_key
+    print(
+        f"Error: {env_name} is not set. Add it to pdf_converter/.env or the environment.",
+        file=sys.stderr,
+    )
+    return None
+
+
+def build_genai_client(api_key: str) -> genai.Client:
+    """Create a Gemini API client with the standard timeout used by this CLI."""
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=DEFAULT_GENERATE_CONTENT_TIMEOUT_MS),
+    )
+
+
+def generate_content_once(
+    client: genai.Client,
+    model_id: str,
+    contents: list,
+    config: types.GenerateContentConfig,
+) -> types.GenerateContentResponse:
+    """Thin wrapper around models.generate_content for reuse by future multi-turn flows."""
+    return client.models.generate_content(
+        model=model_id,
+        contents=contents,
+        config=config,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -350,18 +384,11 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
             print(str(exc), file=sys.stderr)
             return 1
 
-    api_key = os.getenv(args.api_key_env, "").strip()
-    if not api_key:
-        print(
-            f"Error: {args.api_key_env} is not set. Add it to pdf_converter/.env or the environment.",
-            file=sys.stderr,
-        )
+    api_key = get_api_key_or_exit(args.api_key_env)
+    if api_key is None:
         return 1
 
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=DEFAULT_GENERATE_CONTENT_TIMEOUT_MS),
-    )
+    client = build_genai_client(api_key)
 
     pdf_part: types.Part | None = None
     if validated_pdf_path is not None:
@@ -382,11 +409,7 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
         )
 
     try:
-        response = client.models.generate_content(
-            model=model_id,
-            contents=contents,
-            config=gen_config,
-        )
+        response = generate_content_once(client, model_id, contents, gen_config)
     except Exception as exc:
         print(format_generate_content_error(exc), file=sys.stderr)
         return 1
