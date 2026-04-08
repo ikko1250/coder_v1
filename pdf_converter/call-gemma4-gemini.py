@@ -70,6 +70,10 @@ class PdfValidationError(Exception):
     """PDF 事前検証に失敗したとき。メッセージはそのまま標準エラーに出す。"""
 
 
+class MarkdownResolutionError(Exception):
+    """OCR Markdown の解決に失敗したとき。メッセージはそのまま標準エラーに出す。"""
+
+
 class ResponseTextError(Exception):
     """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
 
@@ -299,6 +303,38 @@ def select_latest_auto_matched_markdown_candidate(candidates: list[Path]) -> Pat
     return latest_candidate
 
 
+def validate_markdown_path(markdown_path: str) -> Path:
+    """明示指定された Markdown パスを検証して解決済み Path を返す。"""
+    path = Path(markdown_path).expanduser().resolve()
+
+    if not path.exists():
+        raise MarkdownResolutionError(f"エラー: Markdown ファイルが見つかりません: {path}")
+    if not path.is_file():
+        raise MarkdownResolutionError(f"エラー: Markdown パスがファイルではありません: {path}")
+    if path.suffix.lower() != ".md":
+        raise MarkdownResolutionError(f"エラー: .md ファイルのみ対応しています: {path}")
+
+    return path
+
+
+def resolve_ocr_markdown_path(
+    pdf_path: Path | None,
+    markdown_path: str | None,
+    markdown_dir: Path | None = None,
+) -> Path | None:
+    """明示指定を優先し、未指定時だけ自動対応付けで Markdown を解決する。"""
+    if markdown_path is not None:
+        explicit_path = markdown_path.strip()
+        if explicit_path:
+            return validate_markdown_path(explicit_path)
+
+    if pdf_path is None:
+        return None
+
+    candidates = find_auto_matched_markdown_candidates(pdf_path, markdown_dir=markdown_dir)
+    return select_latest_auto_matched_markdown_candidate(candidates)
+
+
 def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
     """位置引数が省略されたときだけ、PDF パス有無に応じた既定プロンプトを返す（CLI 以外の単体テスト用にも使う）。"""
     if prompt is not None:
@@ -382,7 +418,8 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high). "
             "Optional --pdf-path attaches a local PDF as inline input (application/pdf). "
-            "Use --task to switch between the existing single-shot flow and future OCR correction mode."
+            "Use --task to switch between the existing single-shot flow and future OCR correction mode. "
+            "OCR correction mode can also take --markdown-path to override auto matching."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -391,6 +428,8 @@ def parse_args() -> argparse.Namespace:
             "--pdf-path path/to/file.pdf\n"
             "  python pdf_converter/call-gemma4-gemini.py --pdf-path path/to/file.pdf\n"
             "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --pdf-path path/to/file.pdf\n"
+            "  python pdf_converter/call-gemma4-gemini.py --task ocr-correct --pdf-path path/to/file.pdf "
+            "--markdown-path path/to/file.md\n"
             "\n"
             "If --pdf-path is omitted, only the text prompt is sent (no PDF)."
         ),
@@ -414,6 +453,16 @@ def parse_args() -> argparse.Namespace:
             "read and sent as an inline Part (mime type application/pdf) together with the prompt. "
             "When omitted, the CLI runs in text-only mode. If you omit the positional prompt but "
             "set this option, the default prompt switches to summarizing the PDF."
+        ),
+    )
+    parser.add_argument(
+        "--markdown-path",
+        default=None,
+        metavar="PATH",
+        dest="markdown_path",
+        help=(
+            "Optional path to an OCR Markdown file. In OCR correction mode, an explicit value "
+            "overrides PDF-based auto matching."
         ),
     )
     parser.add_argument(
@@ -524,6 +573,15 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             "この組み合わせは別途実機検証が必要です。",
             file=sys.stderr,
         )
+    if _args.pdf_path or _args.markdown_path:
+        try:
+            _resolved_markdown_path = resolve_ocr_markdown_path(
+                pdf_path=Path(_args.pdf_path).expanduser().resolve() if _args.pdf_path else None,
+                markdown_path=_args.markdown_path,
+            )
+        except MarkdownResolutionError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     print(
         "エラー: OCR Markdown 修正モードはまだ未実装です。"
         "Task 0-1 では実行経路の分離のみを行います。",
