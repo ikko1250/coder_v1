@@ -7,6 +7,7 @@ Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from google import genai
 from google.genai import types
@@ -33,6 +34,48 @@ DEFAULT_MODEL = "gemma-4-31b-it"
 DEFAULT_API_KEY_ENV = "GEMINI_API_KEY"
 DEFAULT_PROMPT_TEXT_ONLY = "水の化学式は何ですか？簡潔に答えてください。"
 DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
+
+PDF_MAGIC_PREFIX = b"%PDF-"
+MAX_INLINE_PDF_BYTES = 50 * 1024 * 1024
+WARN_INLINE_PDF_BYTES = 20 * 1024 * 1024
+
+
+class PdfValidationError(Exception):
+    """PDF 事前検証に失敗したとき。メッセージはそのまま標準エラーに出す。"""
+
+
+def validate_pdf_path(pdf_path: str) -> Path:
+    """API 呼び出し前の PDF 検証。成功時は解決済み Path を返し、失敗時は PdfValidationError。"""
+    path = Path(pdf_path).expanduser().resolve()
+
+    if not path.exists():
+        raise PdfValidationError(f"エラー: PDF ファイルが見つかりません: {path}")
+    if not path.is_file():
+        raise PdfValidationError(f"エラー: PDF パスがファイルではありません: {path}")
+    if path.suffix.lower() != ".pdf":
+        raise PdfValidationError(f"エラー: .pdf ファイルのみ対応しています: {path}")
+
+    size = path.stat().st_size
+    if size <= 0:
+        raise PdfValidationError(f"エラー: PDF ファイルが空です: {path}")
+    if size > MAX_INLINE_PDF_BYTES:
+        raise PdfValidationError(
+            f"エラー: PDF ファイルが 50MB の inline 上限を超えています: {path}"
+        )
+    if size > WARN_INLINE_PDF_BYTES:
+        print(
+            "警告: PDF ファイルが 20MB を超えています。"
+            "inline 入力では遅延や失敗の可能性があります: "
+            f"{path}",
+            file=sys.stderr,
+        )
+
+    with path.open("rb") as f:
+        header = f.read(5)
+    if header != PDF_MAGIC_PREFIX:
+        raise PdfValidationError(f"エラー: 有効な PDF ヘッダーではありません: {path}")
+
+    return path
 
 
 def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
@@ -113,12 +156,28 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    try:
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        pass
+
     args = parse_args()
     dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
     load_dotenv(dotenv_path)
 
     user_prompt, pdf_path = resolve_prompt_from_args(args)
     model_id = (args.model or "").strip() or DEFAULT_MODEL
+
+    validated_pdf_path: Path | None = None
+    if pdf_path is not None:
+        try:
+            validated_pdf_path = validate_pdf_path(pdf_path)  # noqa: F841
+        except PdfValidationError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     api_key = os.getenv(args.api_key_env, "").strip()
     if not api_key:
@@ -131,6 +190,7 @@ def main() -> int:
     client = genai.Client(api_key=api_key)
 
     pdf_part: types.Part | None = None
+
     contents = build_contents(user_prompt, pdf_part)
 
     response = client.models.generate_content(
