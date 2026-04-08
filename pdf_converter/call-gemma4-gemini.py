@@ -47,6 +47,70 @@ class PdfValidationError(Exception):
     """PDF 事前検証に失敗したとき。メッセージはそのまま標準エラーに出す。"""
 
 
+class ResponseTextError(Exception):
+    """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
+
+
+_FINISH_REASONS_POLICY_EMPTY = frozenset(
+    {
+        types.FinishReason.SAFETY,
+        types.FinishReason.BLOCKLIST,
+        types.FinishReason.PROHIBITED_CONTENT,
+        types.FinishReason.RECITATION,
+        types.FinishReason.SPII,
+        types.FinishReason.LANGUAGE,
+        types.FinishReason.IMAGE_SAFETY,
+        types.FinishReason.IMAGE_PROHIBITED_CONTENT,
+    }
+)
+
+
+def _enum_label(value: object) -> str:
+    if value is None:
+        return "不明"
+    inner = getattr(value, "value", None)
+    return str(inner) if inner is not None else str(value)
+
+
+def extract_response_text(response: types.GenerateContentResponse) -> str:
+    """response.text 取得と空・ブロック系の判定を一箇所に集約する。"""
+    feedback = response.prompt_feedback
+    if feedback is not None and feedback.block_reason is not None:
+        reason = _enum_label(feedback.block_reason)
+        detail = (feedback.block_reason_message or "").strip()
+        suffix = f" 詳細: {detail}" if detail else ""
+        raise ResponseTextError(
+            f"エラー: プロンプトがブロックされました（理由: {reason}）。{suffix}".rstrip()
+        )
+
+    candidates = response.candidates
+    if not candidates:
+        raise ResponseTextError("エラー: モデルから応答候補がありません。")
+
+    finish = candidates[0].finish_reason
+
+    try:
+        text = response.text
+    except Exception as exc:
+        raise ResponseTextError(
+            "エラー: 応答テキストの取得に失敗しました: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    if text is not None and text.strip():
+        return text
+
+    reason_label = _enum_label(finish)
+    if finish in _FINISH_REASONS_POLICY_EMPTY:
+        raise ResponseTextError(
+            "エラー: 安全性ポリシー等により応答テキストがありません"
+            f"（終了理由: {reason_label}）。"
+        )
+    raise ResponseTextError(
+        f"エラー: 応答テキストが空です（終了理由: {reason_label}）。"
+    )
+
+
 def validate_pdf_path(pdf_path: str) -> Path:
     """API 呼び出し前の PDF 検証。成功時は解決済み Path を返し、失敗時は PdfValidationError。"""
     path = Path(pdf_path).expanduser().resolve()
@@ -228,7 +292,13 @@ def main() -> int:
         ),
     )
 
-    print(response.text)
+    try:
+        out_text = extract_response_text(response)
+    except ResponseTextError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print(out_text)
     return 0
 
 
