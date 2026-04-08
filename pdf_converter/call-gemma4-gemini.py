@@ -8,6 +8,7 @@ import argparse
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -241,6 +242,19 @@ def parse_auto_matched_markdown_stem(markdown_path: Path) -> tuple[str, str] | N
     return match.group("base"), match.group("ts")
 
 
+def parse_auto_matched_markdown_timestamp(markdown_path: Path) -> datetime | None:
+    """自動対応付け対象 Markdown の timestamp を datetime に変換する。"""
+    parsed = parse_auto_matched_markdown_stem(markdown_path)
+    if parsed is None:
+        return None
+
+    _base_stem, timestamp_text = parsed
+    try:
+        return datetime.strptime(timestamp_text, "%Y-%m-%d_%H-%M-%S")
+    except ValueError:
+        return None
+
+
 def find_auto_matched_markdown_candidates(
     pdf_path: Path,
     markdown_dir: Path | None = None,
@@ -260,10 +274,29 @@ def find_auto_matched_markdown_candidates(
         base_stem, _timestamp_text = parsed
         if base_stem != pdf_stem:
             continue
+        if parse_auto_matched_markdown_timestamp(markdown_path) is None:
+            continue
 
         candidates.append(markdown_path.resolve())
 
     return candidates
+
+
+def select_latest_auto_matched_markdown_candidate(candidates: list[Path]) -> Path | None:
+    """有効候補の中から最新 timestamp の Markdown を 1 件返す。"""
+    latest_candidate: Path | None = None
+    latest_timestamp: datetime | None = None
+
+    for candidate in candidates:
+        candidate_timestamp = parse_auto_matched_markdown_timestamp(candidate)
+        if candidate_timestamp is None:
+            continue
+
+        if latest_timestamp is None or candidate_timestamp > latest_timestamp:
+            latest_candidate = candidate
+            latest_timestamp = candidate_timestamp
+
+    return latest_candidate
 
 
 def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
