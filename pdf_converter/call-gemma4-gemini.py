@@ -7,6 +7,7 @@ Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼
 import argparse
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -77,6 +78,10 @@ class MarkdownResolutionError(Exception):
 
 class WorkingDirectoryError(Exception):
     """OCR 修正用 work ディレクトリの解決に失敗したとき。"""
+
+
+class WorkingMarkdownError(Exception):
+    """OCR 修正用 Markdown 複製に失敗したとき。"""
 
 
 class ResponseTextError(Exception):
@@ -365,6 +370,31 @@ def resolve_working_directory(working_dir: str | None) -> Path:
         ) from exc
 
     return resolved_dir
+
+
+def build_working_markdown_copy_path(source_markdown_path: Path, working_dir: Path) -> Path:
+    """Task 2-2 用の複製先パス。Task 2-3 で一意化規則へ差し替える前提。"""
+    return working_dir / source_markdown_path.name
+
+
+def copy_markdown_to_working_directory(source_markdown_path: Path, working_dir: Path) -> Path:
+    """元 OCR Markdown を work ディレクトリへ初期状態のまま複製する。"""
+    destination_path = build_working_markdown_copy_path(source_markdown_path, working_dir)
+
+    if destination_path.exists():
+        raise WorkingMarkdownError(
+            f"エラー: 作業用 Markdown が既に存在します: {destination_path}"
+        )
+
+    try:
+        shutil.copyfile(source_markdown_path, destination_path)
+    except OSError as exc:
+        raise WorkingMarkdownError(
+            "エラー: 作業用 Markdown の複製に失敗しました: "
+            f"{source_markdown_path} -> {destination_path}: {exc}"
+        ) from exc
+
+    return destination_path
 
 
 def resolve_auto_matched_markdown_path(
@@ -662,6 +692,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             "この組み合わせは別途実機検証が必要です。",
             file=sys.stderr,
         )
+    _resolved_markdown_path: Path | None = None
     if _args.pdf_path or _args.markdown_path:
         try:
             _resolved_markdown_path = resolve_ocr_markdown_path(
@@ -676,6 +707,15 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     except WorkingDirectoryError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    if _resolved_markdown_path is not None:
+        try:
+            _working_markdown_path = copy_markdown_to_working_directory(
+                source_markdown_path=_resolved_markdown_path,
+                working_dir=_resolved_working_dir,
+            )
+        except WorkingMarkdownError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     print(
         "エラー: OCR Markdown 修正モードはまだ未実装です。"
         "Task 0-1 では実行経路の分離のみを行います。",
