@@ -52,6 +52,12 @@ DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 120_000
 # 別モデル等で API が併用拒否する場合のみ True にし、PDF 添付時は thinking_config なしで送る。
 OMIT_THINKING_CONFIG_WHEN_PDF_ATTACHED = False
 
+# Task 0-3:
+# OCR Markdown correction mode is planned as a tool-driven multi-turn flow.
+# Keep thinking_config disabled by default there until the combination with
+# function calling / thought signatures is verified separately.
+ENABLE_THINKING_CONFIG_IN_OCR_CORRECTION = False
+
 
 class PdfValidationError(Exception):
     """PDF 事前検証に失敗したとき。メッセージはそのまま標準エラーに出す。"""
@@ -252,6 +258,15 @@ def build_generation_config(pdf_part: types.Part | None) -> types.GenerateConten
     )
 
 
+def build_ocr_correction_generation_config() -> types.GenerateContentConfig:
+    """OCR correction mode defaults to no thinking_config until separately verified."""
+    if ENABLE_THINKING_CONFIG_IN_OCR_CORRECTION:
+        return types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level="high"),
+        )
+    return types.GenerateContentConfig()
+
+
 def get_api_key_or_exit(env_name: str) -> str | None:
     """Resolve the API key from the configured environment variable."""
     api_key = os.getenv(env_name, "").strip()
@@ -426,6 +441,13 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
 
 def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     """Dedicated entry point for the future OCR correction flow."""
+    _gen_config = build_ocr_correction_generation_config()
+    if _gen_config.thinking_config is not None:
+        print(
+            "警告: OCR Markdown 修正モードで thinking_config が有効です。"
+            "この組み合わせは別途実機検証が必要です。",
+            file=sys.stderr,
+        )
     print(
         "エラー: OCR Markdown 修正モードはまだ未実装です。"
         "Task 0-1 では実行経路の分離のみを行います。",
