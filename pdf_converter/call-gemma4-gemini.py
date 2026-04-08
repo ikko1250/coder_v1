@@ -78,6 +78,17 @@ def validate_pdf_path(pdf_path: str) -> Path:
     return path
 
 
+def load_pdf_part(path: Path) -> types.Part:
+    """検証済み PDF を全文読み込み、inline 用 Part を返す。"""
+    try:
+        pdf_bytes = path.read_bytes()
+    except OSError as exc:
+        raise PdfValidationError(
+            f"エラー: PDF ファイルの読み込みに失敗しました: {path}: {exc}"
+        ) from exc
+    return types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+
+
 def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
     """位置引数が省略されたときだけ、PDF パス有無に応じた既定プロンプトを返す（CLI 以外の単体テスト用にも使う）。"""
     if prompt is not None:
@@ -174,7 +185,7 @@ def main() -> int:
     validated_pdf_path: Path | None = None
     if pdf_path is not None:
         try:
-            validated_pdf_path = validate_pdf_path(pdf_path)  # noqa: F841
+            validated_pdf_path = validate_pdf_path(pdf_path)
         except PdfValidationError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -190,6 +201,12 @@ def main() -> int:
     client = genai.Client(api_key=api_key)
 
     pdf_part: types.Part | None = None
+    if validated_pdf_path is not None:
+        try:
+            pdf_part = load_pdf_part(validated_pdf_path)
+        except PdfValidationError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     contents = build_contents(user_prompt, pdf_part)
 
