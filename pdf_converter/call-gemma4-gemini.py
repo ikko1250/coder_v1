@@ -44,6 +44,13 @@ def resolve_prompt(prompt: str | None, pdf_path: str | None) -> str:
     return DEFAULT_PROMPT_TEXT_ONLY
 
 
+def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
+    """generate_content 向け contents。常に list（テキストのみは [prompt]、PDF ありは [pdf_part, prompt]）。"""
+    if pdf_part is None:
+        return [prompt]
+    return [pdf_part, prompt]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high)."
@@ -100,9 +107,12 @@ def main() -> int:
 
     client = genai.Client(api_key=api_key)
 
+    pdf_part: types.Part | None = None
+    contents = build_contents(user_prompt, pdf_part)
+
     response = client.models.generate_content(
         model=model_id,
-        contents=user_prompt,
+        contents=contents,
         config=types.GenerateContentConfig(
             thinking_config=types.ThinkingConfig(thinking_level="high"),
         ),
