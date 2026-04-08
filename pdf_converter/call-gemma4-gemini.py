@@ -53,7 +53,19 @@ def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high)."
+        description=(
+            "Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high). "
+            "Optional --pdf-path attaches a local PDF as inline input (application/pdf)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            '  python pdf_converter/call-gemma4-gemini.py "Summarize this PDF" '
+            "--pdf-path path/to/file.pdf\n"
+            "  python pdf_converter/call-gemma4-gemini.py --pdf-path path/to/file.pdf\n"
+            "\n"
+            "If --pdf-path is omitted, only the text prompt is sent (no PDF)."
+        ),
     )
     parser.add_argument(
         "prompt",
@@ -68,7 +80,13 @@ def parse_args() -> argparse.Namespace:
         "--pdf-path",
         default=None,
         metavar="PATH",
-        help="Optional PDF file path (inline input). If set without prompt, defaults to PDF summary.",
+        dest="pdf_path",
+        help=(
+            "Optional path to a local PDF. When set, the PDF input path is used: the file is "
+            "read and sent as an inline Part (mime type application/pdf) together with the prompt. "
+            "When omitted, the CLI runs in text-only mode. If you omit the positional prompt but "
+            "set this option, the default prompt switches to summarizing the PDF."
+        ),
     )
     parser.add_argument(
         "--api-key-env",
