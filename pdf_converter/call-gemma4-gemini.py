@@ -460,6 +460,24 @@ def build_unified_diff_text(
     return "\n".join(diff_lines)
 
 
+def format_ocr_correction_stdout(final_message: str, diff_text: str) -> str:
+    """OCR 修正モードの標準出力本文を組み立てる。"""
+    if not diff_text.strip():
+        return final_message
+    return "\n\n".join(
+        [
+            final_message,
+            "Unified diff:",
+            diff_text,
+        ]
+    )
+
+
+def emit_ocr_correction_stdout(final_message: str, diff_text: str) -> None:
+    """OCR 修正モードの結果を標準出力へ出す。"""
+    print(format_ocr_correction_stdout(final_message, diff_text))
+
+
 def _brief_api_error_message(exc: errors.APIError, max_len: int = 400) -> str:
     msg = (exc.message or "").strip()
     if not msg and exc.status is not None:
@@ -1506,7 +1524,16 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    print(_final_message)
+    try:
+        _diff_text = build_unified_diff_text(
+            original_path=_resolved_markdown_path,
+            working_path=_working_markdown_path,
+        )
+    except OcrDiffError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    emit_ocr_correction_stdout(_final_message, _diff_text)
     return 0
 
 
