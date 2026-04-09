@@ -125,6 +125,10 @@ class OcrToolExecutionError(Exception):
     """OCR 修正モード用の tool 実行に失敗したとき。"""
 
 
+class OcrFinalizationError(Exception):
+    """OCR 修正モードの最終結果を確定できないとき。"""
+
+
 class ResponseTextError(Exception):
     """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
 
@@ -373,6 +377,37 @@ def run_ocr_correction_turn_loop(
         ]
         contents.append(model_content)
         contents.append(types.Content(role="tool", parts=tool_response_parts))
+
+
+def build_ocr_correction_final_message(
+    payload: OcrResponsePayload,
+    working_markdown_path: Path,
+    initial_working_text: str,
+    budget: ToolCallBudget,
+) -> str:
+    """OCR 修正モードの最終メッセージを決める。"""
+    if payload.text is not None and payload.text.strip():
+        return payload.text
+
+    try:
+        final_working_text = working_markdown_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OcrFinalizationError(
+            f"エラー: OCR 修正結果の確認に失敗しました: {working_markdown_path}: {exc}"
+        ) from exc
+
+    if final_working_text != initial_working_text:
+        working_ref = make_manual_relative_path(working_markdown_path)
+        return (
+            "OCR 修正を完了しました。"
+            f" 編集対象 Markdown を更新しました: {working_ref}"
+            f" (tool 呼び出し: {budget.total_calls}/{budget.limit})"
+        )
+
+    raise OcrFinalizationError(
+        "エラー: OCR 修正モードの最終応答が空で、編集対象 Markdown の更新もありません。"
+        f" 対象: {working_markdown_path}"
+    )
 
 
 def _brief_api_error_message(exc: errors.APIError, max_len: int = 400) -> str:
@@ -1372,6 +1407,14 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
         print("エラー: OCR 修正モードの入力解決に失敗しました。", file=sys.stderr)
         return 1
     try:
+        _initial_working_text = _working_markdown_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"エラー: 編集対象 Markdown の初期読取に失敗しました: {_working_markdown_path}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
         _ocr_contents = build_ocr_correction_contents(
             pdf_path=_validated_pdf_path,
             ocr_markdown_path=_resolved_markdown_path,
@@ -1402,8 +1445,18 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
         print(format_generate_content_error(exc), file=sys.stderr)
         return 1
 
-    if _payload.text:
-        print(_payload.text)
+    try:
+        _final_message = build_ocr_correction_final_message(
+            payload=_payload,
+            working_markdown_path=_working_markdown_path,
+            initial_working_text=_initial_working_text,
+            budget=_budget,
+        )
+    except OcrFinalizationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print(_final_message)
     return 0
 
 
