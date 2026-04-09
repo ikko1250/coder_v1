@@ -5,11 +5,13 @@ Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼
 """
 
 import argparse
+import contextlib
 import os
 import re
 import secrets
 import shutil
 import sys
+import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +60,8 @@ MARKDOWN_TIMESTAMP_STEM_PATTERN = re.compile(
 
 # generate_content 向け HTTP タイムアウト（HttpOptions はミリ秒）。設計書の初期値 120 秒。
 DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 120_000
+WRITE_LOCK_TIMEOUT_SECONDS = 10.0
+WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.1
 
 # Task 3-4（thinking フォールバック）:
 # Phase 0 Task 0-2（verify-task-0-2-pdf-inline-thinking.py）で gemma-4-31b-it の
@@ -459,6 +463,45 @@ def find_unique_normalized_match(haystack: str, needle: str) -> int:
     return first_index
 
 
+def build_write_lock_path(target_path: Path) -> Path:
+    """write 排他制御用の sidecar lock file パスを返す。"""
+    return target_path.with_name(f"{target_path.name}.lock")
+
+
+@contextlib.contextmanager
+def acquire_write_lock(lock_path: Path) -> Path:
+    """sidecar lock file を使って write 区間を排他実行する。"""
+    start_time = time.monotonic()
+    lock_fd: int | None = None
+
+    while True:
+        try:
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(lock_fd, f"{os.getpid()}\n".encode("ascii", errors="replace"))
+            break
+        except FileExistsError:
+            if time.monotonic() - start_time >= WRITE_LOCK_TIMEOUT_SECONDS:
+                raise ToolWriteError(
+                    "エラー: write lock の取得がタイムアウトしました。"
+                    f" 対象: {lock_path}"
+                )
+            time.sleep(WRITE_LOCK_POLL_INTERVAL_SECONDS)
+        except OSError as exc:
+            raise ToolWriteError(
+                f"エラー: write lock の取得に失敗しました: {lock_path}: {exc}"
+            ) from exc
+
+    try:
+        yield lock_path
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Path:
     """write tool 用: work/ 配下へ 1 箇所一致の置換だけを反映する。"""
     normalized_input = (raw_path or "").strip()
@@ -485,41 +528,48 @@ def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Pat
         raise ToolWriteError(f"エラー: write 対象ファイルが見つかりません: {resolved_path}")
 
     try:
-        current_text = resolved_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ToolWriteError(
-            f"エラー: write tool のファイル読取に失敗しました: {resolved_path}: {exc}"
-        ) from exc
+        with acquire_write_lock(build_write_lock_path(resolved_path)):
+            try:
+                current_text = resolved_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ToolWriteError(
+                    f"エラー: write tool のファイル読取に失敗しました: {resolved_path}: {exc}"
+                ) from exc
 
-    normalized_current_text = normalize_tool_text(current_text)
-    normalized_expected_text = normalize_tool_text(expected_old_text)
-    normalized_new_text = normalize_tool_text(new_text)
+            normalized_current_text = normalize_tool_text(current_text)
+            normalized_expected_text = normalize_tool_text(expected_old_text)
+            normalized_new_text = normalize_tool_text(new_text)
 
-    match_index = find_unique_normalized_match(normalized_current_text, normalized_expected_text)
-    if match_index == -1:
-        raise ToolWriteError(
-            "エラー: expected_old_text が一致しません。"
-            f" 対象: {resolved_path}"
-        )
-    if match_index == -2:
-        raise ToolWriteError(
-            "エラー: expected_old_text が複数箇所に一致しました。"
-            f" 対象: {resolved_path}"
-        )
+            match_index = find_unique_normalized_match(
+                normalized_current_text,
+                normalized_expected_text,
+            )
+            if match_index == -1:
+                raise ToolWriteError(
+                    "エラー: expected_old_text が一致しません。"
+                    f" 対象: {resolved_path}"
+                )
+            if match_index == -2:
+                raise ToolWriteError(
+                    "エラー: expected_old_text が複数箇所に一致しました。"
+                    f" 対象: {resolved_path}"
+                )
 
-    replaced_text = (
-        normalized_current_text[:match_index]
-        + normalized_new_text
-        + normalized_current_text[match_index + len(normalized_expected_text) :]
-    )
+            replaced_text = (
+                normalized_current_text[:match_index]
+                + normalized_new_text
+                + normalized_current_text[match_index + len(normalized_expected_text) :]
+            )
 
-    try:
-        with resolved_path.open("w", encoding="utf-8", newline="\n") as output_file:
-            output_file.write(replaced_text)
-    except OSError as exc:
-        raise ToolWriteError(
-            f"エラー: write tool のファイル書込に失敗しました: {resolved_path}: {exc}"
-        ) from exc
+            try:
+                with resolved_path.open("w", encoding="utf-8", newline="\n") as output_file:
+                    output_file.write(replaced_text)
+            except OSError as exc:
+                raise ToolWriteError(
+                    f"エラー: write tool のファイル書込に失敗しました: {resolved_path}: {exc}"
+                ) from exc
+    except ToolWriteError:
+        raise
 
     return resolved_path
 
