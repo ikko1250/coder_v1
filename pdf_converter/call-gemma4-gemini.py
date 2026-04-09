@@ -10,6 +10,7 @@ import re
 import secrets
 import shutil
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -436,8 +437,30 @@ def read_tool_text(raw_path: str) -> str:
         ) from exc
 
 
-def write_tool_text(raw_path: str, new_text: str) -> Path:
-    """write tool 用: work/ 配下の UTF-8 テキストだけを書き換える。"""
+def normalize_tool_text(text: str) -> str:
+    """write 一致判定用に LF + NFC へ正規化する。"""
+    normalized_newlines = text.replace("\r\n", "\n").replace("\r", "\n")
+    return unicodedata.normalize("NFC", normalized_newlines)
+
+
+def find_unique_normalized_match(haystack: str, needle: str) -> int:
+    """needle が haystack に 1 件だけ現れるときの開始位置を返す。"""
+    if not needle:
+        return -1
+
+    first_index = haystack.find(needle)
+    if first_index < 0:
+        return -1
+
+    second_index = haystack.find(needle, first_index + 1)
+    if second_index >= 0:
+        return -2
+
+    return first_index
+
+
+def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Path:
+    """write tool 用: work/ 配下へ 1 箇所一致の置換だけを反映する。"""
     normalized_input = (raw_path or "").strip()
     candidate_path = Path(normalized_input).expanduser()
     joined_candidate = (
@@ -458,9 +481,41 @@ def write_tool_text(raw_path: str, new_text: str) -> Path:
 
     if resolved_path.exists() and not resolved_path.is_file():
         raise ToolWriteError(f"エラー: write 対象パスがファイルではありません: {resolved_path}")
+    if not resolved_path.exists():
+        raise ToolWriteError(f"エラー: write 対象ファイルが見つかりません: {resolved_path}")
 
     try:
-        resolved_path.write_text(new_text, encoding="utf-8")
+        current_text = resolved_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ToolWriteError(
+            f"エラー: write tool のファイル読取に失敗しました: {resolved_path}: {exc}"
+        ) from exc
+
+    normalized_current_text = normalize_tool_text(current_text)
+    normalized_expected_text = normalize_tool_text(expected_old_text)
+    normalized_new_text = normalize_tool_text(new_text)
+
+    match_index = find_unique_normalized_match(normalized_current_text, normalized_expected_text)
+    if match_index == -1:
+        raise ToolWriteError(
+            "エラー: expected_old_text が一致しません。"
+            f" 対象: {resolved_path}"
+        )
+    if match_index == -2:
+        raise ToolWriteError(
+            "エラー: expected_old_text が複数箇所に一致しました。"
+            f" 対象: {resolved_path}"
+        )
+
+    replaced_text = (
+        normalized_current_text[:match_index]
+        + normalized_new_text
+        + normalized_current_text[match_index + len(normalized_expected_text) :]
+    )
+
+    try:
+        with resolved_path.open("w", encoding="utf-8", newline="\n") as output_file:
+            output_file.write(replaced_text)
     except OSError as exc:
         raise ToolWriteError(
             f"エラー: write tool のファイル書込に失敗しました: {resolved_path}: {exc}"
