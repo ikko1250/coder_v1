@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼び出す最小例。
 
@@ -117,6 +119,10 @@ class ToolCallLimitError(Exception):
 
 class OcrResponseParseError(Exception):
     """OCR 修正モード用の応答パースに失敗したとき。"""
+
+
+class OcrToolExecutionError(Exception):
+    """OCR 修正モード用の tool 実行に失敗したとき。"""
 
 
 class ResponseTextError(Exception):
@@ -282,6 +288,91 @@ def extract_ocr_response_payload(response: types.GenerateContentResponse) -> Ocr
         "エラー: OCR 修正モードの応答に本文も tool call もありません"
         f"（終了理由: {reason_label}）。"
     )
+
+
+def get_required_function_call_arg(
+    function_call: types.FunctionCall,
+    arg_name: str,
+) -> str:
+    """FunctionCall args から必須文字列引数を取り出す。"""
+    args = function_call.args or {}
+    value = args.get(arg_name)
+    if not isinstance(value, str) or not value.strip():
+        raise OcrToolExecutionError(
+            f"エラー: tool 引数 {arg_name} が不正です: {function_call.name}"
+        )
+    return value
+
+
+def execute_ocr_function_call(
+    function_call: types.FunctionCall,
+    budget: ToolCallBudget,
+) -> types.Part:
+    """OCR 修正モード用の read / write tool を実行し、function response part を返す。"""
+    if function_call.name == "read_markdown_file":
+        path = get_required_function_call_arg(function_call, "path")
+        try:
+            content = read_tool_text_limited(path, budget)
+        except (ToolReadError, ToolCallLimitError) as exc:
+            raise OcrToolExecutionError(str(exc)) from exc
+        return types.Part.from_function_response(
+            name=function_call.name,
+            response={
+                "result": {
+                    "path": path,
+                    "content": content,
+                }
+            },
+        )
+
+    if function_call.name == "write_markdown_file":
+        path = get_required_function_call_arg(function_call, "path")
+        expected_old_text = get_required_function_call_arg(function_call, "expected_old_text")
+        new_text = get_required_function_call_arg(function_call, "new_text")
+        try:
+            written_path = write_tool_text_limited(path, expected_old_text, new_text, budget)
+        except (ToolWriteError, ToolCallLimitError) as exc:
+            raise OcrToolExecutionError(str(exc)) from exc
+        return types.Part.from_function_response(
+            name=function_call.name,
+            response={
+                "result": {
+                    "path": make_manual_relative_path(written_path),
+                    "status": "ok",
+                }
+            },
+        )
+
+    raise OcrToolExecutionError(f"エラー: 未対応の tool 呼び出しです: {function_call.name}")
+
+
+def run_ocr_correction_turn_loop(
+    client: genai.Client,
+    model_id: str,
+    initial_contents: list,
+    config: types.GenerateContentConfig,
+    budget: ToolCallBudget,
+) -> OcrResponsePayload:
+    """OCR 修正モード用の tool 実行付き多ターン loop。"""
+    contents = list(initial_contents)
+
+    while True:
+        response = generate_content_once(client, model_id, contents, config)
+        payload = extract_ocr_response_payload(response)
+
+        if not payload.function_calls:
+            return payload
+
+        model_content = response.candidates[0].content
+        if model_content is None:
+            raise OcrResponseParseError("エラー: tool call 応答に candidate.content がありません。")
+
+        tool_response_parts = [
+            execute_ocr_function_call(function_call, budget)
+            for function_call in payload.function_calls
+        ]
+        contents.append(model_content)
+        contents.append(types.Content(role="tool", parts=tool_response_parts))
 
 
 def _brief_api_error_message(exc: errors.APIError, max_len: int = 400) -> str:
@@ -1233,6 +1324,9 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
 
 def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     """Dedicated entry point for the future OCR correction flow."""
+    dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
+    load_dotenv(dotenv_path)
+
     _gen_config = build_ocr_correction_generation_config()
     if _gen_config.thinking_config is not None:
         print(
@@ -1240,6 +1334,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             "この組み合わせは別途実機検証が必要です。",
             file=sys.stderr,
         )
+    _model_id = (_args.model or "").strip() or DEFAULT_MODEL
     _validated_pdf_path: Path | None = None
     if not _args.pdf_path:
         print("エラー: OCR Markdown 修正モードでは --pdf-path が必須です。", file=sys.stderr)
@@ -1285,12 +1380,31 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     except (PdfValidationError, MarkdownResolutionError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    print(
-        "エラー: OCR Markdown 修正モードはまだ未実装です。"
-        "Task 0-1 では実行経路の分離のみを行います。",
-        file=sys.stderr,
-    )
-    return 1
+    _api_key = get_api_key_or_exit(_args.api_key_env)
+    if _api_key is None:
+        return 1
+
+    _client = build_genai_client(_api_key)
+    _budget = ToolCallBudget()
+
+    try:
+        _payload = run_ocr_correction_turn_loop(
+            client=_client,
+            model_id=_model_id,
+            initial_contents=_ocr_contents,
+            config=_gen_config,
+            budget=_budget,
+        )
+    except (OcrResponseParseError, OcrToolExecutionError, ToolCallLimitError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(format_generate_content_error(exc), file=sys.stderr)
+        return 1
+
+    if _payload.text:
+        print(_payload.text)
+    return 0
 
 
 if __name__ == "__main__":
