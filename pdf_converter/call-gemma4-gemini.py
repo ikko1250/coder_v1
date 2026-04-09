@@ -13,6 +13,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -114,6 +115,10 @@ class ToolCallLimitError(Exception):
     """read / write tool の総呼び出し回数上限を超えたとき。"""
 
 
+class OcrResponseParseError(Exception):
+    """OCR 修正モード用の応答パースに失敗したとき。"""
+
+
 class ResponseTextError(Exception):
     """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
 
@@ -137,6 +142,15 @@ def _enum_label(value: object) -> str:
         return "不明"
     inner = getattr(value, "value", None)
     return str(inner) if inner is not None else str(value)
+
+
+@dataclass
+class OcrResponsePayload:
+    """OCR 修正モード用の応答解析結果。"""
+
+    text: str | None
+    function_calls: list[types.FunctionCall]
+    finish_reason: object | None
 
 
 def extract_response_text(response: types.GenerateContentResponse) -> str:
@@ -175,6 +189,98 @@ def extract_response_text(response: types.GenerateContentResponse) -> str:
         )
     raise ResponseTextError(
         f"エラー: 応答テキストが空です（終了理由: {reason_label}）。"
+    )
+
+
+def collect_function_calls_from_response(
+    response: types.GenerateContentResponse,
+) -> list[types.FunctionCall]:
+    """GenerateContentResponse から function_call 群を抽出する。"""
+    direct_function_calls = getattr(response, "function_calls", None)
+    if direct_function_calls:
+        return list(direct_function_calls)
+
+    extracted_calls: list[types.FunctionCall] = []
+    for candidate in response.candidates or []:
+        content = getattr(candidate, "content", None)
+        if content is None:
+            continue
+        for part in getattr(content, "parts", []) or []:
+            function_call = getattr(part, "function_call", None)
+            if function_call is not None:
+                extracted_calls.append(function_call)
+    return extracted_calls
+
+
+def extract_text_from_candidate_parts(candidate: types.Candidate) -> str | None:
+    """candidate.content.parts の text を連結して返す。"""
+    content = getattr(candidate, "content", None)
+    if content is None:
+        return None
+
+    text_parts = []
+    for part in getattr(content, "parts", []) or []:
+        text_value = getattr(part, "text", None)
+        if text_value:
+            text_parts.append(text_value)
+
+    if not text_parts:
+        return None
+
+    joined_text = "".join(text_parts)
+    return joined_text if joined_text.strip() else None
+
+
+def extract_ocr_response_payload(response: types.GenerateContentResponse) -> OcrResponsePayload:
+    """OCR 修正モード用: function_call 優先で応答を解析する。"""
+    feedback = response.prompt_feedback
+    if feedback is not None and feedback.block_reason is not None:
+        reason = _enum_label(feedback.block_reason)
+        detail = (feedback.block_reason_message or "").strip()
+        suffix = f" 詳細: {detail}" if detail else ""
+        raise OcrResponseParseError(
+            f"エラー: プロンプトがブロックされました（理由: {reason}）。{suffix}".rstrip()
+        )
+
+    candidates = response.candidates
+    if not candidates:
+        raise OcrResponseParseError("エラー: モデルから応答候補がありません。")
+
+    function_calls = collect_function_calls_from_response(response)
+    finish_reason = candidates[0].finish_reason
+    text: str | None = extract_text_from_candidate_parts(candidates[0])
+
+    if function_calls:
+        return OcrResponsePayload(
+            text=text,
+            function_calls=function_calls,
+            finish_reason=finish_reason,
+        )
+
+    try:
+        raw_text = response.text
+    except Exception:
+        raw_text = None
+
+    if raw_text is not None and raw_text.strip():
+        text = raw_text
+
+    if text is not None:
+        return OcrResponsePayload(
+            text=text,
+            function_calls=[],
+            finish_reason=finish_reason,
+        )
+
+    reason_label = _enum_label(finish_reason)
+    if finish_reason in _FINISH_REASONS_POLICY_EMPTY:
+        raise OcrResponseParseError(
+            "エラー: 安全性ポリシー等により OCR 修正モードの応答本文がありません"
+            f"（終了理由: {reason_label}）。"
+        )
+    raise OcrResponseParseError(
+        "エラー: OCR 修正モードの応答に本文も tool call もありません"
+        f"（終了理由: {reason_label}）。"
     )
 
 
