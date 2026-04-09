@@ -62,6 +62,7 @@ MARKDOWN_TIMESTAMP_STEM_PATTERN = re.compile(
 DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 120_000
 WRITE_LOCK_TIMEOUT_SECONDS = 10.0
 WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.1
+MAX_TOOL_CALLS_PER_RUN = 12
 
 # Task 3-4（thinking フォールバック）:
 # Phase 0 Task 0-2（verify-task-0-2-pdf-inline-thinking.py）で gemma-4-31b-it の
@@ -102,6 +103,10 @@ class ToolReadError(Exception):
 
 class ToolWriteError(Exception):
     """write tool の書込に失敗したとき。"""
+
+
+class ToolCallLimitError(Exception):
+    """read / write tool の総呼び出し回数上限を超えたとき。"""
 
 
 class ResponseTextError(Exception):
@@ -500,6 +505,45 @@ def acquire_write_lock(lock_path: Path) -> Path:
             lock_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+class ToolCallBudget:
+    """OCR 修正モード用の tool 呼び出し回数上限を管理する。"""
+
+    def __init__(self, limit: int = MAX_TOOL_CALLS_PER_RUN):
+        if limit <= 0:
+            raise ValueError("tool call limit must be positive")
+        self.limit = limit
+        self.total_calls = 0
+
+    @property
+    def remaining_calls(self) -> int:
+        return self.limit - self.total_calls
+
+    def consume(self, tool_name: str) -> None:
+        if self.total_calls >= self.limit:
+            raise ToolCallLimitError(
+                "エラー: tool 呼び出し回数が上限を超えました。"
+                f" 上限: {self.limit}, tool: {tool_name}"
+            )
+        self.total_calls += 1
+
+
+def read_tool_text_limited(raw_path: str, budget: ToolCallBudget) -> str:
+    """tool 呼び出し回数を消費しつつ read を実行する。"""
+    budget.consume("read")
+    return read_tool_text(raw_path)
+
+
+def write_tool_text_limited(
+    raw_path: str,
+    expected_old_text: str,
+    new_text: str,
+    budget: ToolCallBudget,
+) -> Path:
+    """tool 呼び出し回数を消費しつつ write を実行する。"""
+    budget.consume("write")
+    return write_tool_text(raw_path, expected_old_text, new_text)
 
 
 def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Path:
