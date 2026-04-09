@@ -8,6 +8,7 @@ Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼
 
 import argparse
 import contextlib
+import difflib
 import os
 import re
 import secrets
@@ -127,6 +128,10 @@ class OcrToolExecutionError(Exception):
 
 class OcrFinalizationError(Exception):
     """OCR 修正モードの最終結果を確定できないとき。"""
+
+
+class OcrDiffError(Exception):
+    """OCR 修正モードの diff 生成に失敗したとき。"""
 
 
 class ResponseTextError(Exception):
@@ -408,6 +413,51 @@ def build_ocr_correction_final_message(
         "エラー: OCR 修正モードの最終応答が空で、編集対象 Markdown の更新もありません。"
         f" 対象: {working_markdown_path}"
     )
+
+
+def read_utf8_text_preserving_newlines(path: Path) -> str:
+    """UTF-8 テキストを改行コードを保持したまま読む。"""
+    try:
+        with path.open("r", encoding="utf-8", newline="") as input_file:
+            return input_file.read()
+    except OSError as exc:
+        raise OcrDiffError(f"エラー: diff 用のファイル読取に失敗しました: {path}: {exc}") from exc
+
+
+def build_unified_diff_text(
+    original_path: Path,
+    working_path: Path,
+) -> str:
+    """元 Markdown と編集対象 Markdown の unified diff を返す。"""
+    try:
+        resolved_original_path = ensure_path_within_directory(
+            original_path,
+            DEFAULT_MANUAL_MARKDOWN_DIR,
+            "元 OCR Markdown",
+            error_cls=OcrDiffError,
+        )
+        resolved_working_path = ensure_path_within_directory(
+            working_path,
+            DEFAULT_MANUAL_WORK_DIR,
+            "編集対象 Markdown",
+            error_cls=OcrDiffError,
+        )
+    except OcrDiffError:
+        raise
+
+    original_text = read_utf8_text_preserving_newlines(resolved_original_path)
+    working_text = read_utf8_text_preserving_newlines(resolved_working_path)
+
+    original_lines = original_text.splitlines(keepends=True)
+    working_lines = working_text.splitlines(keepends=True)
+    diff_lines = difflib.unified_diff(
+        original_lines,
+        working_lines,
+        fromfile=make_manual_relative_path(resolved_original_path),
+        tofile=make_manual_relative_path(resolved_working_path),
+        lineterm="",
+    )
+    return "\n".join(diff_lines)
 
 
 def _brief_api_error_message(exc: errors.APIError, max_len: int = 400) -> str:
