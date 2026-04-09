@@ -529,6 +529,33 @@ def format_generate_content_error(exc: BaseException) -> str:
     )
 
 
+def format_ocr_correction_error(exc: BaseException) -> str:
+    """OCR 修正モード向けに失敗カテゴリを補った CLI エラーメッセージへ整形する。"""
+    if isinstance(exc, MarkdownResolutionError):
+        return f"OCR 修正モードエラー: 入力 Markdown の解決に失敗しました。{exc}"
+    if isinstance(exc, WorkingDirectoryError):
+        return f"OCR 修正モードエラー: work ディレクトリの準備に失敗しました。{exc}"
+    if isinstance(exc, WorkingMarkdownError):
+        return f"OCR 修正モードエラー: 編集対象 Markdown の作成に失敗しました。{exc}"
+    if isinstance(exc, ToolReadError):
+        return f"OCR 修正モードエラー: read tool の実行に失敗しました。{exc}"
+    if isinstance(exc, ToolWriteError):
+        return f"OCR 修正モードエラー: write tool の実行に失敗しました。{exc}"
+    if isinstance(exc, ToolCallLimitError):
+        return f"OCR 修正モードエラー: tool 呼び出し上限に達しました。{exc}"
+    if isinstance(exc, OcrToolExecutionError):
+        return f"OCR 修正モードエラー: tool 実行ループで失敗しました。{exc}"
+    if isinstance(exc, OcrResponseParseError):
+        return f"OCR 修正モードエラー: モデル応答の解析に失敗しました。{exc}"
+    if isinstance(exc, OcrFinalizationError):
+        return f"OCR 修正モードエラー: 最終結果の確定に失敗しました。{exc}"
+    if isinstance(exc, OcrDiffError):
+        return f"OCR 修正モードエラー: diff 生成に失敗しました。{exc}"
+    if isinstance(exc, PdfValidationError):
+        return f"OCR 修正モードエラー: PDF の検証に失敗しました。{exc}"
+    return format_generate_content_error(exc)
+
+
 def validate_pdf_path(pdf_path: str) -> Path:
     """API 呼び出し前の PDF 検証。成功時は解決済み Path を返し、失敗時は PdfValidationError。"""
     path = Path(pdf_path).expanduser().resolve()
@@ -1445,7 +1472,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     try:
         _validated_pdf_path = validate_pdf_path(_args.pdf_path)
     except PdfValidationError as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
     _resolved_markdown_path: Path | None = None
     try:
@@ -1454,12 +1481,12 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             markdown_path=_args.markdown_path,
         )
     except MarkdownResolutionError as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
     try:
         _resolved_working_dir = resolve_working_directory(_args.working_dir)
     except WorkingDirectoryError as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
     _working_markdown_path: Path | None = None
     if _resolved_markdown_path is not None:
@@ -1469,7 +1496,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
                 working_dir=_resolved_working_dir,
             )
         except WorkingMarkdownError as exc:
-            print(str(exc), file=sys.stderr)
+            print(format_ocr_correction_error(exc), file=sys.stderr)
             return 1
     if _resolved_markdown_path is None or _working_markdown_path is None or _validated_pdf_path is None:
         print("エラー: OCR 修正モードの入力解決に失敗しました。", file=sys.stderr)
@@ -1489,7 +1516,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             working_markdown_path=_working_markdown_path,
         )
     except (PdfValidationError, MarkdownResolutionError) as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
     _api_key = get_api_key_or_exit(_args.api_key_env)
     if _api_key is None:
@@ -1507,10 +1534,10 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             budget=_budget,
         )
     except (OcrResponseParseError, OcrToolExecutionError, ToolCallLimitError) as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
     except Exception as exc:
-        print(format_generate_content_error(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
 
     try:
@@ -1521,7 +1548,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             budget=_budget,
         )
     except OcrFinalizationError as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
 
     try:
@@ -1530,7 +1557,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             working_path=_working_markdown_path,
         )
     except OcrDiffError as exc:
-        print(str(exc), file=sys.stderr)
+        print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
 
     emit_ocr_correction_stdout(_final_message, _diff_text)
