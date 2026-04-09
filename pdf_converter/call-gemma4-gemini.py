@@ -854,11 +854,74 @@ def build_generation_config(pdf_part: types.Part | None) -> types.GenerateConten
 
 def build_ocr_correction_generation_config() -> types.GenerateContentConfig:
     """OCR correction mode defaults to no thinking_config until separately verified."""
+    config_kwargs = {
+        "tools": build_ocr_correction_tools(),
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
+    }
     if ENABLE_THINKING_CONFIG_IN_OCR_CORRECTION:
-        return types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="high")
+    return types.GenerateContentConfig(**config_kwargs)
+
+
+def build_ocr_correction_tools() -> list[types.Tool]:
+    """OCR 修正モードで使う read / write tool 定義を返す。"""
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name="read_markdown_file",
+                    description=(
+                        "Reads a UTF-8 Markdown file from asset/texts_2nd/manual/md or "
+                        "asset/texts_2nd/manual/work for OCR correction and verification."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": (
+                                    "Relative path under asset/texts_2nd/manual, such as "
+                                    "'md/example.md' or 'work/example-working.md'."
+                                ),
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="write_markdown_file",
+                    description=(
+                        "Writes a constrained replacement into a UTF-8 Markdown file under "
+                        "asset/texts_2nd/manual/work only."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": (
+                                    "Relative path under asset/texts_2nd/manual/work, such as "
+                                    "'work/example-working.md'."
+                                ),
+                            },
+                            "expected_old_text": {
+                                "type": "string",
+                                "description": (
+                                    "The exact text block expected at the target location after "
+                                    "LF and NFC normalization."
+                                ),
+                            },
+                            "new_text": {
+                                "type": "string",
+                                "description": "Replacement text for the single matched block.",
+                            },
+                        },
+                        "required": ["path", "expected_old_text", "new_text"],
+                    },
+                ),
+            ]
         )
-    return types.GenerateContentConfig()
+    ]
 
 
 def get_api_key_or_exit(env_name: str) -> str | None:
