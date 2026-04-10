@@ -8,3 +8,8 @@ csv_highlight_viewer_rust.zip
 /.venv-win
 analysis_backend/__pycache__
 /docs
+/pdf_converter/.env
+/pdf_converter/__pycache__/
+/output/
+/temp.md
+/temp.pdf
