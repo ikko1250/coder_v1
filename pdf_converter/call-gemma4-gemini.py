@@ -24,6 +24,7 @@ import httpx
 from google import genai
 from google.genai import errors
 from google.genai import types
+from pdf_converter.tool_call_logger import ToolCallLogEvent, ToolCallLogger
 
 
 def load_dotenv(dotenv_path: str) -> None:
@@ -361,11 +362,14 @@ def run_ocr_correction_turn_loop(
     initial_contents: list,
     config: types.GenerateContentConfig,
     budget: ToolCallBudget,
+    tool_call_logger: ToolCallLogger | None = None,
 ) -> OcrResponsePayload:
     """OCR 修正モード用の tool 実行付き多ターン loop。"""
     contents = list(initial_contents)
 
+    turn_index = 0
     while True:
+        turn_index += 1
         response = generate_content_once(client, model_id, contents, config)
         payload = extract_ocr_response_payload(response)
 
@@ -376,10 +380,46 @@ def run_ocr_correction_turn_loop(
         if model_content is None:
             raise OcrResponseParseError("エラー: tool call 応答に candidate.content がありません。")
 
-        tool_response_parts = [
-            execute_ocr_function_call(function_call, budget)
-            for function_call in payload.function_calls
-        ]
+        tool_response_parts = []
+        for function_call in payload.function_calls:
+            if tool_call_logger is not None:
+                tool_call_logger.write_event(
+                    ToolCallLogEvent(
+                        phase="requested",
+                        turn_index=turn_index,
+                        tool_name=function_call.name,
+                        args=dict(function_call.args or {}),
+                        status="ok",
+                    )
+                )
+
+            try:
+                response_part = execute_ocr_function_call(function_call, budget)
+            except OcrToolExecutionError:
+                if tool_call_logger is not None:
+                    tool_call_logger.write_event(
+                        ToolCallLogEvent(
+                            phase="executed",
+                            turn_index=turn_index,
+                            tool_name=function_call.name,
+                            args=dict(function_call.args or {}),
+                            status="error",
+                        )
+                    )
+                raise
+            tool_response_parts.append(response_part)
+
+            if tool_call_logger is not None:
+                tool_call_logger.write_event(
+                    ToolCallLogEvent(
+                        phase="executed",
+                        turn_index=turn_index,
+                        tool_name=function_call.name,
+                        args=dict(function_call.args or {}),
+                        status="ok",
+                        details={"response_part_kind": "function_response"},
+                    )
+                )
         contents.append(model_content)
         contents.append(types.Content(role="tool", parts=tool_response_parts))
 
@@ -1358,6 +1398,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tool-call-log-path",
+        default=None,
+        metavar="PATH",
+        dest="tool_call_log_path",
+        help=(
+            "Optional path to a JSONL file used in OCR correction mode to append "
+            "tool-call request/execution logs for each turn."
+        ),
+    )
+    parser.add_argument(
         "--task",
         default=DEFAULT_TASK,
         choices=[DEFAULT_TASK, OCR_CORRECTION_TASK],
@@ -1528,6 +1578,9 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
 
     _client = build_genai_client(_api_key)
     _budget = ToolCallBudget()
+    _tool_call_logger: ToolCallLogger | None = None
+    if _args.tool_call_log_path:
+        _tool_call_logger = ToolCallLogger(Path(_args.tool_call_log_path))
 
     try:
         _payload = run_ocr_correction_turn_loop(
@@ -1536,6 +1589,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
             initial_contents=_ocr_contents,
             config=_gen_config,
             budget=_budget,
+            tool_call_logger=_tool_call_logger,
         )
     except (OcrResponseParseError, OcrToolExecutionError, ToolCallLimitError) as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
