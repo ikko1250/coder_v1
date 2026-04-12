@@ -82,7 +82,10 @@ MIN_HTTP_TIMEOUT_MS = 5_000
 MAX_HTTP_TIMEOUT_MS = 3_600_000
 WRITE_LOCK_TIMEOUT_SECONDS = 10.0
 WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.1
-MAX_TOOL_CALLS_PER_RUN = 12
+# OCR 修正でモデルが細かい write を繰り返すと 12 回では足りないことがあるため既定を上げ、CLI でも上書き可能にする。
+DEFAULT_MAX_TOOL_CALLS_PER_RUN = 48
+MIN_MAX_TOOL_CALLS_PER_RUN = 1
+MAX_TOOL_CALLS_CAP = 256
 
 # Task 3-4（thinking フォールバック）:
 # Phase 0 Task 0-2（verify-task-0-2-pdf-inline-thinking.py）で gemma-4-31b-it の
@@ -929,7 +932,7 @@ def acquire_write_lock(lock_path: Path) -> Path:
 class ToolCallBudget:
     """OCR 修正モード用の tool 呼び出し回数上限を管理する。"""
 
-    def __init__(self, limit: int = MAX_TOOL_CALLS_PER_RUN):
+    def __init__(self, limit: int = DEFAULT_MAX_TOOL_CALLS_PER_RUN):
         if limit <= 0:
             raise ValueError("tool call limit must be positive")
         self.limit = limit
@@ -1381,6 +1384,21 @@ def generate_content_once(
     )
 
 
+def max_tool_calls_arg_type(value: str) -> int:
+    """argparse 用: OCR 修正モードの read/write 合算回数上限。"""
+    try:
+        n = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"整数が必要です: {value!r}"
+        ) from exc
+    if n < MIN_MAX_TOOL_CALLS_PER_RUN or n > MAX_TOOL_CALLS_CAP:
+        raise argparse.ArgumentTypeError(
+            f"--max-tool-calls は {MIN_MAX_TOOL_CALLS_PER_RUN} 以上 {MAX_TOOL_CALLS_CAP} 以下にしてください。"
+        )
+    return n
+
+
 def http_timeout_ms_arg_type(value: str) -> int:
     """argparse 用: generate_content の HTTP タイムアウト（ミリ秒）を検証する。"""
     try:
@@ -1514,6 +1532,18 @@ def parse_args() -> argparse.Namespace:
             "HTTP timeout in milliseconds for each generate_content request "
             f"(default: {DEFAULT_GENERATE_CONTENT_TIMEOUT_MS}). "
             f"Allowed range: {MIN_HTTP_TIMEOUT_MS}–{MAX_HTTP_TIMEOUT_MS}."
+        ),
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        default=DEFAULT_MAX_TOOL_CALLS_PER_RUN,
+        type=max_tool_calls_arg_type,
+        metavar="N",
+        dest="max_tool_calls",
+        help=(
+            "OCR correction mode: max total read+write tool executions per run "
+            f"(default: {DEFAULT_MAX_TOOL_CALLS_PER_RUN}, "
+            f"allowed: {MIN_MAX_TOOL_CALLS_PER_RUN}–{MAX_TOOL_CALLS_CAP})."
         ),
     )
     return parser.parse_args()
@@ -1659,7 +1689,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
         return 1
 
     _client = build_genai_client(_api_key, _args.http_timeout_ms)
-    _budget = ToolCallBudget()
+    _budget = ToolCallBudget(_args.max_tool_calls)
     _tool_call_logger: ToolCallLogger | None = None
     if _args.tool_call_log_path:
         _tool_call_logger = ToolCallLogger(Path(_args.tool_call_log_path))
