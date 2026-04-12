@@ -75,8 +75,11 @@ MARKDOWN_TIMESTAMP_STEM_PATTERN = re.compile(
     r"^(?P<base>.+)-(?P<ts>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})$"
 )
 
-# generate_content 向け HTTP タイムアウト（HttpOptions はミリ秒）。設計書の初期値 120 秒。
-DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 120_000
+# generate_content 向け HTTP タイムアウト（HttpOptions はミリ秒）。
+# 単発 PDF は 120 秒以内でも、ocr-correct（PDF + Markdown + tool）の初回が超えることがあるため 5 分を既定とする。
+DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 300_000
+MIN_HTTP_TIMEOUT_MS = 5_000
+MAX_HTTP_TIMEOUT_MS = 3_600_000
 WRITE_LOCK_TIMEOUT_SECONDS = 10.0
 WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.1
 MAX_TOOL_CALLS_PER_RUN = 12
@@ -1351,11 +1354,16 @@ def get_api_key_or_exit(env_name: str) -> str | None:
     return None
 
 
-def build_genai_client(api_key: str) -> genai.Client:
-    """Create a Gemini API client with the standard timeout used by this CLI."""
+def build_genai_client(api_key: str, http_timeout_ms: int | None = None) -> genai.Client:
+    """Create a Gemini API client with the HTTP timeout used by this CLI (milliseconds)."""
+    timeout_ms = (
+        http_timeout_ms
+        if http_timeout_ms is not None
+        else DEFAULT_GENERATE_CONTENT_TIMEOUT_MS
+    )
     return genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=DEFAULT_GENERATE_CONTENT_TIMEOUT_MS),
+        http_options=types.HttpOptions(timeout=timeout_ms),
     )
 
 
@@ -1371,6 +1379,25 @@ def generate_content_once(
         contents=contents,
         config=config,
     )
+
+
+def http_timeout_ms_arg_type(value: str) -> int:
+    """argparse 用: generate_content の HTTP タイムアウト（ミリ秒）を検証する。"""
+    try:
+        ms = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"整数のミリ秒が必要です: {value!r}"
+        ) from exc
+    if ms < MIN_HTTP_TIMEOUT_MS:
+        raise argparse.ArgumentTypeError(
+            f"--http-timeout-ms は {MIN_HTTP_TIMEOUT_MS} 以上（{MIN_HTTP_TIMEOUT_MS // 1000} 秒以上）にしてください。"
+        )
+    if ms > MAX_HTTP_TIMEOUT_MS:
+        raise argparse.ArgumentTypeError(
+            f"--http-timeout-ms は {MAX_HTTP_TIMEOUT_MS} 以下（{MAX_HTTP_TIMEOUT_MS // 1000 // 60} 分以下）にしてください。"
+        )
+    return ms
 
 
 def parse_args() -> argparse.Namespace:
@@ -1477,6 +1504,18 @@ def parse_args() -> argparse.Namespace:
             "Use another id for troubleshooting or comparison when behaviour differs by model."
         ),
     )
+    parser.add_argument(
+        "--http-timeout-ms",
+        default=DEFAULT_GENERATE_CONTENT_TIMEOUT_MS,
+        type=http_timeout_ms_arg_type,
+        metavar="MS",
+        dest="http_timeout_ms",
+        help=(
+            "HTTP timeout in milliseconds for each generate_content request "
+            f"(default: {DEFAULT_GENERATE_CONTENT_TIMEOUT_MS}). "
+            f"Allowed range: {MIN_HTTP_TIMEOUT_MS}–{MAX_HTTP_TIMEOUT_MS}."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1514,7 +1553,7 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
     if api_key is None:
         return 1
 
-    client = build_genai_client(api_key)
+    client = build_genai_client(api_key, args.http_timeout_ms)
 
     pdf_part: types.Part | None = None
     if validated_pdf_path is not None:
@@ -1619,7 +1658,7 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     if _api_key is None:
         return 1
 
-    _client = build_genai_client(_api_key)
+    _client = build_genai_client(_api_key, _args.http_timeout_ms)
     _budget = ToolCallBudget()
     _tool_call_logger: ToolCallLogger | None = None
     if _args.tool_call_log_path:
