@@ -1,4 +1,4 @@
-import importlib.util
+import importlib
 import json
 import shutil
 import sys
@@ -13,19 +13,11 @@ from pdf_converter.tool_call_logger import ToolCallLogger
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODULE_PATH = REPO_ROOT / "pdf_converter" / "call-gemma4-gemini.py"
+MODULE_NAME = "pdf_converter.call_gemma4_gemini"
 
 
 def load_target_module():
-    module_name = "call_gemma4_gemini_tool_call_logging_test_module"
-    spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"module spec を取得できません: {MODULE_PATH}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module(MODULE_NAME)
 
 
 def build_fake_response(model_content: types.Content):

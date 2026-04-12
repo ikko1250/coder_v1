@@ -35,6 +35,20 @@ CSV の閲覧、フィルタリング、Python バックエンドを使った分
 - Python パッケージ
   現在の `pyproject.toml` では `polars` を利用します
 
+## Python パッケージ名と project 名
+
+このリポジトリでは、`pyproject.toml` 上の project / distribution 名は `csv-viewer`、Python から import する package 名は `pdf_converter` です。
+
+`uv run call-gemma4-gemini` は project 名ではなく、`pyproject.toml` に定義する script entry point 名として扱います。現時点では CLI module の移設と package 化を進めている途中のため、`import pdf_converter` と `uv run call-gemma4-gemini` の対応は、実装が揃った段階で安定して使えるようになる見込みです。
+
+旧来の `python pdf_converter/call-gemma4-gemini.py ...` 形式は、当面は互換 shim として残す方針です。
+
+`CSV_VIEWER_PROJECT_ROOT` は、project root の明示上書きに使う環境変数です。現状の helper は `CSV_VIEWER_PROJECT_ROOT` を先に見て、次に `pyproject.toml` の上位探索、最後に `__file__` fallback の順で root を決めます。
+
+この root 解決は editable install 前提で安定しやすい一方、`uv pip install .` や `pip install .` のような non-editable install では source tree を辿れず、asset / output / `.env` の位置解決が崩れる場合があります。その場合は `CSV_VIEWER_PROJECT_ROOT` を設定するか、source tree から実行してください。
+
+`python pdf_converter/call-gemma4-gemini.py ...` は、現時点では互換 shim 経由の起動です。利用案内としては `uv run call-gemma4-gemini ...` を優先します。
+
 Python 実行系は次の順で解決されます。
 
 1. 分析設定で明示指定した Python

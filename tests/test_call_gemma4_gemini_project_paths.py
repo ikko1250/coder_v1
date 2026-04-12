@@ -1,10 +1,11 @@
-import importlib.util
 import os
 import shutil
 import sys
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import importlib
 
 from pdf_converter.project_paths import (
     ProjectRootResolutionError,
@@ -16,23 +17,17 @@ from pdf_converter.project_paths import (
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CLI_MODULE_PATH = REPO_ROOT / "pdf_converter" / "call-gemma4-gemini.py"
+CLI_MODULE_NAME = "pdf_converter.call_gemma4_gemini"
 
 
 def load_cli_module():
-    module_name = "call_gemma4_gemini_project_paths_test_module"
-    spec = importlib.util.spec_from_file_location(module_name, CLI_MODULE_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"module spec を取得できません: {CLI_MODULE_PATH}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
+    sys.modules.pop(CLI_MODULE_NAME, None)
+    importlib.invalidate_caches()
     with mock.patch(
         "pdf_converter.project_paths.resolve_project_root",
         side_effect=AssertionError("unexpected project root resolution during import"),
     ):
-        spec.loader.exec_module(module)
-    return module
+        return importlib.import_module(CLI_MODULE_NAME)
 
 
 class ProjectPathResolutionTests(unittest.TestCase):
@@ -117,7 +112,7 @@ class ProjectPathResolutionTests(unittest.TestCase):
     def test_cli_import_and_parse_args_do_not_trigger_project_root_resolution(self):
         module = load_cli_module()
         argv = [
-            "call-gemma4-gemini.py",
+            "call_gemma4_gemini.py",
             "--task",
             module.OCR_CORRECTION_TASK,
             "--pdf-path",
