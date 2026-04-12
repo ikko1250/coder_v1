@@ -25,13 +25,19 @@ from google import genai
 from google.genai import errors
 from google.genai import types
 from pdf_converter.tool_call_logger import ToolCallLogEvent, ToolCallLogger
+from pdf_converter.project_paths import (
+    resolve_default_ocr_output_dir,
+    resolve_dotenv_path,
+    resolve_manual_root,
+)
 
 
-def load_dotenv(dotenv_path: str) -> None:
-    if not os.path.exists(dotenv_path):
+def load_dotenv(dotenv_path: str | Path) -> None:
+    dotenv_file_path = Path(dotenv_path)
+    if not dotenv_file_path.exists():
         return
 
-    with open(dotenv_path, encoding="utf-8") as dotenv_file:
+    with dotenv_file_path.open(encoding="utf-8") as dotenv_file:
         for raw_line in dotenv_file:
             line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -50,11 +56,12 @@ DEFAULT_PROMPT_TEXT_ONLY = "水の化学式は何ですか？簡潔に答えて�
 DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
 DEFAULT_TASK = "single-shot"
 OCR_CORRECTION_TASK = "ocr-correct"
-DEFAULT_MANUAL_ROOT = Path(__file__).resolve().parent.parent / "asset" / "texts_2nd" / "manual"
-DEFAULT_MANUAL_PDF_DIR = DEFAULT_MANUAL_ROOT / "pdf"
-DEFAULT_MANUAL_MARKDOWN_DIR = DEFAULT_MANUAL_ROOT / "md"
-DEFAULT_MANUAL_WORK_DIR = DEFAULT_MANUAL_ROOT / "work"
-DEFAULT_OCR_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+DEFAULT_MANUAL_ROOT: Path | None = None
+DEFAULT_MANUAL_PDF_DIR: Path | None = None
+DEFAULT_MANUAL_MARKDOWN_DIR: Path | None = None
+DEFAULT_MANUAL_WORK_DIR: Path | None = None
+DEFAULT_OCR_OUTPUT_DIR: Path | None = None
+DEFAULT_DOTENV_PATH: Path | None = None
 DEFAULT_OCR_CORRECTION_PROMPT = (
     "あなたは OCR Markdown の修正担当です。"
     " PDF を正本として参照し、編集対象 Markdown に対して必要最小限の局所修正だけを行ってください。"
@@ -158,6 +165,43 @@ def _enum_label(value: object) -> str:
         return "不明"
     inner = getattr(value, "value", None)
     return str(inner) if inner is not None else str(value)
+
+
+def get_default_manual_root() -> Path:
+    """Resolve the repository manual root only when a path is actually needed."""
+    if DEFAULT_MANUAL_ROOT is not None:
+        return DEFAULT_MANUAL_ROOT
+    return resolve_manual_root()
+
+
+def get_default_manual_pdf_dir() -> Path:
+    if DEFAULT_MANUAL_PDF_DIR is not None:
+        return DEFAULT_MANUAL_PDF_DIR
+    return get_default_manual_root() / "pdf"
+
+
+def get_default_manual_markdown_dir() -> Path:
+    if DEFAULT_MANUAL_MARKDOWN_DIR is not None:
+        return DEFAULT_MANUAL_MARKDOWN_DIR
+    return get_default_manual_root() / "md"
+
+
+def get_default_manual_work_dir() -> Path:
+    if DEFAULT_MANUAL_WORK_DIR is not None:
+        return DEFAULT_MANUAL_WORK_DIR
+    return get_default_manual_root() / "work"
+
+
+def get_default_ocr_output_dir() -> Path:
+    if DEFAULT_OCR_OUTPUT_DIR is not None:
+        return DEFAULT_OCR_OUTPUT_DIR
+    return resolve_default_ocr_output_dir()
+
+
+def get_default_dotenv_path() -> Path:
+    if DEFAULT_DOTENV_PATH is not None:
+        return DEFAULT_DOTENV_PATH
+    return resolve_dotenv_path()
 
 
 @dataclass
@@ -472,13 +516,13 @@ def build_unified_diff_text(
     try:
         resolved_original_path = ensure_path_within_directory(
             original_path,
-            DEFAULT_MANUAL_MARKDOWN_DIR,
+            get_default_manual_markdown_dir(),
             "元 OCR Markdown",
             error_cls=OcrDiffError,
         )
         resolved_working_path = ensure_path_within_directory(
             working_path,
-            DEFAULT_MANUAL_WORK_DIR,
+            get_default_manual_work_dir(),
             "編集対象 Markdown",
             error_cls=OcrDiffError,
         )
@@ -671,7 +715,7 @@ def find_auto_matched_markdown_candidates(
     markdown_dir: Path | None = None,
 ) -> list[Path]:
     """PDF stem と一致する timestamp 付き Markdown 候補だけを返す。"""
-    search_dir = (markdown_dir or DEFAULT_MANUAL_MARKDOWN_DIR).expanduser()
+    search_dir = (markdown_dir or get_default_manual_markdown_dir()).expanduser()
     if not search_dir.exists() or not search_dir.is_dir():
         return []
 
@@ -739,14 +783,14 @@ def validate_markdown_path(markdown_path: str) -> Path:
         raise MarkdownResolutionError(f"エラー: Markdown パスがファイルではありません: {path}")
     if path.suffix.lower() != ".md":
         raise MarkdownResolutionError(f"エラー: .md ファイルのみ対応しています: {path}")
-    if is_path_within_directory(path, DEFAULT_OCR_OUTPUT_DIR):
-        raise MarkdownResolutionError(
-            "エラー: OCR Markdown 修正フローは pdf_converter.py の output/ を自動入力元にしません: "
-            f"{path}。入力は {DEFAULT_MANUAL_MARKDOWN_DIR} 配下に固定です。"
-            " 必要なら output/ から manual/md へ移動またはコピーしてから指定してください。"
-        )
+        if is_path_within_directory(path, get_default_ocr_output_dir()):
+            raise MarkdownResolutionError(
+                "エラー: OCR Markdown 修正フローは pdf_converter.py の output/ を自動入力元にしません: "
+                f"{path}。入力は {get_default_manual_markdown_dir()} 配下に固定です。"
+                " 必要なら output/ から manual/md へ移動またはコピーしてから指定してください。"
+            )
 
-    return ensure_path_within_directory(path, DEFAULT_MANUAL_MARKDOWN_DIR, "Markdown パス")
+    return ensure_path_within_directory(path, get_default_manual_markdown_dir(), "Markdown パス")
 
 
 def is_path_within_directory(path: Path, allowed_dir: Path) -> bool:
@@ -767,7 +811,7 @@ def resolve_tool_path(
         raise ToolPathResolutionError(f"エラー: {label} が空です。")
 
     input_path = Path(normalized_input).expanduser()
-    joined_path = input_path if input_path.is_absolute() else DEFAULT_MANUAL_ROOT / input_path
+    joined_path = input_path if input_path.is_absolute() else get_default_manual_root() / input_path
     resolved_path = joined_path.resolve()
     resolved_allowed_dirs = [allowed_dir.expanduser().resolve() for allowed_dir in allowed_dirs]
 
@@ -786,20 +830,20 @@ def read_tool_text(raw_path: str) -> str:
     normalized_input = (raw_path or "").strip()
     candidate_path = Path(normalized_input).expanduser()
     joined_candidate = (
-        candidate_path if candidate_path.is_absolute() else DEFAULT_MANUAL_ROOT / candidate_path
+        candidate_path if candidate_path.is_absolute() else get_default_manual_root() / candidate_path
     )
     resolved_candidate = joined_candidate.resolve()
 
     if (
         resolved_candidate.suffix.lower() == ".pdf"
-        or is_path_within_directory(resolved_candidate, DEFAULT_MANUAL_PDF_DIR)
+        or is_path_within_directory(resolved_candidate, get_default_manual_pdf_dir())
     ):
         raise ToolReadError(f"エラー: read tool は PDF を読めません: {resolved_candidate}")
 
     try:
         resolved_path = resolve_tool_path(
             raw_path,
-            [DEFAULT_MANUAL_MARKDOWN_DIR, DEFAULT_MANUAL_WORK_DIR],
+            [get_default_manual_markdown_dir(), get_default_manual_work_dir()],
             "read path",
         )
     except ToolPathResolutionError as exc:
@@ -923,18 +967,18 @@ def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Pat
     normalized_input = (raw_path or "").strip()
     candidate_path = Path(normalized_input).expanduser()
     joined_candidate = (
-        candidate_path if candidate_path.is_absolute() else DEFAULT_MANUAL_ROOT / candidate_path
+        candidate_path if candidate_path.is_absolute() else get_default_manual_root() / candidate_path
     )
     resolved_candidate = joined_candidate.resolve()
 
     if (
-        is_path_within_directory(resolved_candidate, DEFAULT_MANUAL_MARKDOWN_DIR)
-        or is_path_within_directory(resolved_candidate, DEFAULT_MANUAL_PDF_DIR)
+        is_path_within_directory(resolved_candidate, get_default_manual_markdown_dir())
+        or is_path_within_directory(resolved_candidate, get_default_manual_pdf_dir())
     ):
         raise ToolWriteError(f"エラー: write tool は work/ 以外へ書けません: {resolved_candidate}")
 
     try:
-        resolved_path = resolve_tool_path(raw_path, [DEFAULT_MANUAL_WORK_DIR], "write path")
+        resolved_path = resolve_tool_path(raw_path, [get_default_manual_work_dir()], "write path")
     except ToolPathResolutionError as exc:
         raise ToolWriteError(str(exc)) from exc
 
@@ -993,10 +1037,10 @@ def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Pat
 def resolve_working_directory(working_dir: str | None) -> Path:
     """OCR 修正用の work ディレクトリを解決し、必要なら作成する。"""
     raw_path = (working_dir or "").strip()
-    candidate_dir = Path(raw_path).expanduser() if raw_path else DEFAULT_MANUAL_WORK_DIR
+    candidate_dir = Path(raw_path).expanduser() if raw_path else get_default_manual_work_dir()
     resolved_dir = ensure_path_within_directory(
         candidate_dir,
-        DEFAULT_MANUAL_ROOT,
+        get_default_manual_root(),
         "作業ディレクトリ",
         error_cls=WorkingDirectoryError,
     )
@@ -1057,10 +1101,10 @@ def resolve_auto_matched_markdown_path(
     markdown_dir: Path | None = None,
 ) -> Path:
     """PDF から OCR Markdown を自動解決し、失敗理由を例外で返す。"""
-    search_dir = markdown_dir or DEFAULT_MANUAL_MARKDOWN_DIR
+    search_dir = markdown_dir or get_default_manual_markdown_dir()
     allowed_search_dir = ensure_path_within_directory(
         search_dir,
-        DEFAULT_MANUAL_MARKDOWN_DIR,
+        get_default_manual_markdown_dir(),
         "Markdown ディレクトリ",
     )
     candidates = find_auto_matched_markdown_candidates(pdf_path, markdown_dir=allowed_search_dir)
@@ -1069,7 +1113,7 @@ def resolve_auto_matched_markdown_path(
             "エラー: 対応する OCR Markdown が見つかりません: "
             f"{pdf_path.stem} (検索先: {allowed_search_dir})。"
             " OCR Markdown 修正フローは pdf_converter.py の output/ を自動検索しません。"
-            f" 入力に使う Markdown は {DEFAULT_MANUAL_MARKDOWN_DIR} 配下へ配置してください。"
+            f" 入力に使う Markdown は {get_default_manual_markdown_dir()} 配下へ配置してください。"
         )
 
     latest_candidate = select_latest_auto_matched_markdown_candidate(candidates)
@@ -1128,7 +1172,7 @@ def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
 def make_manual_relative_path(path: Path) -> str:
     """manual ルート配下の path を tool 向け相対表現へ変換する。"""
     try:
-        return str(path.resolve().relative_to(DEFAULT_MANUAL_ROOT.resolve())).replace("\\", "/")
+        return str(path.resolve().relative_to(get_default_manual_root().resolve())).replace("\\", "/")
     except ValueError:
         return str(path.resolve())
 
@@ -1383,8 +1427,8 @@ def parse_args() -> argparse.Namespace:
         dest="markdown_path",
         help=(
             "Optional path to an OCR Markdown file. In OCR correction mode, an explicit value "
-            "overrides PDF-based auto matching. The file must live under "
-            f"{DEFAULT_MANUAL_MARKDOWN_DIR}; pdf_converter.py output/ is not auto-connected."
+            "overrides PDF-based auto matching. The file must live under asset/texts_2nd/manual/md; "
+            "pdf_converter.py output/ is not auto-connected."
         ),
     )
     parser.add_argument(
@@ -1394,7 +1438,7 @@ def parse_args() -> argparse.Namespace:
         dest="working_dir",
         help=(
             "Optional work directory for OCR correction mode. When omitted, "
-            f"the default is {DEFAULT_MANUAL_WORK_DIR}. This is independent from pdf_converter.py output/."
+            "the default is asset/texts_2nd/manual/work. This is independent from pdf_converter.py output/."
         ),
     )
     parser.add_argument(
@@ -1452,8 +1496,7 @@ def main() -> int:
 
 def run_single_shot_mode(args: argparse.Namespace) -> int:
     """Existing one-shot text/PDF flow."""
-    dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-    load_dotenv(dotenv_path)
+    load_dotenv(get_default_dotenv_path())
 
     user_prompt, pdf_path = resolve_prompt_from_args(args)
     model_id = (args.model or "").strip() or DEFAULT_MODEL
@@ -1508,8 +1551,7 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
 
 def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
     """Dedicated entry point for the future OCR correction flow."""
-    dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-    load_dotenv(dotenv_path)
+    load_dotenv(get_default_dotenv_path())
 
     _gen_config = build_ocr_correction_generation_config()
     if _gen_config.thinking_config is not None:
