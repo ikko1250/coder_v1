@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 """
-Gemma 4 31B IT を Gemini API（generativelanguage.googleapis.com）経由で呼び出す最小例。
+Gemini API 経由で生成モデルを呼び出す CLI。既定モデルは gemini-2.5-flash-lite（--model で上書き可）。
 
-公式: https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api
+公式（モデル一覧）: https://ai.google.dev/gemini-api/docs/models
 """
 
 import argparse
@@ -36,7 +36,7 @@ def load_dotenv(dotenv_path: str | Path) -> None:
     dotenv_file_path = Path(dotenv_path)
     if not dotenv_file_path.exists():
         return
-
+    
     with dotenv_file_path.open(encoding="utf-8") as dotenv_file:
         for raw_line in dotenv_file:
             line = raw_line.strip()
@@ -50,7 +50,7 @@ def load_dotenv(dotenv_path: str | Path) -> None:
 
 
 # CLI 既定モデル（設計上の標準）。--model で上書きし、PDF inline 不調時の切り分けに使う。
-DEFAULT_MODEL = "gemma-4-31b-it"
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_API_KEY_ENV = "GEMINI_API_KEY"
 DEFAULT_PROMPT_TEXT_ONLY = "水の化学式は何ですか？簡潔に答えてください。"
 DEFAULT_PROMPT_WITH_PDF = "この PDF の内容を要約してください。"
@@ -1421,7 +1421,8 @@ def http_timeout_ms_arg_type(value: str) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Call Gemma 4 31B IT on Gemini API with thinking (thinking_level=high). "
+            "Call Gemini API (default model: gemini-2.5-flash-lite; single-shot uses "
+            "thinking_level=high when thinking_config is enabled). "
             "Optional --pdf-path attaches a local PDF as inline input (application/pdf). "
             "Use --task to switch between the existing single-shot flow and future OCR correction mode. "
             "OCR correction mode can also take --markdown-path to override auto matching "
