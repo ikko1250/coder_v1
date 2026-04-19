@@ -471,6 +471,8 @@ def run_ocr_correction_turn_loop(
                     )
                 )
         contents.append(model_content)
+        # google-genai SDK は function_response を role="tool" の Content で返す仕様
+        # （Function Calling Guide, googleapis/python-genai）。
         contents.append(types.Content(role="tool", parts=tool_response_parts))
 
 
