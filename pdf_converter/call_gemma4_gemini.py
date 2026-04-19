@@ -152,17 +152,24 @@ class ResponseTextError(Exception):
     """応答から利用者向けテキストを取り出せないとき。メッセージはそのまま標準エラーに出す。"""
 
 
+def _optional_finish_reason(name: str) -> object | None:
+    """google-genai のバージョン差で列挙値が欠けても import 失敗を避けるための getattr ラッパー。"""
+    return getattr(types.FinishReason, name, None)
+
+
 _FINISH_REASONS_POLICY_EMPTY = frozenset(
-    {
-        types.FinishReason.SAFETY,
-        types.FinishReason.BLOCKLIST,
-        types.FinishReason.PROHIBITED_CONTENT,
-        types.FinishReason.RECITATION,
-        types.FinishReason.SPII,
-        types.FinishReason.LANGUAGE,
-        types.FinishReason.IMAGE_SAFETY,
-        types.FinishReason.IMAGE_PROHIBITED_CONTENT,
-    }
+    value
+    for value in (
+        _optional_finish_reason("SAFETY"),
+        _optional_finish_reason("BLOCKLIST"),
+        _optional_finish_reason("PROHIBITED_CONTENT"),
+        _optional_finish_reason("RECITATION"),
+        _optional_finish_reason("SPII"),
+        _optional_finish_reason("LANGUAGE"),
+        _optional_finish_reason("IMAGE_SAFETY"),
+        _optional_finish_reason("IMAGE_PROHIBITED_CONTENT"),
+    )
+    if value is not None
 )
 
 
