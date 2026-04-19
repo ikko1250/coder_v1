@@ -9,6 +9,7 @@ Gemini API 経由で生成モデルを呼び出す CLI。既定モデルは gemi
 import argparse
 import contextlib
 import difflib
+import fcntl
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -906,37 +908,56 @@ def build_write_lock_path(target_path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def acquire_write_lock(lock_path: Path) -> Path:
-    """sidecar lock file を使って write 区間を排他実行する。"""
-    start_time = time.monotonic()
-    lock_fd: int | None = None
+def acquire_write_lock(lock_path: Path) -> Iterator[Path]:
+    """sidecar lock file を使って write 区間を排他実行する。
 
-    while True:
-        try:
-            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(lock_fd, f"{os.getpid()}\n".encode("ascii", errors="replace"))
-            break
-        except FileExistsError:
-            if time.monotonic() - start_time >= WRITE_LOCK_TIMEOUT_SECONDS:
-                raise ToolWriteError(
-                    "エラー: write lock の取得がタイムアウトしました。"
-                    f" 対象: {lock_path}"
-                )
-            time.sleep(WRITE_LOCK_POLL_INTERVAL_SECONDS)
-        except OSError as exc:
-            raise ToolWriteError(
-                f"エラー: write lock の取得に失敗しました: {lock_path}: {exc}"
-            ) from exc
+    fcntl.flock ベースの advisory lock を使う。プロセス異常終了時に OS がロックを
+    自動解放するため、従来の `O_EXCL` + unlink 方式で発生していた stale lock の問題を
+    回避できる。sidecar ファイル自体は削除しないので、複数プロセスが同一 inode を
+    共有でき、並行待機時の race を避けられる（work/ は .gitignore 配下で蓄積しても
+    リポジトリに影響しない）。
+    """
+    try:
+        lock_fd = os.open(
+            str(lock_path),
+            os.O_CREAT | os.O_RDWR,
+            0o644,
+        )
+    except OSError as exc:
+        raise ToolWriteError(
+            f"エラー: write lock ファイルの作成に失敗しました: {lock_path}: {exc}"
+        ) from exc
 
     try:
-        yield lock_path
-    finally:
-        if lock_fd is not None:
-            os.close(lock_fd)
+        start_time = time.monotonic()
+        acquired = False
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if time.monotonic() - start_time >= WRITE_LOCK_TIMEOUT_SECONDS:
+                    raise ToolWriteError(
+                        "エラー: write lock の取得がタイムアウトしました。"
+                        f" 対象: {lock_path}"
+                    )
+                time.sleep(WRITE_LOCK_POLL_INTERVAL_SECONDS)
+            except OSError as exc:
+                raise ToolWriteError(
+                    f"エラー: write lock の取得に失敗しました: {lock_path}: {exc}"
+                ) from exc
+
         try:
-            lock_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            yield lock_path
+        finally:
+            if acquired:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    finally:
+        os.close(lock_fd)
 
 
 class ToolCallBudget:
