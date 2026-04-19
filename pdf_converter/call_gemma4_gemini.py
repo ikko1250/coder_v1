@@ -1630,89 +1630,89 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
+def run_ocr_correction_mode(args: argparse.Namespace) -> int:
     """Dedicated entry point for the future OCR correction flow."""
     load_dotenv(get_default_dotenv_path())
 
-    _gen_config = build_ocr_correction_generation_config()
-    if _gen_config.thinking_config is not None:
+    gen_config = build_ocr_correction_generation_config()
+    if gen_config.thinking_config is not None:
         print(
             "警告: OCR Markdown 修正モードで thinking_config が有効です。"
             "この組み合わせは別途実機検証が必要です。",
             file=sys.stderr,
         )
-    _model_id = (_args.model or "").strip() or DEFAULT_MODEL
-    _validated_pdf_path: Path | None = None
-    if not _args.pdf_path:
+    model_id = (args.model or "").strip() or DEFAULT_MODEL
+    validated_pdf_path: Path | None = None
+    if not args.pdf_path:
         print("エラー: OCR Markdown 修正モードでは --pdf-path が必須です。", file=sys.stderr)
         return 1
     try:
-        _validated_pdf_path = validate_pdf_path(_args.pdf_path)
+        validated_pdf_path = validate_pdf_path(args.pdf_path)
     except PdfValidationError as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
-    _resolved_markdown_path: Path | None = None
+    resolved_markdown_path: Path | None = None
     try:
-        _resolved_markdown_path = resolve_ocr_markdown_path(
-            pdf_path=_validated_pdf_path,
-            markdown_path=_args.markdown_path,
+        resolved_markdown_path = resolve_ocr_markdown_path(
+            pdf_path=validated_pdf_path,
+            markdown_path=args.markdown_path,
         )
     except MarkdownResolutionError as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
     try:
-        _resolved_working_dir = resolve_working_directory(_args.working_dir)
+        resolved_working_dir = resolve_working_directory(args.working_dir)
     except WorkingDirectoryError as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
-    _working_markdown_path: Path | None = None
-    if _resolved_markdown_path is not None:
+    working_markdown_path: Path | None = None
+    if resolved_markdown_path is not None:
         try:
-            _working_markdown_path = copy_markdown_to_working_directory(
-                source_markdown_path=_resolved_markdown_path,
-                working_dir=_resolved_working_dir,
+            working_markdown_path = copy_markdown_to_working_directory(
+                source_markdown_path=resolved_markdown_path,
+                working_dir=resolved_working_dir,
             )
         except WorkingMarkdownError as exc:
             print(format_ocr_correction_error(exc), file=sys.stderr)
             return 1
-    if _resolved_markdown_path is None or _working_markdown_path is None or _validated_pdf_path is None:
+    if resolved_markdown_path is None or working_markdown_path is None or validated_pdf_path is None:
         print("エラー: OCR 修正モードの入力解決に失敗しました。", file=sys.stderr)
         return 1
     try:
-        _initial_working_text = _working_markdown_path.read_text(encoding="utf-8")
+        initial_working_text = working_markdown_path.read_text(encoding="utf-8")
     except OSError as exc:
         print(
-            f"エラー: 編集対象 Markdown の初期読取に失敗しました: {_working_markdown_path}: {exc}",
+            f"エラー: 編集対象 Markdown の初期読取に失敗しました: {working_markdown_path}: {exc}",
             file=sys.stderr,
         )
         return 1
     try:
-        _ocr_contents = build_ocr_correction_contents(
-            pdf_path=_validated_pdf_path,
-            ocr_markdown_path=_resolved_markdown_path,
-            working_markdown_path=_working_markdown_path,
+        ocr_contents = build_ocr_correction_contents(
+            pdf_path=validated_pdf_path,
+            ocr_markdown_path=resolved_markdown_path,
+            working_markdown_path=working_markdown_path,
         )
     except (PdfValidationError, MarkdownResolutionError) as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
-    _api_key = get_api_key_or_exit(_args.api_key_env)
-    if _api_key is None:
+    api_key = get_api_key_or_exit(args.api_key_env)
+    if api_key is None:
         return 1
 
-    _client = build_genai_client(_api_key, _args.http_timeout_ms)
-    _budget = ToolCallBudget(_args.max_tool_calls)
-    _tool_call_logger: ToolCallLogger | None = None
-    if _args.tool_call_log_path:
-        _tool_call_logger = ToolCallLogger(Path(_args.tool_call_log_path))
+    client = build_genai_client(api_key, args.http_timeout_ms)
+    budget = ToolCallBudget(args.max_tool_calls)
+    tool_call_logger: ToolCallLogger | None = None
+    if args.tool_call_log_path:
+        tool_call_logger = ToolCallLogger(Path(args.tool_call_log_path))
 
     try:
-        _payload = run_ocr_correction_turn_loop(
-            client=_client,
-            model_id=_model_id,
-            initial_contents=_ocr_contents,
-            config=_gen_config,
-            budget=_budget,
-            tool_call_logger=_tool_call_logger,
+        payload = run_ocr_correction_turn_loop(
+            client=client,
+            model_id=model_id,
+            initial_contents=ocr_contents,
+            config=gen_config,
+            budget=budget,
+            tool_call_logger=tool_call_logger,
         )
     except (OcrResponseParseError, OcrToolExecutionError, ToolCallLimitError) as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
@@ -1722,26 +1722,26 @@ def run_ocr_correction_mode(_args: argparse.Namespace) -> int:
         return 1
 
     try:
-        _final_message = build_ocr_correction_final_message(
-            payload=_payload,
-            working_markdown_path=_working_markdown_path,
-            initial_working_text=_initial_working_text,
-            budget=_budget,
+        final_message = build_ocr_correction_final_message(
+            payload=payload,
+            working_markdown_path=working_markdown_path,
+            initial_working_text=initial_working_text,
+            budget=budget,
         )
     except OcrFinalizationError as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
 
     try:
-        _diff_text = build_unified_diff_text(
-            original_path=_resolved_markdown_path,
-            working_path=_working_markdown_path,
+        diff_text = build_unified_diff_text(
+            original_path=resolved_markdown_path,
+            working_path=working_markdown_path,
         )
     except OcrDiffError as exc:
         print(format_ocr_correction_error(exc), file=sys.stderr)
         return 1
 
-    emit_ocr_correction_stdout(_final_message, _diff_text)
+    emit_ocr_correction_stdout(final_message, diff_text)
     return 0
 
 
