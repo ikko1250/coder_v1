@@ -789,12 +789,13 @@ def validate_markdown_path(markdown_path: str) -> Path:
         raise MarkdownResolutionError(f"エラー: Markdown パスがファイルではありません: {path}")
     if path.suffix.lower() != ".md":
         raise MarkdownResolutionError(f"エラー: .md ファイルのみ対応しています: {path}")
-        if is_path_within_directory(path, get_default_ocr_output_dir()):
-            raise MarkdownResolutionError(
-                "エラー: OCR Markdown 修正フローは pdf_converter.py の output/ を自動入力元にしません: "
-                f"{path}。入力は {get_default_manual_markdown_dir()} 配下に固定です。"
-                " 必要なら output/ から manual/md へ移動またはコピーしてから指定してください。"
-            )
+
+    if is_path_within_directory(path, get_default_ocr_output_dir()):
+        raise MarkdownResolutionError(
+            "エラー: OCR Markdown 修正フローは pdf_converter.py の output/ を自動入力元にしません: "
+            f"{path}。入力は {get_default_manual_markdown_dir()} 配下に固定です。"
+            " 必要なら output/ から manual/md へ移動またはコピーしてから指定してください。"
+        )
 
     return ensure_path_within_directory(path, get_default_manual_markdown_dir(), "Markdown パス")
 
