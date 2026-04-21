@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 
 [[package]]
@@ -219,9 +219,10 @@ wheels = [
 [[package]]
 name = "csv-viewer"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "polars" },
     { name = "requests" },
 ]
@@ -235,6 +236,7 @@ analysis-db = [
 [package.metadata]
 requires-dist = [
     { name = "google-genai", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "polars", specifier = ">=1.38.1" },
     { name = "requests", specifier = ">=2.33.1" },
     { name = "sudachidict-core", marker = "extra == 'analysis-db'", specifier = ">=20240109" },

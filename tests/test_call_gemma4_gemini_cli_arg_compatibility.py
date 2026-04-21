@@ -63,6 +63,20 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
         self.assertEqual(args.api_key_env, module.DEFAULT_API_KEY_ENV)
         self.assertEqual(args.model, module.DEFAULT_MODEL)
 
+    def test_build_ocr_correction_prompt_includes_no_style_rewrite_rules(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        prompt = module.build_ocr_correction_prompt(
+            ocr_markdown_path=module.Path("/tmp/source.md"),
+            working_markdown_path=module.Path("/tmp/work.md"),
+            inline_ocr_markdown=None,
+        )
+
+        self.assertIn("スタイル書換禁止", prompt)
+        self.assertIn("半角と全角の相互変換をしないこと", prompt)
+        self.assertIn("括弧付き番号の字形を変換しないこと", prompt)
+        self.assertIn("`new_text` は必ず `expected_old_text` をコピーして作り", prompt)
+
     def test_main_dispatches_to_ocr_correction_mode(self):
         module = importlib.import_module(MODULE_NAME)
 
