@@ -12,6 +12,7 @@ from pdf_converter.project_paths import (
     resolve_default_ocr_output_dir,
     resolve_dotenv_path,
     resolve_manual_root,
+    resolve_manual_root_candidates,
     resolve_project_root,
 )
 
@@ -63,7 +64,7 @@ class ProjectPathResolutionTests(unittest.TestCase):
             self.assertEqual(resolved_root, env_root.resolve())
             self.assertEqual(
                 resolve_manual_root(source_file=source_file),
-                env_root.resolve() / "asset" / "texts_2nd" / "manual",
+                env_root.resolve() / "asset" / "ocr_manual",
             )
             self.assertEqual(
                 resolve_default_ocr_output_dir(source_file=source_file),
@@ -130,6 +131,24 @@ class ProjectPathResolutionTests(unittest.TestCase):
         self.assertEqual(args.pdf_path, "sample.pdf")
         self.assertEqual(args.markdown_path, "sample.md")
         self.assertEqual(args.tool_call_log_path, "logs/tool-calls.jsonl")
+
+
+class ManualRootCandidateTests(unittest.TestCase):
+    def test_resolve_manual_root_candidates_returns_canonical_then_legacy(self) -> None:
+        project_root = resolve_project_root()
+        candidates = resolve_manual_root_candidates(project_root)
+        self.assertEqual(
+            candidates,
+            [
+                project_root / "asset" / "ocr_manual",
+                project_root / "asset" / "texts_2nd" / "manual",
+            ],
+        )
+
+    def test_resolve_manual_root_returns_canonical_path(self) -> None:
+        project_root = resolve_project_root()
+        manual_root = resolve_manual_root()
+        self.assertEqual(manual_root, project_root / "asset" / "ocr_manual")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ from pdf_converter.project_paths import (
     resolve_default_ocr_output_dir,
     resolve_dotenv_path,
     resolve_manual_root,
+    resolve_manual_root_candidates,
+    resolve_project_root,
 )
 
 
@@ -735,24 +737,28 @@ def find_auto_matched_markdown_candidates(
     markdown_dir: Path | None = None,
 ) -> list[Path]:
     """PDF stem と一致する timestamp 付き Markdown 候補だけを返す。"""
-    search_dir = (markdown_dir or get_default_manual_markdown_dir()).expanduser()
-    if not search_dir.exists() or not search_dir.is_dir():
-        return []
+    if markdown_dir is not None:
+        search_dirs = [markdown_dir]
+    else:
+        project_root = resolve_project_root()
+        search_dirs = [root / "md" for root in resolve_manual_root_candidates(project_root)]
 
     pdf_stem = pdf_path.stem
     candidates: list[Path] = []
-    for markdown_path in sorted(search_dir.glob("*.md"), key=lambda path: path.name):
-        parsed = parse_auto_matched_markdown_stem(markdown_path)
-        if parsed is None:
+    for search_dir in search_dirs:
+        search_dir = search_dir.expanduser()
+        if not search_dir.exists() or not search_dir.is_dir():
             continue
-
-        base_stem, _timestamp_text = parsed
-        if base_stem != pdf_stem:
-            continue
-        if parse_auto_matched_markdown_timestamp(markdown_path) is None:
-            continue
-
-        candidates.append(markdown_path.resolve())
+        for markdown_path in sorted(search_dir.glob("*.md"), key=lambda path: path.name):
+            parsed = parse_auto_matched_markdown_stem(markdown_path)
+            if parsed is None:
+                continue
+            base_stem, _timestamp_text = parsed
+            if base_stem != pdf_stem:
+                continue
+            if parse_auto_matched_markdown_timestamp(markdown_path) is None:
+                continue
+            candidates.append(markdown_path.resolve())
 
     return candidates
 
@@ -846,6 +852,16 @@ def resolve_tool_path(
     )
 
 
+def _get_manual_markdown_dirs() -> list[Path]:
+    project_root = resolve_project_root()
+    return [root / "md" for root in resolve_manual_root_candidates(project_root)]
+
+
+def _get_manual_work_dirs() -> list[Path]:
+    project_root = resolve_project_root()
+    return [root / "work" for root in resolve_manual_root_candidates(project_root)]
+
+
 def read_tool_text(raw_path: str) -> str:
     """read tool 用: md/ と work/ の UTF-8 テキストだけを返す。"""
     normalized_input = (raw_path or "").strip()
@@ -864,7 +880,7 @@ def read_tool_text(raw_path: str) -> str:
     try:
         resolved_path = resolve_tool_path(
             raw_path,
-            [get_default_manual_markdown_dir(), get_default_manual_work_dir()],
+            _get_manual_markdown_dirs() + _get_manual_work_dirs(),
             "read path",
         )
     except ToolPathResolutionError as exc:
@@ -1343,8 +1359,8 @@ def build_ocr_correction_tools() -> list[types.Tool]:
                 types.FunctionDeclaration(
                     name="read_markdown_file",
                     description=(
-                        "Reads a UTF-8 Markdown file from asset/texts_2nd/manual/md or "
-                        "asset/texts_2nd/manual/work for OCR correction and verification."
+                        "Reads a UTF-8 Markdown file from asset/ocr_manual/md or "
+                        "asset/ocr_manual/work for OCR correction and verification."
                     ),
                     parameters={
                         "type": "object",
@@ -1352,7 +1368,7 @@ def build_ocr_correction_tools() -> list[types.Tool]:
                             "path": {
                                 "type": "string",
                                 "description": (
-                                    "Relative path under asset/texts_2nd/manual, such as "
+                                    "Relative path under asset/ocr_manual, such as "
                                     "'md/example.md' or 'work/example-working.md'."
                                 ),
                             }
@@ -1364,7 +1380,7 @@ def build_ocr_correction_tools() -> list[types.Tool]:
                     name="write_markdown_file",
                     description=(
                         "Writes a constrained replacement into a UTF-8 Markdown file under "
-                        "asset/texts_2nd/manual/work only."
+                        "asset/ocr_manual/work only."
                     ),
                     parameters={
                         "type": "object",
@@ -1372,7 +1388,7 @@ def build_ocr_correction_tools() -> list[types.Tool]:
                             "path": {
                                 "type": "string",
                                 "description": (
-                                    "Relative path under asset/texts_2nd/manual/work, such as "
+                                    "Relative path under asset/ocr_manual/work, such as "
                                     "'work/example-working.md'."
                                 ),
                             },
@@ -1478,7 +1494,7 @@ def parse_args() -> argparse.Namespace:
             "Use --task to switch between the existing single-shot flow and future OCR correction mode. "
             "OCR correction mode can also take --markdown-path to override auto matching "
             "and --working-dir to override the default work directory. "
-            "OCR correction mode only reads Markdown from asset/texts_2nd/manual/md; "
+            "OCR correction mode only reads Markdown from asset/ocr_manual/md; "
             "pdf_converter.py output/ is not auto-connected."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1490,7 +1506,7 @@ def parse_args() -> argparse.Namespace:
             "  uv run call-gemma4-gemini --task ocr-correct --pdf-path path/to/file.pdf\n"
             "  uv run call-gemma4-gemini --task ocr-correct --pdf-path path/to/file.pdf "
             "--markdown-path path/to/file.md\n"
-            "  uv run call-gemma4-gemini --task ocr-correct --working-dir asset/texts_2nd/manual/work\n"
+            "  uv run call-gemma4-gemini --task ocr-correct --working-dir asset/ocr_manual/work\n"
             "\n"
             "If --pdf-path is omitted, only the text prompt is sent (no PDF).\n"
             "OCR correction mode does not automatically import Markdown from pdf_converter.py output/.\n"
@@ -1536,7 +1552,7 @@ def parse_args() -> argparse.Namespace:
         dest="working_dir",
         help=(
             "Optional work directory for OCR correction mode. When omitted, "
-            "the default is asset/texts_2nd/manual/work. This is independent from pdf_converter.py output/."
+            "the default is asset/ocr_manual/work. This is independent from pdf_converter.py output/."
         ),
     )
     parser.add_argument(

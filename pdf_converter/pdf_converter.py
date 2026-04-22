@@ -4,8 +4,10 @@ import os
 
 import requests
 
+from pdf_converter.project_paths import resolve_manual_root
+
 API_URL = "https://sbhezbf9vda905l6.aistudio-app.com/layout-parsing"
-DEFAULT_FILE_PATH = "asset/texts_2nd/manual/pdf/根室市_条例.pdf"
+DEFAULT_FILE_PATH = str(resolve_manual_root() / "pdf" / "根室市_条例.pdf")
 DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_DOTENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 

@@ -18,7 +18,7 @@ def _normalize_path(path_value: str | Path) -> Path:
 def _has_source_tree_layout(project_root: Path) -> bool:
     return (
         (project_root / "pdf_converter").is_dir()
-        and (project_root / "asset" / "texts_2nd" / "manual").is_dir()
+        and (project_root / "asset").is_dir()
     )
 
 
@@ -42,7 +42,7 @@ def _ensure_source_tree_root(candidate_root: Path, resolution_source: str) -> Pa
     if not _has_source_tree_layout(resolved_root):
         raise ProjectRootResolutionError(
             f"{resolution_source}: source tree layout is incomplete at {resolved_root}. "
-            "Expected pdf_converter/ and asset/texts_2nd/manual/."
+            "Expected pdf_converter/ and asset/."
         )
     return resolved_root
 
@@ -69,11 +69,19 @@ def resolve_project_root(
     return _ensure_source_tree_root(fallback_root, "__file__ fallback")
 
 
+def resolve_manual_root_candidates(project_root: Path) -> list[Path]:
+    return [
+        project_root / "asset" / "ocr_manual",
+        project_root / "asset" / "texts_2nd" / "manual",
+    ]
+
+
 def resolve_manual_root(
     source_file: str | Path | None = None,
     env_value: str | None = None,
 ) -> Path:
-    return resolve_project_root(source_file=source_file, env_value=env_value) / "asset" / "texts_2nd" / "manual"
+    project_root = resolve_project_root(source_file=source_file, env_value=env_value)
+    return project_root / "asset" / "ocr_manual"
 
 
 def resolve_default_ocr_output_dir(
