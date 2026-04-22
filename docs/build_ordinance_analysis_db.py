@@ -532,13 +532,80 @@ def parse_category_values_from_file_name(file_name: str) -> Tuple[Optional[str],
     return match.group("category1"), match.group("category2")
 
 
-def load_source_rows_from_dir(input_dir: Path, limit: Optional[int]) -> Tuple[List[SourceFileRow], List[IssueRecord]]:
+def classify_forbidden_input_relation(input_dir: Path, forbidden_dir: Path) -> str | None:
+    """input_dir と forbidden_dir の関係を same / child / parent で返す。"""
+    if input_dir == forbidden_dir:
+        return "same"
+    if forbidden_dir in input_dir.parents:
+        return "child"
+    if input_dir in forbidden_dir.parents:
+        return "parent"
+    return None
+
+
+def resolve_forbidden_dirs(project_root: Path | None = None) -> list[Path]:
+    """プロジェクトルートから禁止ディレクトリの絶対パス一覧を返す。"""
+    if project_root is None:
+        project_root = Path.cwd().resolve()
+    return [
+        project_root / "asset" / "ocr_manual",
+        project_root / "asset" / "texts_2nd" / "manual",
+    ]
+
+
+def check_forbidden_input_dir(input_dir: Path, forbidden_dirs: list[Path]) -> IssueRecord | None:
+    """入力ディレクトリが禁止ディレクトリと同じ・親・子のいずれかなら error IssueRecord を返す。"""
+    resolved_input = input_dir.resolve()
+    for forbidden_dir in forbidden_dirs:
+        resolved_forbidden = forbidden_dir.resolve()
+        relation = classify_forbidden_input_relation(resolved_input, resolved_forbidden)
+        if relation is not None:
+            return IssueRecord(
+                severity="error",
+                code="forbidden_input_dir",
+                path=str(resolved_input),
+                message=(
+                    f"input directory is {relation} of forbidden OCR workspace: "
+                    f"{resolved_forbidden}"
+                ),
+            )
+    return None
+
+
+def load_source_rows_from_dir(
+    input_dir: Path,
+    limit: Optional[int],
+    forbidden_dirs: Optional[list[Path]] = None,
+) -> Tuple[List[SourceFileRow], List[IssueRecord]]:
     rows: List[SourceFileRow] = []
     issues: List[IssueRecord] = []
     candidates: List[Path] = []
 
-    for root, _, files in os.walk(input_dir, followlinks=False):
-        root_path = Path(root)
+    resolved_forbidden = [d.resolve() for d in (forbidden_dirs or [])]
+
+    # input_dir 自体が forbidden と同じ、親、または子ならエラー
+    resolved_input = input_dir.resolve()
+    for forbidden_dir in resolved_forbidden:
+        relation = classify_forbidden_input_relation(resolved_input, forbidden_dir)
+        if relation is not None:
+            return [], [
+                IssueRecord(
+                    severity="error",
+                    code="forbidden_input_dir",
+                    path=str(resolved_input),
+                    message=(
+                        f"input directory is {relation} of forbidden OCR workspace: "
+                        f"{forbidden_dir}"
+                    ),
+                )
+            ]
+
+    for root, dirs, files in os.walk(input_dir, followlinks=False):
+        root_path = Path(root).resolve()
+        # prune: 禁止ディレクトリ配下をスキップ
+        if any(root_path == f or f in root_path.parents for f in resolved_forbidden):
+            dirs[:] = []
+            continue
         for file_name in files:
             file_path = root_path / file_name
             if file_path.suffix not in {".txt", ".md"}:
@@ -546,8 +613,7 @@ def load_source_rows_from_dir(input_dir: Path, limit: Optional[int]) -> Tuple[Li
             candidates.append(file_path)
 
     candidates.sort(key=lambda path: path.relative_to(input_dir).as_posix())
-    if limit is not None:
-        candidates = candidates[:limit]
+    # limit は有効候補抽出後に適用するため、ここでは適用しない
 
     for file_path in candidates:
         category1, category2 = parse_category_values_from_file_name(file_path.name)
@@ -575,7 +641,11 @@ def load_source_rows_from_dir(input_dir: Path, limit: Optional[int]) -> Tuple[Li
             )
         )
 
-    if not candidates:
+    # limit を有効候補に対して適用
+    if limit is not None:
+        rows = rows[:limit]
+
+    if not candidates and not any(i.code == "forbidden_input_dir" for i in issues):
         issues.append(
             IssueRecord(
                 severity="error",
@@ -1077,8 +1147,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         )
     else:
-        source_rows, dir_issues = load_source_rows_from_dir(input_dir, args.limit)
-        preflight_issues.extend(dir_issues)
+        # 禁止ディレクトリチェック
+        forbidden_dirs = resolve_forbidden_dirs()
+        forbidden_issue = check_forbidden_input_dir(input_dir, forbidden_dirs)
+        if forbidden_issue is not None:
+            preflight_issues.append(forbidden_issue)
+        else:
+            source_rows, dir_issues = load_source_rows_from_dir(input_dir, args.limit, forbidden_dirs=forbidden_dirs)
+            preflight_issues.extend(dir_issues)
 
     tokenizer = None
     split_mode = None

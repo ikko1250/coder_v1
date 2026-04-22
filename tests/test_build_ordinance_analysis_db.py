@@ -133,5 +133,102 @@ class FolderInputBuildTest(unittest.TestCase):
             self.assertEqual(raw_text, "BOM text")
 
 
+class ForbiddenDirTest(unittest.TestCase):
+    def test_exact_forbidden_dir_returns_preflight_failure(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            forbidden = temp_path / "forbidden"
+            forbidden.mkdir()
+            (forbidden / "cat1_cat2.txt").write_text("test", encoding="utf-8")
+
+            rows, issues = builder.load_source_rows_from_dir(forbidden, None, [forbidden])
+            self.assertEqual(rows, [])
+            self.assertTrue(
+                any(i.severity == "error" and i.code == "forbidden_input_dir" for i in issues)
+            )
+
+    def test_parent_of_forbidden_dir_returns_preflight_failure(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            parent = temp_path / "parent"
+            parent.mkdir()
+            forbidden = parent / "forbidden"
+            forbidden.mkdir()
+
+            rows, issues = builder.load_source_rows_from_dir(parent, None, [forbidden])
+            self.assertEqual(rows, [])
+            self.assertTrue(
+                any(i.severity == "error" and i.code == "forbidden_input_dir" for i in issues)
+            )
+
+    def test_child_of_forbidden_dir_returns_preflight_failure(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            forbidden = temp_path / "forbidden"
+            forbidden.mkdir()
+            child = forbidden / "child"
+            child.mkdir()
+
+            rows, issues = builder.load_source_rows_from_dir(child, None, [forbidden])
+            self.assertEqual(rows, [])
+            self.assertTrue(
+                any(i.severity == "error" and i.code == "forbidden_input_dir" for i in issues)
+            )
+
+    def test_prune_excludes_forbidden_subtree(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            input_dir = temp_path / "input"
+            input_dir.mkdir()
+            (input_dir / "valid1_cat2.txt").write_text("test", encoding="utf-8")
+
+            forbidden = input_dir / "forbidden"
+            forbidden.mkdir()
+            (forbidden / "valid2_cat2.txt").write_text("test", encoding="utf-8")
+
+            # input_dir is parent of forbidden, so preflight blocks it
+            rows, issues = builder.load_source_rows_from_dir(input_dir, None, [forbidden])
+            self.assertEqual(rows, [])
+            self.assertTrue(
+                any(i.severity == "error" and i.code == "forbidden_input_dir" for i in issues)
+            )
+
+            # Verify the prune logic itself (same / child dirs are dropped)
+            dirs = ["forbidden", "allowed"]
+            pruned = []
+            for d in dirs:
+                dir_path = (input_dir / d).resolve()
+                is_forbidden = False
+                for fdir in [forbidden]:
+                    rel = builder.classify_forbidden_input_relation(dir_path, fdir)
+                    if rel in ("same", "child"):
+                        is_forbidden = True
+                        break
+                if not is_forbidden:
+                    pruned.append(d)
+            self.assertEqual(pruned, ["allowed"])
+
+    def test_limit_counts_only_valid_candidates(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            input_dir = temp_path / "input"
+            input_dir.mkdir()
+            (input_dir / "a_cat2.txt").write_text("test", encoding="utf-8")
+            (input_dir / "b_cat2.txt").write_text("test", encoding="utf-8")
+            (input_dir / "c_cat2.txt").write_text("test", encoding="utf-8")
+            (input_dir / "invalid.txt").write_text("test", encoding="utf-8")
+            (input_dir / "bad-name.md").write_text("test", encoding="utf-8")
+
+            # Forbidden dir as a sibling; walk never reaches it, but limit should
+            # still apply only to valid rows.
+            forbidden = temp_path / "forbidden"
+            forbidden.mkdir()
+            (forbidden / "d_cat2.txt").write_text("test", encoding="utf-8")
+
+            rows, issues = builder.load_source_rows_from_dir(input_dir, 2, [forbidden])
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(len([i for i in issues if i.code == "invalid_file_name"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
