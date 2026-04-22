@@ -543,10 +543,15 @@ def classify_forbidden_input_relation(input_dir: Path, forbidden_dir: Path) -> s
     return None
 
 
+def resolve_builder_project_root() -> Path:
+    """builder スクリプト位置からプロジェクトルートを決定する。"""
+    return Path(__file__).resolve().parent.parent
+
+
 def resolve_forbidden_dirs(project_root: Path | None = None) -> list[Path]:
     """プロジェクトルートから禁止ディレクトリの絶対パス一覧を返す。"""
     if project_root is None:
-        project_root = Path.cwd().resolve()
+        project_root = resolve_builder_project_root()
     return [
         project_root / "asset" / "ocr_manual",
         project_root / "asset" / "texts_2nd" / "manual",

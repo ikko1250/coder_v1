@@ -1770,15 +1770,18 @@ pub(crate) fn resolve_forbidden_dirs(project_root: &Path) -> Vec<PathBuf> {
 
 pub(crate) fn classify_forbidden_input_relation(input_dir: &Path, forbidden_dir: &Path) -> Option<&'static str> {
     let input_canon = input_dir.canonicalize().ok()?;
-    let forbidden_canon = forbidden_dir.canonicalize().ok()?;
 
-    if input_canon == forbidden_canon {
+    // forbidden_dir は未作成の可能性があるため canonicalize しない。
+    // project_root から join された絶対パスをそのまま比較する。
+    let forbidden_abs = forbidden_dir.to_path_buf();
+
+    if input_canon == forbidden_abs {
         return Some("same");
     }
-    if input_canon.starts_with(&forbidden_canon) {
+    if input_canon.starts_with(&forbidden_abs) {
         return Some("child");
     }
-    if forbidden_canon.starts_with(&input_canon) {
+    if forbidden_abs.starts_with(&input_canon) {
         return Some("parent");
     }
     None
