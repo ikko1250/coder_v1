@@ -193,6 +193,21 @@ pub(super) fn draw_builder_settings_window(app: &mut App, ctx: &egui::Context) {
                         ui.visuals().error_fg_color,
                         format!("入力フォルダーが存在しません: {}", path.display()),
                     );
+                } else {
+                    let project_root = app
+                        .builder_runtime_state
+                        .runtime
+                        .as_ref()
+                        .map(|r| r.project_root.clone())
+                        .or_else(|| std::env::current_dir().ok())
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let forbidden_dirs = crate::analysis_runner::resolve_forbidden_dirs(&project_root);
+                    if let Some(msg) = crate::analysis_runner::check_forbidden_input_dir(path, &forbidden_dirs) {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            msg,
+                        );
+                    }
                 }
             }
 

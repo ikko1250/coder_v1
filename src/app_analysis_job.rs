@@ -397,6 +397,15 @@ pub(super) fn start_build_job(app: &mut App) -> Result<(), String> {
             input_dir.display()
         ));
     }
+    let runtime = app
+        .builder_runtime_state
+        .runtime
+        .clone()
+        .ok_or_else(|| "builder 用 Python 実行環境を解決できません".to_string())?;
+    let forbidden_dirs = crate::analysis_runner::resolve_forbidden_dirs(&runtime.project_root);
+    if let Some(msg) = crate::analysis_runner::check_forbidden_input_dir(&input_dir, &forbidden_dirs) {
+        return Err(msg);
+    }
     if app.builder_request_state.analysis_db_path.as_os_str().is_empty() {
         return Err("出力 DB パスを指定してください".to_string());
     }

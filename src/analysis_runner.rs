@@ -1760,3 +1760,46 @@ fn absolutize_path(path: &Path) -> Result<PathBuf, String> {
         .map(|current_dir| current_dir.join(path))
         .map_err(|error| format!("カレントディレクトリを解決できません: {error}"))
 }
+
+pub(crate) fn resolve_forbidden_dirs(project_root: &Path) -> Vec<PathBuf> {
+    vec![
+        project_root.join("asset").join("ocr_manual"),
+        project_root.join("asset").join("texts_2nd").join("manual"),
+    ]
+}
+
+pub(crate) fn classify_forbidden_input_relation(input_dir: &Path, forbidden_dir: &Path) -> Option<&'static str> {
+    let input_canon = input_dir.canonicalize().ok()?;
+    let forbidden_canon = forbidden_dir.canonicalize().ok()?;
+
+    if input_canon == forbidden_canon {
+        return Some("same");
+    }
+    if input_canon.starts_with(&forbidden_canon) {
+        return Some("child");
+    }
+    if forbidden_canon.starts_with(&input_canon) {
+        return Some("parent");
+    }
+    None
+}
+
+pub(crate) fn check_forbidden_input_dir(input_dir: &Path, forbidden_dirs: &[PathBuf]) -> Option<String> {
+    for forbidden_dir in forbidden_dirs {
+        if let Some(relation) = classify_forbidden_input_relation(input_dir, forbidden_dir) {
+            let relation_label = match relation {
+                "same" => "本体",
+                "child" => "子ディレクトリ",
+                "parent" => "親ディレクトリ",
+                _ => "不明な関係",
+            };
+            return Some(format!(
+                "OCR 作業領域の{}として選択できません: {} (禁止: {})",
+                relation_label,
+                input_dir.display(),
+                forbidden_dir.display(),
+            ));
+        }
+    }
+    None
+}
