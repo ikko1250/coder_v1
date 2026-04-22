@@ -212,6 +212,36 @@ def get_default_manual_work_dir() -> Path:
     return get_default_manual_root() / "work"
 
 
+def get_manual_root_candidates() -> list[Path]:
+    """読み取り対象とする manual root 候補を返す。
+
+    DEFAULT_MANUAL_ROOT override がある場合は [override] のみを返す。
+    なければ canonical → legacy の順で返す。
+    """
+    if DEFAULT_MANUAL_ROOT is not None:
+        return [DEFAULT_MANUAL_ROOT]
+    project_root = resolve_project_root()
+    return resolve_manual_root_candidates(project_root)
+
+
+def get_manual_pdf_dirs() -> list[Path]:
+    if DEFAULT_MANUAL_PDF_DIR is not None:
+        return [DEFAULT_MANUAL_PDF_DIR]
+    return [root / "pdf" for root in get_manual_root_candidates()]
+
+
+def get_manual_markdown_dirs() -> list[Path]:
+    if DEFAULT_MANUAL_MARKDOWN_DIR is not None:
+        return [DEFAULT_MANUAL_MARKDOWN_DIR]
+    return [root / "md" for root in get_manual_root_candidates()]
+
+
+def get_manual_work_dirs() -> list[Path]:
+    if DEFAULT_MANUAL_WORK_DIR is not None:
+        return [DEFAULT_MANUAL_WORK_DIR]
+    return [root / "work" for root in get_manual_root_candidates()]
+
+
 def get_default_ocr_output_dir() -> Path:
     if DEFAULT_OCR_OUTPUT_DIR is not None:
         return DEFAULT_OCR_OUTPUT_DIR
@@ -799,6 +829,27 @@ def ensure_path_within_directory(
     )
 
 
+def ensure_path_within_any_directory(
+    path: Path,
+    allowed_dirs: list[Path],
+    label: str,
+    error_cls: type[Exception] = MarkdownResolutionError,
+) -> Path:
+    """解決済み path が許可ディレクトリのいずれか配下かを検証する。"""
+    resolved_path = path.expanduser().resolve()
+    resolved_allowed_dirs = [d.expanduser().resolve() for d in allowed_dirs]
+
+    for allowed_dir in resolved_allowed_dirs:
+        if allowed_dir == resolved_path or allowed_dir in resolved_path.parents:
+            return resolved_path
+
+    allowed_text = ", ".join(str(d) for d in resolved_allowed_dirs)
+    raise error_cls(
+        f"エラー: {label} が許可ディレクトリ外です: {resolved_path} "
+        f"(許可: {allowed_text})"
+    )
+
+
 def validate_markdown_path(markdown_path: str) -> Path:
     """明示指定された Markdown パスを検証して解決済み Path を返す。"""
     path = Path(markdown_path).expanduser().resolve()
@@ -817,7 +868,7 @@ def validate_markdown_path(markdown_path: str) -> Path:
             " 必要なら output/ から manual/md へ移動またはコピーしてから指定してください。"
         )
 
-    return ensure_path_within_directory(path, get_default_manual_markdown_dir(), "Markdown パス")
+    return ensure_path_within_any_directory(path, get_manual_markdown_dirs(), "Markdown パス")
 
 
 def is_path_within_directory(path: Path, allowed_dir: Path) -> bool:
@@ -852,35 +903,46 @@ def resolve_tool_path(
     )
 
 
-def _get_manual_markdown_dirs() -> list[Path]:
-    project_root = resolve_project_root()
-    return [root / "md" for root in resolve_manual_root_candidates(project_root)]
-
-
-def _get_manual_work_dirs() -> list[Path]:
-    project_root = resolve_project_root()
-    return [root / "work" for root in resolve_manual_root_candidates(project_root)]
-
-
 def read_tool_text(raw_path: str) -> str:
     """read tool 用: md/ と work/ の UTF-8 テキストだけを返す。"""
     normalized_input = (raw_path or "").strip()
     candidate_path = Path(normalized_input).expanduser()
+
+    # PDF 除外チェック
     joined_candidate = (
         candidate_path if candidate_path.is_absolute() else get_default_manual_root() / candidate_path
     )
     resolved_candidate = joined_candidate.resolve()
-
     if (
         resolved_candidate.suffix.lower() == ".pdf"
         or is_path_within_directory(resolved_candidate, get_default_manual_pdf_dir())
     ):
         raise ToolReadError(f"エラー: read tool は PDF を読めません: {resolved_candidate}")
 
+    # read 用: 相対 path の場合、candidate dirs から存在するものを優先して解決
+    search_raw_path = raw_path
+    if not candidate_path.is_absolute():
+        allowed_dirs = get_manual_markdown_dirs() + get_manual_work_dirs()
+        existing: list[Path] = []
+        for allowed_dir in allowed_dirs:
+            try:
+                candidate = (allowed_dir / candidate_path).resolve()
+                if candidate.exists() and candidate.is_file():
+                    existing.append(candidate)
+            except OSError:
+                continue
+        if len(existing) == 1:
+            search_raw_path = str(existing[0])
+        elif len(existing) > 1:
+            # 複数ヒット時は canonical 優先
+            canonical_candidate = (allowed_dirs[0] / candidate_path).resolve()
+            if canonical_candidate.exists():
+                search_raw_path = str(canonical_candidate)
+
     try:
         resolved_path = resolve_tool_path(
-            raw_path,
-            _get_manual_markdown_dirs() + _get_manual_work_dirs(),
+            search_raw_path,
+            get_manual_markdown_dirs() + get_manual_work_dirs(),
             "read path",
         )
     except ToolPathResolutionError as exc:
@@ -1157,17 +1219,21 @@ def resolve_auto_matched_markdown_path(
     markdown_dir: Path | None = None,
 ) -> Path:
     """PDF から OCR Markdown を自動解決し、失敗理由を例外で返す。"""
-    search_dir = markdown_dir or get_default_manual_markdown_dir()
-    allowed_search_dir = ensure_path_within_directory(
-        search_dir,
-        get_default_manual_markdown_dir(),
-        "Markdown ディレクトリ",
-    )
-    candidates = find_auto_matched_markdown_candidates(pdf_path, markdown_dir=allowed_search_dir)
+    search_dirs: list[Path]
+    if markdown_dir is not None:
+        search_dirs = [markdown_dir]
+    else:
+        search_dirs = get_manual_markdown_dirs()
+
+    candidates: list[Path] = []
+    for search_dir in search_dirs:
+        candidates.extend(find_auto_matched_markdown_candidates(pdf_path, markdown_dir=search_dir))
+
     if not candidates:
+        search_dir_labels = ", ".join(str(d) for d in search_dirs)
         raise MarkdownResolutionError(
             "エラー: 対応する OCR Markdown が見つかりません: "
-            f"{pdf_path.stem} (検索先: {allowed_search_dir})。"
+            f"{pdf_path.stem} (検索先: {search_dir_labels})。"
             " OCR Markdown 修正フローは pdf_converter.py の output/ を自動検索しません。"
             f" 入力に使う Markdown は {get_default_manual_markdown_dir()} 配下へ配置してください。"
         )
@@ -1227,10 +1293,13 @@ def build_contents(prompt: str, pdf_part: types.Part | None) -> list:
 
 def make_manual_relative_path(path: Path) -> str:
     """manual ルート配下の path を tool 向け相対表現へ変換する。"""
-    try:
-        return str(path.resolve().relative_to(get_default_manual_root().resolve())).replace("\\", "/")
-    except ValueError:
-        return str(path.resolve())
+    resolved = path.resolve()
+    for root in get_manual_root_candidates():
+        try:
+            return str(resolved.relative_to(root.resolve())).replace("\\", "/")
+        except ValueError:
+            continue
+    return str(resolved)
 
 
 def should_inline_ocr_markdown(markdown_path: Path) -> bool:
