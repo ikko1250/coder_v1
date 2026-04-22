@@ -5,10 +5,18 @@ import sys
 import unicodedata
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
+# Mock platform-specific or optional dependencies before importing the target module
+sys.modules['fcntl'] = MagicMock()
+sys.modules['httpx'] = MagicMock()
+sys.modules['google'] = MagicMock()
+sys.modules['google.genai'] = MagicMock()
+sys.modules['google.genai.errors'] = MagicMock()
+sys.modules['google.genai.types'] = MagicMock()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODULE_PATH = REPO_ROOT / "pdf_converter" / "call-gemma4-gemini.py"
+MODULE_PATH = REPO_ROOT / "pdf_converter" / "call_gemma4_gemini.py"
 
 
 def loadTargetModule():
