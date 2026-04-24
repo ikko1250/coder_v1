@@ -16,9 +16,13 @@ def _normalize_path(path_value: str | Path) -> Path:
 
 
 def _has_source_tree_layout(project_root: Path) -> bool:
+    asset_root = project_root / "asset"
     return (
         (project_root / "pdf_converter").is_dir()
-        and (project_root / "asset").is_dir()
+        and (
+            (asset_root / "ocr_manual").is_dir()
+            or (asset_root / "texts_2nd" / "manual").is_dir()
+        )
     )
 
 
@@ -42,7 +46,7 @@ def _ensure_source_tree_root(candidate_root: Path, resolution_source: str) -> Pa
     if not _has_source_tree_layout(resolved_root):
         raise ProjectRootResolutionError(
             f"{resolution_source}: source tree layout is incomplete at {resolved_root}. "
-            "Expected pdf_converter/ and asset/."
+            "Expected pdf_converter/ and asset/ocr_manual/ or asset/texts_2nd/manual/."
         )
     return resolved_root
 

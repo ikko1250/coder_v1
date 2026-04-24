@@ -878,19 +878,92 @@ def is_path_within_directory(path: Path, allowed_dir: Path) -> bool:
     return resolved_allowed_dir == resolved_path or resolved_allowed_dir in resolved_path.parents
 
 
+def directories_overlap(left_dir: Path, right_dir: Path) -> bool:
+    """2 つのディレクトリが同一または親子関係なら True。"""
+    resolved_left = left_dir.expanduser().resolve()
+    resolved_right = right_dir.expanduser().resolve()
+    return (
+        resolved_left == resolved_right
+        or resolved_left in resolved_right.parents
+        or resolved_right in resolved_left.parents
+    )
+
+
+def _normalize_tool_relative_path(
+    raw_path: str,
+    area_mapping: dict[str, list[Path]],
+) -> str:
+    """相対 tool path の先頭領域識別子を実際のディレクトリに解決する。
+
+    例:
+        md/source.md + {"md": [override_md]} → override_md/source.md
+        work/working.md + {"work": [override_work]} → override_work/working.md
+    """
+    input_path = Path(raw_path.strip()).expanduser()
+    if input_path.is_absolute():
+        return raw_path
+    if not input_path.parts:
+        return raw_path
+    head = input_path.parts[0]
+    tail = Path(*input_path.parts[1:])
+    dirs = area_mapping.get(head)
+    if not dirs:
+        return raw_path
+    resolved_dirs = [d.expanduser().resolve() for d in dirs]
+    existing: list[Path] = []
+    for d in resolved_dirs:
+        candidate = d / tail
+        try:
+            if candidate.exists():
+                existing.append(candidate)
+        except OSError:
+            continue
+    if len(existing) == 1:
+        return str(existing[0])
+    elif len(existing) > 1:
+        canonical = resolved_dirs[0] / tail
+        return str(canonical if canonical in existing else existing[0])
+    else:
+        return str(resolved_dirs[0] / tail)
+
+
 def resolve_tool_path(
     raw_path: str,
     allowed_dirs: list[Path],
     label: str,
 ) -> Path:
-    """tool 入力パスを manual ルート基準で正規化し、許可ルート配下だけ通す。"""
+    """tool 入力パスを許可ディレクトリ基準で正規化し、許可ルート配下だけ通す。"""
     normalized_input = (raw_path or "").strip()
     if not normalized_input:
         raise ToolPathResolutionError(f"エラー: {label} が空です。")
 
     input_path = Path(normalized_input).expanduser()
-    joined_path = input_path if input_path.is_absolute() else get_default_manual_root() / input_path
-    resolved_path = joined_path.resolve()
+    joined_path_is_resolved = False
+    if input_path.is_absolute():
+        joined_path = input_path
+    else:
+        # 相対パス: allowed_dirs を基準に解決。存在するものを優先。
+        resolved_allowed_dirs = [allowed_dir.expanduser().resolve() for allowed_dir in allowed_dirs]
+        existing: list[Path] = []
+        for allowed_dir in resolved_allowed_dirs:
+            try:
+                candidate = (allowed_dir / input_path).resolve()
+                if candidate.exists():
+                    existing.append(candidate)
+            except OSError:
+                continue
+        if len(existing) == 1:
+            joined_path = existing[0]
+            joined_path_is_resolved = True
+        elif len(existing) > 1:
+            canonical_candidate = (resolved_allowed_dirs[0] / input_path).resolve()
+            joined_path = canonical_candidate if canonical_candidate.exists() else existing[0]
+            joined_path_is_resolved = True
+        else:
+            joined_path = (resolved_allowed_dirs[0] / input_path).resolve()
+            joined_path_is_resolved = True
+
+    resolved_path = joined_path if joined_path_is_resolved else joined_path.resolve()
     resolved_allowed_dirs = [allowed_dir.expanduser().resolve() for allowed_dir in allowed_dirs]
 
     for allowed_dir in resolved_allowed_dirs:
@@ -905,48 +978,25 @@ def resolve_tool_path(
 
 def read_tool_text(raw_path: str) -> str:
     """read tool 用: md/ と work/ の UTF-8 テキストだけを返す。"""
-    normalized_input = (raw_path or "").strip()
-    candidate_path = Path(normalized_input).expanduser()
-
-    # PDF 除外チェック
-    joined_candidate = (
-        candidate_path if candidate_path.is_absolute() else get_default_manual_root() / candidate_path
-    )
-    resolved_candidate = joined_candidate.resolve()
-    if (
-        resolved_candidate.suffix.lower() == ".pdf"
-        or is_path_within_directory(resolved_candidate, get_default_manual_pdf_dir())
-    ):
-        raise ToolReadError(f"エラー: read tool は PDF を読めません: {resolved_candidate}")
-
-    # read 用: 相対 path の場合、candidate dirs から存在するものを優先して解決
-    search_raw_path = raw_path
-    if not candidate_path.is_absolute():
-        allowed_dirs = get_manual_markdown_dirs() + get_manual_work_dirs()
-        existing: list[Path] = []
-        for allowed_dir in allowed_dirs:
-            try:
-                candidate = (allowed_dir / candidate_path).resolve()
-                if candidate.exists() and candidate.is_file():
-                    existing.append(candidate)
-            except OSError:
-                continue
-        if len(existing) == 1:
-            search_raw_path = str(existing[0])
-        elif len(existing) > 1:
-            # 複数ヒット時は canonical 優先
-            canonical_candidate = (allowed_dirs[0] / candidate_path).resolve()
-            if canonical_candidate.exists():
-                search_raw_path = str(canonical_candidate)
-
+    normalized = _normalize_tool_relative_path(raw_path, {
+        "md": get_manual_markdown_dirs(),
+        "work": get_manual_work_dirs(),
+    })
     try:
         resolved_path = resolve_tool_path(
-            search_raw_path,
+            normalized,
             get_manual_markdown_dirs() + get_manual_work_dirs(),
             "read path",
         )
     except ToolPathResolutionError as exc:
         raise ToolReadError(str(exc)) from exc
+
+    # PDF 除外チェック
+    if resolved_path.suffix.lower() == ".pdf":
+        raise ToolReadError(f"エラー: read tool は PDF を読めません: {resolved_path}")
+    for pdf_dir in get_manual_pdf_dirs():
+        if is_path_within_directory(resolved_path, pdf_dir.expanduser().resolve()):
+            raise ToolReadError(f"エラー: read tool は PDF を読めません: {resolved_path}")
 
     if not resolved_path.exists():
         raise ToolReadError(f"エラー: read 対象ファイルが見つかりません: {resolved_path}")
@@ -1066,7 +1116,11 @@ def is_windows_lock_contention_error(exc: OSError) -> bool:
 
 @contextlib.contextmanager
 def acquire_windows_write_lock(lock_path: Path) -> Iterator[Path]:
-    """Windows の msvcrt.locking backend。ローカル NTFS 上の通常ファイルを対象にする。"""
+    """Windows の msvcrt.locking backend。
+
+    ローカル NTFS 上で、この CLI 同士が同じ sidecar lock file を使う協調排他を対象にする。
+    lock を無視して working Markdown を直接書く外部プロセスまでは防がない。
+    """
     import msvcrt
 
     try:
@@ -1157,70 +1211,84 @@ def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Pat
     """write tool 用: work/ 配下へ 1 箇所一致の置換だけを反映する。"""
     normalized_input = (raw_path or "").strip()
     candidate_path = Path(normalized_input).expanduser()
-    joined_candidate = (
-        candidate_path if candidate_path.is_absolute() else get_default_manual_root() / candidate_path
-    )
-    resolved_candidate = joined_candidate.resolve()
 
-    if (
-        is_path_within_directory(resolved_candidate, get_default_manual_markdown_dir())
-        or is_path_within_directory(resolved_candidate, get_default_manual_pdf_dir())
-    ):
-        raise ToolWriteError(f"エラー: write tool は work/ 以外へ書けません: {resolved_candidate}")
+    # 相対パスで先頭セグメントが md/pdf 領域を指す場合は事前に拒否
+    if not candidate_path.is_absolute() and candidate_path.parts:
+        head = candidate_path.parts[0]
+        if head in ("md", "pdf"):
+            raise ToolWriteError(f"エラー: write tool は work/ 以外へ書けません: {raw_path}")
 
+    normalized = _normalize_tool_relative_path(raw_path, {
+        "work": get_manual_work_dirs(),
+    })
     try:
-        resolved_path = resolve_tool_path(raw_path, [get_default_manual_work_dir()], "write path")
+        resolved_path = resolve_tool_path(normalized, get_manual_work_dirs(), "write path")
     except ToolPathResolutionError as exc:
         raise ToolWriteError(str(exc)) from exc
+
+    resolved_work_dirs = [work_dir.expanduser().resolve() for work_dir in get_manual_work_dirs()]
+
+    # md/ と pdf/ への書き込みを禁止（絶対パスや symlink による回避も検出）
+    for md_dir in get_manual_markdown_dirs():
+        resolved_md_dir = md_dir.expanduser().resolve()
+        overlaps_work_dir = any(
+            directories_overlap(resolved_md_dir, work_dir) for work_dir in resolved_work_dirs
+        )
+        if not overlaps_work_dir and is_path_within_directory(resolved_path, resolved_md_dir):
+            raise ToolWriteError(f"エラー: write tool は work/ 以外へ書けません: {resolved_path}")
+    for pdf_dir in get_manual_pdf_dirs():
+        resolved_pdf_dir = pdf_dir.expanduser().resolve()
+        overlaps_work_dir = any(
+            directories_overlap(resolved_pdf_dir, work_dir) for work_dir in resolved_work_dirs
+        )
+        if not overlaps_work_dir and is_path_within_directory(resolved_path, resolved_pdf_dir):
+            raise ToolWriteError(f"エラー: write tool は work/ 以外へ書けません: {resolved_path}")
 
     if resolved_path.exists() and not resolved_path.is_file():
         raise ToolWriteError(f"エラー: write 対象パスがファイルではありません: {resolved_path}")
     if not resolved_path.exists():
         raise ToolWriteError(f"エラー: write 対象ファイルが見つかりません: {resolved_path}")
 
-    try:
-        with acquire_write_lock(build_write_lock_path(resolved_path)):
-            try:
-                current_text = resolved_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise ToolWriteError(
-                    f"エラー: write tool のファイル読取に失敗しました: {resolved_path}: {exc}"
-                ) from exc
+    with acquire_write_lock(build_write_lock_path(resolved_path)):
+        try:
+            current_text = resolved_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ToolWriteError(
+                f"エラー: write tool のファイル読取に失敗しました: {resolved_path}: {exc}"
+            ) from exc
 
-            normalized_current_text = normalize_tool_text(current_text)
-            normalized_expected_text = normalize_tool_text(expected_old_text)
-            normalized_new_text = normalize_tool_text(new_text)
+        normalized_current_text = normalize_tool_text(current_text)
+        normalized_expected_text = normalize_tool_text(expected_old_text)
+        normalized_new_text = normalize_tool_text(new_text)
 
-            match_index = find_unique_normalized_match(
-                normalized_current_text,
-                normalized_expected_text,
+        match_index = find_unique_normalized_match(
+            normalized_current_text,
+            normalized_expected_text,
+        )
+        if match_index == -1:
+            raise ToolWriteError(
+                "エラー: expected_old_text が一致しません。"
+                f" 対象: {resolved_path}"
             )
-            if match_index == -1:
-                raise ToolWriteError(
-                    "エラー: expected_old_text が一致しません。"
-                    f" 対象: {resolved_path}"
-                )
-            if match_index == -2:
-                raise ToolWriteError(
-                    "エラー: expected_old_text が複数箇所に一致しました。"
-                    f" 対象: {resolved_path}"
-                )
-
-            replaced_text = (
-                normalized_current_text[:match_index]
-                + normalized_new_text
-                + normalized_current_text[match_index + len(normalized_expected_text) :]
+        if match_index == -2:
+            raise ToolWriteError(
+                "エラー: expected_old_text が複数箇所に一致しました。"
+                f" 対象: {resolved_path}"
             )
 
-            try:
-                with resolved_path.open("w", encoding="utf-8", newline="\n") as output_file:
-                    output_file.write(replaced_text)
-            except OSError as exc:
-                raise ToolWriteError(
-                    f"エラー: write tool のファイル書込に失敗しました: {resolved_path}: {exc}"
-                ) from exc
-    except ToolWriteError:
-        raise
+        replaced_text = (
+            normalized_current_text[:match_index]
+            + normalized_new_text
+            + normalized_current_text[match_index + len(normalized_expected_text) :]
+        )
+
+        try:
+            with resolved_path.open("w", encoding="utf-8", newline="\n") as output_file:
+                output_file.write(replaced_text)
+        except OSError as exc:
+            raise ToolWriteError(
+                f"エラー: write tool のファイル書込に失敗しました: {resolved_path}: {exc}"
+            ) from exc
 
     return resolved_path
 

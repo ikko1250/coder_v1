@@ -49,9 +49,19 @@ class ProjectPathResolutionTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_root, ignore_errors=True)
 
-    def build_source_tree(self, root: Path, with_pyproject: bool = False) -> Path:
+    def build_source_tree(
+        self,
+        root: Path,
+        with_pyproject: bool = False,
+        manual_layout: str = "legacy",
+    ) -> Path:
         (root / "pdf_converter").mkdir(parents=True, exist_ok=True)
-        (root / "asset" / "texts_2nd" / "manual").mkdir(parents=True, exist_ok=True)
+        if manual_layout == "canonical":
+            (root / "asset" / "ocr_manual").mkdir(parents=True, exist_ok=True)
+        elif manual_layout == "legacy":
+            (root / "asset" / "texts_2nd" / "manual").mkdir(parents=True, exist_ok=True)
+        else:
+            raise ValueError(f"unknown manual_layout: {manual_layout}")
         if with_pyproject:
             (root / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
         return root / "pdf_converter" / "project_paths.py"
@@ -100,6 +110,17 @@ class ProjectPathResolutionTests(unittest.TestCase):
             resolved_root = resolve_project_root(source_file=source_file)
 
         self.assertEqual(resolved_root, (self.temp_root / "fallback-root").resolve())
+
+    def test_source_tree_layout_accepts_canonical_manual_root(self):
+        source_file = self.build_source_tree(
+            self.temp_root / "canonical-root",
+            with_pyproject=True,
+            manual_layout="canonical",
+        )
+
+        resolved_root = resolve_project_root(source_file=source_file)
+
+        self.assertEqual(resolved_root, (self.temp_root / "canonical-root").resolve())
 
     def test_resolution_failure_raises_explicit_error(self):
         source_file = self.temp_root / "missing-root" / "pdf_converter" / "project_paths.py"

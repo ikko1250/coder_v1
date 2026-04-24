@@ -120,6 +120,173 @@ class OcrToolPathValidationTests(unittest.TestCase):
         with self.assertRaises(self.module.ToolWriteError):
             self.module.write_tool_text("md/source.md", "before\n", "after\n")
 
+    def testReadToolTextFallbackToLegacyRoot(self):
+        original_get_roots = self.module.get_manual_root_candidates
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            canonical_root = self.tempRoot / "canonical"
+            legacy_root = self.tempRoot / "legacy"
+            (canonical_root / "md").mkdir(parents=True)
+            (legacy_root / "md").mkdir(parents=True)
+
+            legacy_md = legacy_root / "md" / "source.md"
+            legacy_md.write_text("# legacy\n", encoding="utf-8", newline="\n")
+
+            self.module.get_manual_root_candidates = lambda: [canonical_root, legacy_root]
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = None
+            self.module.DEFAULT_MANUAL_WORK_DIR = None
+
+            text = self.module.read_tool_text("md/source.md")
+            self.assertEqual(text, "# legacy\n")
+        finally:
+            self.module.get_manual_root_candidates = original_get_roots
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
+    def testReadToolTextPrefersCanonicalOverLegacy(self):
+        original_get_roots = self.module.get_manual_root_candidates
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            canonical_root = self.tempRoot / "canonical"
+            legacy_root = self.tempRoot / "legacy"
+            (canonical_root / "md").mkdir(parents=True)
+            (legacy_root / "md").mkdir(parents=True)
+
+            canonical_md = canonical_root / "md" / "source.md"
+            canonical_md.write_text("# canonical\n", encoding="utf-8", newline="\n")
+            legacy_md = legacy_root / "md" / "source.md"
+            legacy_md.write_text("# legacy\n", encoding="utf-8", newline="\n")
+
+            self.module.get_manual_root_candidates = lambda: [canonical_root, legacy_root]
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = None
+            self.module.DEFAULT_MANUAL_WORK_DIR = None
+
+            text = self.module.read_tool_text("md/source.md")
+            self.assertEqual(text, "# canonical\n")
+        finally:
+            self.module.get_manual_root_candidates = original_get_roots
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
+    def testReadToolTextRespectsMarkdownDirOverride(self):
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            override_md = self.tempRoot / "override_md"
+            override_md.mkdir(parents=True)
+            override_md_source = override_md / "source.md"
+            override_md_source.write_text("# override\n", encoding="utf-8", newline="\n")
+
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = override_md
+            self.module.DEFAULT_MANUAL_WORK_DIR = None
+
+            text = self.module.read_tool_text("md/source.md")
+            self.assertEqual(text, "# override\n")
+        finally:
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
+    def testWriteToolTextRespectsWorkDirOverride(self):
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            override_work = self.tempRoot / "override_work"
+            override_work.mkdir(parents=True)
+            override_work_file = override_work / "working.md"
+            override_work_file.write_text("before\n", encoding="utf-8", newline="\n")
+
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = None
+            self.module.DEFAULT_MANUAL_WORK_DIR = override_work
+
+            written_path = self.module.write_tool_text("work/working.md", "before\n", "after\n")
+            self.assertEqual(written_path, override_work_file.resolve())
+            self.assertEqual(override_work_file.read_text(encoding="utf-8"), "after\n")
+        finally:
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
+    def testWriteToolTextAllowsWorkDirWhenMarkdownDirIsSameOverride(self):
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            shared_dir = self.tempRoot / "shared_md_work"
+            shared_dir.mkdir(parents=True)
+            working_file = shared_dir / "working.md"
+            working_file.write_text("before\n", encoding="utf-8", newline="\n")
+
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = shared_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = shared_dir
+
+            written_path = self.module.write_tool_text("work/working.md", "before\n", "after\n")
+            self.assertEqual(written_path, working_file.resolve())
+            self.assertEqual(working_file.read_text(encoding="utf-8"), "after\n")
+        finally:
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
+    def testWriteToolTextAllowsWorkDirWhenMarkdownDirIsParentOverride(self):
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            parent_dir = self.tempRoot / "manual_parent"
+            override_work = parent_dir / "work"
+            override_work.mkdir(parents=True)
+            working_file = override_work / "working.md"
+            working_file.write_text("before\n", encoding="utf-8", newline="\n")
+
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = parent_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = override_work
+
+            written_path = self.module.write_tool_text("work/working.md", "before\n", "after\n")
+            self.assertEqual(written_path, working_file.resolve())
+            self.assertEqual(working_file.read_text(encoding="utf-8"), "after\n")
+        finally:
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
+    def testWriteToolTextStillRejectsUnrelatedMarkdownDirAbsolutePath(self):
+        original_manual_root = self.module.DEFAULT_MANUAL_ROOT
+        original_manual_markdown_dir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original_manual_work_dir = self.module.DEFAULT_MANUAL_WORK_DIR
+        try:
+            override_work = self.tempRoot / "override_work"
+            unrelated_md = self.tempRoot / "unrelated_md"
+            override_work.mkdir(parents=True)
+            unrelated_md.mkdir(parents=True)
+            source_file = unrelated_md / "source.md"
+            source_file.write_text("before\n", encoding="utf-8", newline="\n")
+
+            self.module.DEFAULT_MANUAL_ROOT = None
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = unrelated_md
+            self.module.DEFAULT_MANUAL_WORK_DIR = override_work
+
+            with self.assertRaises(self.module.ToolWriteError):
+                self.module.write_tool_text(str(source_file), "before\n", "after\n")
+        finally:
+            self.module.DEFAULT_MANUAL_ROOT = original_manual_root
+            self.module.DEFAULT_MANUAL_MARKDOWN_DIR = original_manual_markdown_dir
+            self.module.DEFAULT_MANUAL_WORK_DIR = original_manual_work_dir
+
 
 if __name__ == "__main__":
     unittest.main()
