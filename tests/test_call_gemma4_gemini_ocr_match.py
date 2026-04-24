@@ -6,8 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# Mock platform-specific or optional dependencies before importing the target module
-sys.modules['fcntl'] = MagicMock()
+# Mock optional dependencies before importing the target module
 sys.modules['httpx'] = MagicMock()
 sys.modules['google'] = MagicMock()
 sys.modules['google.genai'] = MagicMock()

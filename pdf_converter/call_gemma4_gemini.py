@@ -10,7 +10,7 @@ Gemini API 経由で生成モデルを呼び出す CLI。既定モデルは gemi
 import argparse
 import contextlib
 import difflib
-import fcntl
+import errno
 import os
 import re
 import secrets
@@ -992,12 +992,22 @@ def build_write_lock_path(target_path: Path) -> Path:
 def acquire_write_lock(lock_path: Path) -> Iterator[Path]:
     """sidecar lock file を使って write 区間を排他実行する。
 
-    fcntl.flock ベースの advisory lock を使う。プロセス異常終了時に OS がロックを
-    自動解放するため、従来の `O_EXCL` + unlink 方式で発生していた stale lock の問題を
-    回避できる。sidecar ファイル自体は削除しないので、複数プロセスが同一 inode を
-    共有でき、並行待機時の race を避けられる（work/ は .gitignore 配下で蓄積しても
-    リポジトリに影響しない）。
+    Unix 系では fcntl.flock、Windows では msvcrt.locking を使う。sidecar ファイル
+    自体は削除しないので、複数プロセスが同じ lock file を協調的に参照できる。
     """
+    if os.name == "nt":
+        with acquire_windows_write_lock(lock_path) as acquired_path:
+            yield acquired_path
+    else:
+        with acquire_unix_write_lock(lock_path) as acquired_path:
+            yield acquired_path
+
+
+@contextlib.contextmanager
+def acquire_unix_write_lock(lock_path: Path) -> Iterator[Path]:
+    """Unix 系の fcntl.flock backend。"""
+    import fcntl
+
     try:
         lock_fd = os.open(
             str(lock_path),
@@ -1035,6 +1045,69 @@ def acquire_write_lock(lock_path: Path) -> Iterator[Path]:
             if acquired:
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    finally:
+        os.close(lock_fd)
+
+
+def is_windows_lock_contention_error(exc: OSError) -> bool:
+    """msvcrt.locking の lock contention だけを retry 対象として判定する。"""
+    if getattr(exc, "winerror", None) == 33:
+        return True
+
+    contention_errno_values = {errno.EACCES}
+    for name in ("EDEADLK", "EDEADLOCK"):
+        value = getattr(errno, name, None)
+        if value is not None:
+            contention_errno_values.add(value)
+    return exc.errno in contention_errno_values
+
+
+@contextlib.contextmanager
+def acquire_windows_write_lock(lock_path: Path) -> Iterator[Path]:
+    """Windows の msvcrt.locking backend。ローカル NTFS 上の通常ファイルを対象にする。"""
+    import msvcrt
+
+    try:
+        lock_fd = os.open(
+            str(lock_path),
+            os.O_CREAT | os.O_RDWR,
+            0o644,
+        )
+    except OSError as exc:
+        raise ToolWriteError(
+            f"エラー: write lock ファイルの作成に失敗しました: {lock_path}: {exc}"
+        ) from exc
+
+    try:
+        start_time = time.monotonic()
+        acquired = False
+        while True:
+            try:
+                os.lseek(lock_fd, 0, os.SEEK_SET)
+                msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                acquired = True
+                break
+            except OSError as exc:
+                if not is_windows_lock_contention_error(exc):
+                    raise ToolWriteError(
+                        f"エラー: write lock の取得に失敗しました: {lock_path}: {exc}"
+                    ) from exc
+                if time.monotonic() - start_time >= WRITE_LOCK_TIMEOUT_SECONDS:
+                    raise ToolWriteError(
+                        "エラー: write lock の取得がタイムアウトしました。"
+                        f" 対象: {lock_path}"
+                    ) from exc
+                time.sleep(WRITE_LOCK_POLL_INTERVAL_SECONDS)
+
+        try:
+            yield lock_path
+        finally:
+            if acquired:
+                try:
+                    os.lseek(lock_fd, 0, os.SEEK_SET)
+                    msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
                 except OSError:
                     pass
     finally:
