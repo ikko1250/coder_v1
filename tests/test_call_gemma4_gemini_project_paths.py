@@ -4,16 +4,10 @@ import sys
 import unittest
 from pathlib import Path
 from unittest import mock
-from unittest.mock import MagicMock
 
 import importlib
 
-# Mock optional dependencies before importing the target module
-sys.modules['httpx'] = MagicMock()
-sys.modules['google'] = MagicMock()
-sys.modules['google.genai'] = MagicMock()
-sys.modules['google.genai.errors'] = MagicMock()
-sys.modules['google.genai.types'] = MagicMock()
+import pdf_converter.ocr_paths as ocr_paths_module
 
 from pdf_converter.project_paths import (
     ProjectRootResolutionError,
@@ -182,25 +176,25 @@ class ManualRootCandidateTests(unittest.TestCase):
     def test_candidate_dirs_prefers_override_when_set(self) -> None:
         """DEFAULT_MANUAL_ROOT が設定されている場合、candidate は override のみを返す。"""
         module = load_cli_module()
-        original = module.DEFAULT_MANUAL_ROOT
+        original = ocr_paths_module.DEFAULT_MANUAL_ROOT
         try:
             override = Path("/tmp/override_manual")
-            module.DEFAULT_MANUAL_ROOT = override
+            ocr_paths_module.DEFAULT_MANUAL_ROOT = override
             candidates = module.get_manual_root_candidates()
             self.assertEqual(candidates, [override])
         finally:
-            module.DEFAULT_MANUAL_ROOT = original
+            ocr_paths_module.DEFAULT_MANUAL_ROOT = original
 
     def test_get_manual_markdown_dirs_respects_override(self) -> None:
         module = load_cli_module()
-        original = module.DEFAULT_MANUAL_MARKDOWN_DIR
+        original = ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR
         try:
             override = Path("/tmp/override_md")
-            module.DEFAULT_MANUAL_MARKDOWN_DIR = override
+            ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = override
             dirs = module.get_manual_markdown_dirs()
             self.assertEqual(dirs, [override])
         finally:
-            module.DEFAULT_MANUAL_MARKDOWN_DIR = original
+            ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = original
 
 
 if __name__ == "__main__":

@@ -58,11 +58,10 @@ class ToolCallLoggingTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(self.module, "generate_content_once", side_effect=[first_response, final_response]),
-            mock.patch.object(self.module, "extract_ocr_response_payload", side_effect=[first_payload, final_payload]),
-            mock.patch.object(
-                self.module,
-                "execute_ocr_function_call",
+            mock.patch("pdf_converter.ocr_correction.generate_content_once", side_effect=[first_response, final_response]),
+            mock.patch("pdf_converter.ocr_correction.extract_ocr_response_payload", side_effect=[first_payload, final_payload]),
+            mock.patch(
+                "pdf_converter.ocr_correction.execute_ocr_function_call",
                 return_value=types.Part.from_function_response(
                     name="read_markdown_file",
                     response={"result": {"path": "md/source.md", "content": "# source"}},

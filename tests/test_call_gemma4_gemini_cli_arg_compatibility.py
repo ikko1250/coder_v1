@@ -1,4 +1,5 @@
 import importlib
+import io
 import sys
 import unittest
 from types import SimpleNamespace
@@ -93,6 +94,82 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 23)
         ocr_mock.assert_called_once()
+
+    def test_ocr_mode_rejects_whitespace_only_pdf_path(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        argv = [
+            "call_gemma4_gemini.py",
+            "--task",
+            module.OCR_CORRECTION_TASK,
+            "--pdf-path",
+            "   ",
+        ]
+
+        with mock.patch.object(sys, "argv", argv):
+            args = module.parse_args()
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = module.run_ocr_correction_mode(args)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("エラー: OCR Markdown 修正モードでは --pdf-path が必須です。", stderr.getvalue())
+
+
+class FormatGenerateContentErrorTests(unittest.TestCase):
+    def setUp(self):
+        sys.modules.pop(MODULE_NAME, None)
+        importlib.invalidate_caches()
+
+    def _import_module(self):
+        return importlib.import_module(MODULE_NAME)
+
+    def test_fake_exception_with_only_message(self):
+        module = self._import_module()
+
+        class FakeClientError(module.errors.ClientError):
+            def __init__(self):
+                self.message = "something went wrong"
+
+            def __str__(self):
+                return "something went wrong"
+
+        exc = FakeClientError()
+        result = module.format_generate_content_error(exc)
+        self.assertIn("something went wrong", result)
+
+    def test_fake_exception_with_status_but_no_code_produces_rate_limit_message(self):
+        module = self._import_module()
+
+        class FakeClientError(module.errors.ClientError):
+            def __init__(self):
+                self.status = "429"
+
+            def __str__(self):
+                return "rate limited"
+
+        exc = FakeClientError()
+        result = module.format_generate_content_error(exc)
+        self.assertIn("レート制限", result)
+        self.assertIn("HTTP 429", result)
+
+    def test_fake_exception_with_no_attributes_does_not_raise(self):
+        module = self._import_module()
+
+        class FakeClientError(module.errors.ClientError):
+            def __init__(self):
+                pass
+
+            def __str__(self):
+                return "no-attrs"
+
+        exc = FakeClientError()
+        try:
+            result = module.format_generate_content_error(exc)
+        except AttributeError as e:
+            self.fail(f"AttributeError raised: {e}")
+        self.assertIsInstance(result, str)
+        self.assertTrue(len(result) > 0)
+        self.assertIn("FakeClientError", result)
 
 
 if __name__ == "__main__":

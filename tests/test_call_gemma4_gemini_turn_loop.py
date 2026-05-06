@@ -9,9 +9,11 @@ from unittest import mock
 
 from google.genai import types
 
+import pdf_converter.ocr_paths as ocr_paths_module
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODULE_PATH = REPO_ROOT / "pdf_converter" / "call-gemma4-gemini.py"
+MODULE_PATH = REPO_ROOT / "pdf_converter" / "call_gemma4_gemini.py"
 
 
 def loadTargetModule():
@@ -57,24 +59,24 @@ class OcrTurnLoopTests(unittest.TestCase):
         self.workDir.mkdir(parents=True)
         self.outputDir.mkdir(parents=True)
 
-        self.originalManualRoot = self.module.DEFAULT_MANUAL_ROOT
-        self.originalManualPdfDir = self.module.DEFAULT_MANUAL_PDF_DIR
-        self.originalManualMarkdownDir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
-        self.originalManualWorkDir = self.module.DEFAULT_MANUAL_WORK_DIR
-        self.originalOcrOutputDir = self.module.DEFAULT_OCR_OUTPUT_DIR
+        self.originalManualRoot = ocr_paths_module.DEFAULT_MANUAL_ROOT
+        self.originalManualPdfDir = ocr_paths_module.DEFAULT_MANUAL_PDF_DIR
+        self.originalManualMarkdownDir = ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR
+        self.originalManualWorkDir = ocr_paths_module.DEFAULT_MANUAL_WORK_DIR
+        self.originalOcrOutputDir = ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR
 
-        self.module.DEFAULT_MANUAL_ROOT = self.manualRoot
-        self.module.DEFAULT_MANUAL_PDF_DIR = self.pdfDir
-        self.module.DEFAULT_MANUAL_MARKDOWN_DIR = self.markdownDir
-        self.module.DEFAULT_MANUAL_WORK_DIR = self.workDir
-        self.module.DEFAULT_OCR_OUTPUT_DIR = self.outputDir
+        ocr_paths_module.DEFAULT_MANUAL_ROOT = self.manualRoot
+        ocr_paths_module.DEFAULT_MANUAL_PDF_DIR = self.pdfDir
+        ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = self.markdownDir
+        ocr_paths_module.DEFAULT_MANUAL_WORK_DIR = self.workDir
+        ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR = self.outputDir
 
     def tearDown(self):
-        self.module.DEFAULT_MANUAL_ROOT = self.originalManualRoot
-        self.module.DEFAULT_MANUAL_PDF_DIR = self.originalManualPdfDir
-        self.module.DEFAULT_MANUAL_MARKDOWN_DIR = self.originalManualMarkdownDir
-        self.module.DEFAULT_MANUAL_WORK_DIR = self.originalManualWorkDir
-        self.module.DEFAULT_OCR_OUTPUT_DIR = self.originalOcrOutputDir
+        ocr_paths_module.DEFAULT_MANUAL_ROOT = self.originalManualRoot
+        ocr_paths_module.DEFAULT_MANUAL_PDF_DIR = self.originalManualPdfDir
+        ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = self.originalManualMarkdownDir
+        ocr_paths_module.DEFAULT_MANUAL_WORK_DIR = self.originalManualWorkDir
+        ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR = self.originalOcrOutputDir
         shutil.rmtree(self.tempRoot, ignore_errors=True)
 
     def writeMarkdown(self, directory: Path, name: str, body: str) -> Path:
@@ -98,14 +100,12 @@ class OcrTurnLoopTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(
-                self.module,
-                "generate_content_once",
+            mock.patch(
+                "pdf_converter.ocr_correction.generate_content_once",
                 side_effect=[firstResponse, finalResponse],
             ) as generateMock,
-            mock.patch.object(
-                self.module,
-                "extract_ocr_response_payload",
+            mock.patch(
+                "pdf_converter.ocr_correction.extract_ocr_response_payload",
                 side_effect=[firstPayload, finalPayload],
             ),
         ):
@@ -145,14 +145,12 @@ class OcrTurnLoopTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(
-                self.module,
-                "generate_content_once",
+            mock.patch(
+                "pdf_converter.ocr_correction.generate_content_once",
                 side_effect=[firstResponse, finalResponse],
             ),
-            mock.patch.object(
-                self.module,
-                "extract_ocr_response_payload",
+            mock.patch(
+                "pdf_converter.ocr_correction.extract_ocr_response_payload",
                 side_effect=[firstPayload, finalPayload],
             ),
         ):
@@ -181,8 +179,8 @@ class OcrTurnLoopTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(self.module, "generate_content_once", return_value=response),
-            mock.patch.object(self.module, "extract_ocr_response_payload", return_value=payload),
+            mock.patch("pdf_converter.ocr_correction.generate_content_once", return_value=response),
+            mock.patch("pdf_converter.ocr_correction.extract_ocr_response_payload", return_value=payload),
             self.assertRaises(self.module.OcrToolExecutionError),
         ):
             self.module.run_ocr_correction_turn_loop(
@@ -208,19 +206,16 @@ class OcrTurnLoopTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(
-                self.module,
-                "generate_content_once",
+            mock.patch(
+                "pdf_converter.ocr_correction.generate_content_once",
                 side_effect=[response, finalResponse],
             ),
-            mock.patch.object(
-                self.module,
-                "extract_ocr_response_payload",
+            mock.patch(
+                "pdf_converter.ocr_correction.extract_ocr_response_payload",
                 side_effect=[firstPayload, finalPayload],
             ),
-            mock.patch.object(
-                self.module,
-                "execute_ocr_function_call",
+            mock.patch(
+                "pdf_converter.ocr_correction.execute_ocr_function_call",
                 return_value=types.Part.from_function_response(
                     name="read_markdown_file",
                     response={"result": {"path": "md/source.md", "content": "# source\n"}},

@@ -5,14 +5,8 @@ import sys
 import unicodedata
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
 
-# Mock optional dependencies before importing the target module
-sys.modules['httpx'] = MagicMock()
-sys.modules['google'] = MagicMock()
-sys.modules['google.genai'] = MagicMock()
-sys.modules['google.genai.errors'] = MagicMock()
-sys.modules['google.genai.types'] = MagicMock()
+import pdf_converter.ocr_paths as ocr_paths_module
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "pdf_converter" / "call_gemma4_gemini.py"
@@ -54,24 +48,24 @@ class OcrWriteMatchingTests(unittest.TestCase):
         self.workDir.mkdir(parents=True)
         self.outputDir.mkdir(parents=True)
 
-        self.originalManualRoot = self.module.DEFAULT_MANUAL_ROOT
-        self.originalManualPdfDir = self.module.DEFAULT_MANUAL_PDF_DIR
-        self.originalManualMarkdownDir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
-        self.originalManualWorkDir = self.module.DEFAULT_MANUAL_WORK_DIR
-        self.originalOcrOutputDir = self.module.DEFAULT_OCR_OUTPUT_DIR
+        self.originalManualRoot = ocr_paths_module.DEFAULT_MANUAL_ROOT
+        self.originalManualPdfDir = ocr_paths_module.DEFAULT_MANUAL_PDF_DIR
+        self.originalManualMarkdownDir = ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR
+        self.originalManualWorkDir = ocr_paths_module.DEFAULT_MANUAL_WORK_DIR
+        self.originalOcrOutputDir = ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR
 
-        self.module.DEFAULT_MANUAL_ROOT = self.manualRoot
-        self.module.DEFAULT_MANUAL_PDF_DIR = self.pdfDir
-        self.module.DEFAULT_MANUAL_MARKDOWN_DIR = self.markdownDir
-        self.module.DEFAULT_MANUAL_WORK_DIR = self.workDir
-        self.module.DEFAULT_OCR_OUTPUT_DIR = self.outputDir
+        ocr_paths_module.DEFAULT_MANUAL_ROOT = self.manualRoot
+        ocr_paths_module.DEFAULT_MANUAL_PDF_DIR = self.pdfDir
+        ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = self.markdownDir
+        ocr_paths_module.DEFAULT_MANUAL_WORK_DIR = self.workDir
+        ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR = self.outputDir
 
     def tearDown(self):
-        self.module.DEFAULT_MANUAL_ROOT = self.originalManualRoot
-        self.module.DEFAULT_MANUAL_PDF_DIR = self.originalManualPdfDir
-        self.module.DEFAULT_MANUAL_MARKDOWN_DIR = self.originalManualMarkdownDir
-        self.module.DEFAULT_MANUAL_WORK_DIR = self.originalManualWorkDir
-        self.module.DEFAULT_OCR_OUTPUT_DIR = self.originalOcrOutputDir
+        ocr_paths_module.DEFAULT_MANUAL_ROOT = self.originalManualRoot
+        ocr_paths_module.DEFAULT_MANUAL_PDF_DIR = self.originalManualPdfDir
+        ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = self.originalManualMarkdownDir
+        ocr_paths_module.DEFAULT_MANUAL_WORK_DIR = self.originalManualWorkDir
+        ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR = self.originalOcrOutputDir
         shutil.rmtree(self.tempRoot, ignore_errors=True)
 
     def writeWorkingMarkdown(self, name: str, body: str, newline: str | None = "\n") -> Path:

@@ -617,7 +617,7 @@ def load_source_rows_from_dir(
                 continue
             candidates.append(file_path)
 
-    candidates.sort(key=lambda path: path.relative_to(input_dir).as_posix())
+    candidates.sort(key=lambda path: path.relative_to(resolved_input).as_posix())
     # limit は有効候補抽出後に適用するため、ここでは適用しない
 
     for file_path in candidates:
@@ -627,7 +627,7 @@ def load_source_rows_from_dir(
                 IssueRecord(
                     severity="warning",
                     code="invalid_file_name",
-                    path=str(file_path.relative_to(input_dir).as_posix()),
+                    path=str(file_path.relative_to(resolved_input).as_posix()),
                     message=(
                         "file name must match <category1>_<category2>.(txt|md) "
                         "or <digits>_<category1>_<category2>.(txt|md)"

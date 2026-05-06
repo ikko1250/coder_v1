@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import subprocess
 import sys
 import unittest
@@ -24,15 +25,41 @@ class CallGemma4GeminiLegacyWrapperTests(unittest.TestCase):
         repo_root_str = str(REPO_ROOT)
         script_dir_str = str(WRAPPER_PATH.parent)
         original_sys_path = list(sys.path)
-        sys.path[:] = [script_dir_str, repo_root_str, "sentinel"]
+
+        # Build sys.path with exact matches and formatting variants that resolve
+        # to the same directories.
+        script_variants = [script_dir_str]
+        if sys.platform == "win32":
+            script_variants.append(script_dir_str.lower())
+        # Trailing separator and dot-segment variants (cross-platform)
+        script_variants.append(script_dir_str + os.sep)
+        script_variants.append(script_dir_str + os.sep + ".")
+
+        repo_variants = [repo_root_str]
+        if sys.platform == "win32":
+            repo_variants.append(repo_root_str.lower())
+        repo_variants.append(repo_root_str + os.sep)
+
+        sys.path[:] = script_variants + repo_variants + ["sentinel"]
 
         try:
             wrapper.ensure_repo_root_on_sys_path()
             self.assertEqual(sys.path[0], repo_root_str)
-            self.assertNotIn(script_dir_str, sys.path)
             self.assertEqual(sys.path[1], "sentinel")
+            # Script directory and its variants should have been removed
+            for v in script_variants:
+                self.assertNotIn(v, sys.path)
+            # Repo root duplicates/variants (other than the canonical one at front)
+            # should have been removed
+            for v in repo_variants[1:]:
+                self.assertNotIn(v, sys.path)
         finally:
             sys.path[:] = original_sys_path
+
+    def test_importing_wrapper_module_does_not_mutate_sys_path(self):
+        original_sys_path = list(sys.path)
+        load_wrapper_module()
+        self.assertEqual(sys.path, original_sys_path)
 
     def test_main_delegates_to_package_main(self):
         wrapper = load_wrapper_module()

@@ -5,13 +5,15 @@ import sys
 import unittest
 from pathlib import Path
 
+import pdf_converter.ocr_paths as ocr_paths_module
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODULE_PATH = REPO_ROOT / "pdf_converter" / "call-gemma4-gemini.py"
+MODULE_PATH = REPO_ROOT / "pdf_converter" / "call_gemma4_gemini.py"
 
 
 def loadTargetModule():
-    moduleName = "call_gemma4_gemini_diff_test_module"
+    moduleName = "pdf_converter.call_gemma4_gemini"
     spec = importlib.util.spec_from_file_location(moduleName, MODULE_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"module spec を取得できません: {MODULE_PATH}")
@@ -46,24 +48,24 @@ class OcrUnifiedDiffTests(unittest.TestCase):
         self.workDir.mkdir(parents=True)
         self.outputDir.mkdir(parents=True)
 
-        self.originalManualRoot = self.module.DEFAULT_MANUAL_ROOT
-        self.originalManualPdfDir = self.module.DEFAULT_MANUAL_PDF_DIR
-        self.originalManualMarkdownDir = self.module.DEFAULT_MANUAL_MARKDOWN_DIR
-        self.originalManualWorkDir = self.module.DEFAULT_MANUAL_WORK_DIR
-        self.originalOcrOutputDir = self.module.DEFAULT_OCR_OUTPUT_DIR
+        self.originalManualRoot = ocr_paths_module.DEFAULT_MANUAL_ROOT
+        self.originalManualPdfDir = ocr_paths_module.DEFAULT_MANUAL_PDF_DIR
+        self.originalManualMarkdownDir = ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR
+        self.originalManualWorkDir = ocr_paths_module.DEFAULT_MANUAL_WORK_DIR
+        self.originalOcrOutputDir = ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR
 
-        self.module.DEFAULT_MANUAL_ROOT = self.manualRoot
-        self.module.DEFAULT_MANUAL_PDF_DIR = self.pdfDir
-        self.module.DEFAULT_MANUAL_MARKDOWN_DIR = self.markdownDir
-        self.module.DEFAULT_MANUAL_WORK_DIR = self.workDir
-        self.module.DEFAULT_OCR_OUTPUT_DIR = self.outputDir
+        ocr_paths_module.DEFAULT_MANUAL_ROOT = self.manualRoot
+        ocr_paths_module.DEFAULT_MANUAL_PDF_DIR = self.pdfDir
+        ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = self.markdownDir
+        ocr_paths_module.DEFAULT_MANUAL_WORK_DIR = self.workDir
+        ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR = self.outputDir
 
     def tearDown(self):
-        self.module.DEFAULT_MANUAL_ROOT = self.originalManualRoot
-        self.module.DEFAULT_MANUAL_PDF_DIR = self.originalManualPdfDir
-        self.module.DEFAULT_MANUAL_MARKDOWN_DIR = self.originalManualMarkdownDir
-        self.module.DEFAULT_MANUAL_WORK_DIR = self.originalManualWorkDir
-        self.module.DEFAULT_OCR_OUTPUT_DIR = self.originalOcrOutputDir
+        ocr_paths_module.DEFAULT_MANUAL_ROOT = self.originalManualRoot
+        ocr_paths_module.DEFAULT_MANUAL_PDF_DIR = self.originalManualPdfDir
+        ocr_paths_module.DEFAULT_MANUAL_MARKDOWN_DIR = self.originalManualMarkdownDir
+        ocr_paths_module.DEFAULT_MANUAL_WORK_DIR = self.originalManualWorkDir
+        ocr_paths_module.DEFAULT_OCR_OUTPUT_DIR = self.originalOcrOutputDir
         shutil.rmtree(self.tempRoot, ignore_errors=True)
 
     def writeMarkdown(self, directory: Path, name: str, body: str, newline: str | None = "\n") -> Path:
@@ -89,6 +91,38 @@ class OcrUnifiedDiffTests(unittest.TestCase):
         diffText = self.module.build_unified_diff_text(originalPath, workingPath)
 
         self.assertEqual(diffText, "")
+
+    def testBuildUnifiedDiffTextDoesNotInjectExtraBlankLines(self):
+        originalPath = self.writeMarkdown(
+            self.markdownDir, "source.md", "line1\nline2\nline3\n"
+        )
+        workingPath = self.writeMarkdown(
+            self.workDir, "working.md", "line1\nline2 updated\nline3\n"
+        )
+
+        diffText = self.module.build_unified_diff_text(originalPath, workingPath)
+
+        self.assertNotIn("\n\n", diffText)
+
+        for line in diffText.splitlines(keepends=True):
+            if line.startswith("---") or line.startswith("+++") or line.startswith("@@"):
+                continue
+            if line.endswith("\n"):
+                self.assertFalse(
+                    line.endswith("\r\n\n"),
+                    f"Line has corrupted ending: {repr(line)}"
+                )
+
+        crlfOriginal = self.writeMarkdown(
+            self.markdownDir, "crlf-source.md", "line1\r\nline2\r\nline3\r\n", newline=""
+        )
+        crlfWorking = self.writeMarkdown(
+            self.workDir, "crlf-working.md", "line1\r\nline2 updated\r\nline3\r\n", newline=""
+        )
+
+        diffTextCrlf = self.module.build_unified_diff_text(crlfOriginal, crlfWorking)
+
+        self.assertNotIn("\r\n\n", diffTextCrlf)
 
 
 if __name__ == "__main__":

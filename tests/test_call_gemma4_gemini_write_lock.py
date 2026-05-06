@@ -13,6 +13,7 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_NAME = "pdf_converter.call_gemma4_gemini"
+import pdf_converter.ocr_tools as ocr_tools_module
 
 
 class CallGemma4GeminiWriteLockTests(unittest.TestCase):
@@ -91,8 +92,12 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
         )
         original_timeout = self.module.WRITE_LOCK_TIMEOUT_SECONDS
         original_interval = self.module.WRITE_LOCK_POLL_INTERVAL_SECONDS
+        original_ocr_timeout = ocr_tools_module.WRITE_LOCK_TIMEOUT_SECONDS
+        original_ocr_interval = ocr_tools_module.WRITE_LOCK_POLL_INTERVAL_SECONDS
         self.module.WRITE_LOCK_TIMEOUT_SECONDS = 0.05
         self.module.WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.01
+        ocr_tools_module.WRITE_LOCK_TIMEOUT_SECONDS = 0.05
+        ocr_tools_module.WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.01
         try:
             with mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}):
                 with self.assertRaises(self.module.ToolWriteError) as cm:
@@ -103,6 +108,8 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
         finally:
             self.module.WRITE_LOCK_TIMEOUT_SECONDS = original_timeout
             self.module.WRITE_LOCK_POLL_INTERVAL_SECONDS = original_interval
+            ocr_tools_module.WRITE_LOCK_TIMEOUT_SECONDS = original_ocr_timeout
+            ocr_tools_module.WRITE_LOCK_POLL_INTERVAL_SECONDS = original_ocr_interval
 
     def test_windows_backend_does_not_retry_non_contention_error(self):
         lock_path = self.temp_path / "target.md.lock"
@@ -119,7 +126,7 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
         )
         with (
             mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}),
-            mock.patch.object(self.module.time, "sleep") as sleep_mock,
+            mock.patch.object(ocr_tools_module.time, "sleep") as sleep_mock,
         ):
             with self.assertRaises(self.module.ToolWriteError) as cm:
                 with self.module.acquire_windows_write_lock(lock_path):
@@ -156,6 +163,7 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
             import time
             from pathlib import Path
             import pdf_converter.call_gemma4_gemini as module
+            import pdf_converter.ocr_tools as ocr_tools
 
             lock_path = Path(sys.argv[1])
             with module.acquire_write_lock(lock_path):
@@ -174,6 +182,8 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
         )
         original_timeout = self.module.WRITE_LOCK_TIMEOUT_SECONDS
         original_interval = self.module.WRITE_LOCK_POLL_INTERVAL_SECONDS
+        original_ocr_timeout = ocr_tools_module.WRITE_LOCK_TIMEOUT_SECONDS
+        original_ocr_interval = ocr_tools_module.WRITE_LOCK_POLL_INTERVAL_SECONDS
         try:
             ready_line = proc.stdout.readline().strip()
             if ready_line != "READY":
@@ -185,6 +195,8 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
 
             self.module.WRITE_LOCK_TIMEOUT_SECONDS = 0.5
             self.module.WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.05
+            ocr_tools_module.WRITE_LOCK_TIMEOUT_SECONDS = 0.5
+            ocr_tools_module.WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.05
             with self.assertRaises(self.module.ToolWriteError) as cm:
                 with self.module.acquire_write_lock(lock_path):
                     pass
@@ -192,6 +204,8 @@ class CallGemma4GeminiWriteLockTests(unittest.TestCase):
         finally:
             self.module.WRITE_LOCK_TIMEOUT_SECONDS = original_timeout
             self.module.WRITE_LOCK_POLL_INTERVAL_SECONDS = original_interval
+            ocr_tools_module.WRITE_LOCK_TIMEOUT_SECONDS = original_ocr_timeout
+            ocr_tools_module.WRITE_LOCK_POLL_INTERVAL_SECONDS = original_ocr_interval
             try:
                 stdout, stderr = proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:

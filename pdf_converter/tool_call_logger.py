@@ -41,5 +41,6 @@ class ToolCallLogger:
 
     def write_event(self, event: ToolCallLogEvent) -> None:
         with self.output_path.open("a", encoding="utf-8", newline="\n") as output_file:
-            output_file.write(event.to_json())
-            output_file.write("\n")
+            # Single write reduces (but does not eliminate) interleaving risk under
+            # multi-process append; full atomicity would require OS-level locking.
+            output_file.write(event.to_json() + "\n")
