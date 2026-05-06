@@ -94,11 +94,34 @@ uv run call-gemma4-gemini "この PDF を要約してください" --pdf-path as
 
 - `prompt`: 任意のユーザープロンプト。
 - `--pdf-path PATH`: PDF を `application/pdf` の inline Part として送ります。
-- `--api-key-env NAME`: API key を読む環境変数名。既定は `GEMINI_API_KEY`。
-- `--model MODEL`: 使うモデル ID。既定は `gemini-3.1-flash-lite-preview`。
+- `--provider gemini|qwen`: 使用する API プロバイダー。既定は `gemini`。
+- `--api-key-env NAME`: API key を読む環境変数名。既定は provider によって変わります（`gemini` 時は `GEMINI_API_KEY`、`qwen` 時は `DASHSCOPE_API_KEY`）。明示的に指定した場合はその値が使われます。
+- `--model MODEL`: 使うモデル ID。既定は provider によって変わります（`gemini` 時は `gemini-3.1-flash-lite-preview`、`qwen` 時は `qwen3.6-plus`）。
 - `--http-timeout-ms MS`: `generate_content` の HTTP timeout。既定は `300000`。
 - `--task single-shot`: 既定の単発実行モード。
 - `--task ocr-correct`: OCR Markdown 修正モード。
+
+### Provider: Gemini（既定）
+
+Gemini API を使った単発実行です。テキストのみ、または PDF inline 添付のいずれも利用できます。
+
+### Provider: Qwen
+
+Qwen API（DashScope 互換エンドポイント）を使ったテキスト単発実行です。
+
+```powershell
+uv run call-gemma4-gemini --provider qwen "水の化学式は？"
+```
+
+Qwen 関連の環境変数:
+
+- `DASHSCOPE_API_KEY`: Qwen API キー。
+- `CSV_VIEWER_QWEN_BASE_URL`: Qwen API のベース URL。省略時は `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`。
+
+制約:
+
+- `--provider qwen --pdf-path` は未対応です。PDF 対応は request shape 検証後の後続タスクです。
+- `--provider qwen --task ocr-correct` は未対応です。
 
 ## OCR Markdown 修正モード
 

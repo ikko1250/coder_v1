@@ -32,6 +32,15 @@ from pdf_converter.gemini_client import (
     generate_content_once,
     http_timeout_ms_arg_type,
 )
+from pdf_converter.qwen_client import (
+    DEFAULT_QWEN_MODEL,
+    DEFAULT_QWEN_API_KEY_ENV,
+    resolve_qwen_base_url,
+    build_qwen_chat_request,
+    call_qwen_chat_completion,
+    extract_qwen_response_text,
+    format_qwen_api_error,
+)
 from pdf_converter.ocr_output import (
     OcrDiffError,
     build_unified_diff_text,
@@ -198,10 +207,27 @@ def get_api_key_or_exit(env_name: str) -> str | None:
     return None
 
 
-def parse_args() -> argparse.Namespace:
+def was_option_provided(argv: list[str], option_name: str) -> bool:
+    return any(arg == option_name or arg.startswith(f"{option_name}=") for arg in argv)
+
+def resolve_effective_api_key_env(provider: str, api_key_env: str, api_key_env_provided: bool) -> str:
+    if api_key_env_provided:
+        return api_key_env
+    if provider == "qwen":
+        return DEFAULT_QWEN_API_KEY_ENV
+    return DEFAULT_API_KEY_ENV
+
+def resolve_effective_model(provider: str, model: str, model_provided: bool) -> str:
+    if model_provided:
+        return model
+    if provider == "qwen":
+        return DEFAULT_QWEN_MODEL
+    return DEFAULT_MODEL
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Call Gemini API (default model: gemini-3.1-flash-lite-preview; single-shot uses "
+            "Call LLM API (default model depends on provider; single-shot uses "
             "thinking_level=high when thinking_config is enabled). "
             "Optional --pdf-path attaches a local PDF as inline input (application/pdf). "
             "Use --task to switch between the existing single-shot flow and future OCR correction mode. "
@@ -289,17 +315,32 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--provider",
+        default="gemini",
+        choices=["gemini", "qwen"],
+        metavar="PROVIDER",
+        help="API provider (default: gemini).",
+    )
+    parser.add_argument(
+        "--qwen-base-url",
+        default=None,
+        metavar="URL",
+        dest="qwen_base_url",
+        help="Qwen base URL override. Defaults to CSV_VIEWER_QWEN_BASE_URL env or the DashScope compatible endpoint.",
+    )
+    parser.add_argument(
         "--api-key-env",
         default=DEFAULT_API_KEY_ENV,
         metavar="NAME",
-        help=f"Environment variable name for the API key (default: {DEFAULT_API_KEY_ENV}).",
+        help="Environment variable name for the API key (default: GEMINI_API_KEY for gemini, DASHSCOPE_API_KEY for qwen unless explicitly set).",
     )
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
         metavar="MODEL",
         help=(
-            f"Model id passed to generate_content (default: {DEFAULT_MODEL}). "
+            f"Model id passed to the provider (default: {DEFAULT_MODEL} for gemini, "
+            f"{DEFAULT_QWEN_MODEL} for qwen). "
             "Use another id for troubleshooting or comparison when behaviour differs by model."
         ),
     )
@@ -327,7 +368,9 @@ def parse_args() -> argparse.Namespace:
             f"allowed: {MIN_MAX_TOOL_CALLS_PER_RUN}–{MAX_TOOL_CALLS_CAP})."
         ),
     )
-    return parser.parse_args()
+    if argv is None:
+        argv = sys.argv[1:]
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -340,6 +383,11 @@ def main() -> int:
         pass
 
     args = parse_args()
+    argv_for_check = sys.argv[1:]
+    api_key_env_provided = was_option_provided(argv_for_check, "--api-key-env")
+    model_provided = was_option_provided(argv_for_check, "--model")
+    args.effective_api_key_env = resolve_effective_api_key_env(args.provider, args.api_key_env, api_key_env_provided)
+    args.effective_model = resolve_effective_model(args.provider, args.model, model_provided)
     if args.task == OCR_CORRECTION_TASK:
         return run_ocr_correction_mode(args)
     return run_single_shot_mode(args)
@@ -349,7 +397,35 @@ def run_single_shot_mode(args: argparse.Namespace) -> int:
     """Existing one-shot text/PDF flow."""
     load_dotenv(get_default_dotenv_path())
 
+    provider = getattr(args, "provider", "gemini")
     user_prompt, pdf_path = resolve_prompt_from_args(args)
+
+    if provider == "qwen":
+        if pdf_path is not None:
+            print("エラー: --provider qwen では --pdf-path は未対応です。Qwen PDF input requires a verified request shape.", file=sys.stderr)
+            return 1
+
+        api_key = get_api_key_or_exit(args.effective_api_key_env)
+        if api_key is None:
+            return 1
+
+        base_url = resolve_qwen_base_url(args.qwen_base_url)
+        payload = build_qwen_chat_request(args.effective_model, user_prompt)
+        try:
+            response_json = call_qwen_chat_completion(api_key, base_url, payload, args.http_timeout_ms)
+        except Exception as exc:
+            print(format_qwen_api_error(exc), file=sys.stderr)
+            return 1
+
+        try:
+            out_text = extract_qwen_response_text(response_json)
+        except ValueError as exc:
+            print(format_qwen_api_error(exc), file=sys.stderr)
+            return 1
+
+        print(out_text)
+        return 0
+
     model_id = (args.model or "").strip() or DEFAULT_MODEL
 
     validated_pdf_path: Path | None = None
@@ -438,6 +514,14 @@ def _execute_ocr_correction(
 def run_ocr_correction_mode(args: argparse.Namespace) -> int:
     """Dedicated entry point for the future OCR correction flow."""
     load_dotenv(get_default_dotenv_path())
+
+    provider = getattr(args, "provider", "gemini")
+    if provider != "gemini":
+        print(
+            "エラー: --provider qwen は --task ocr-correct に未対応です。Qwen OCR correction requires a provider-neutral tool loop.",
+            file=sys.stderr,
+        )
+        return 1
 
     gen_config = build_ocr_correction_generation_config()
     if gen_config.thinking_config is not None:

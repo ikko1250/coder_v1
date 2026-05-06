@@ -82,7 +82,16 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
         module = importlib.import_module(MODULE_NAME)
 
         with (
-            mock.patch.object(module, "parse_args", return_value=SimpleNamespace(task=module.OCR_CORRECTION_TASK)),
+            mock.patch.object(
+                module,
+                "parse_args",
+                return_value=SimpleNamespace(
+                    task=module.OCR_CORRECTION_TASK,
+                    provider="gemini",
+                    api_key_env=module.DEFAULT_API_KEY_ENV,
+                    model=module.DEFAULT_MODEL,
+                ),
+            ),
             mock.patch.object(module, "run_ocr_correction_mode", return_value=23) as ocr_mock,
             mock.patch.object(
                 module,
@@ -113,6 +122,220 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("エラー: OCR Markdown 修正モードでは --pdf-path が必須です。", stderr.getvalue())
+
+    def test_ocr_correction_rejects_qwen_provider(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        args = module.parse_args([
+            "--provider", "qwen",
+            "--task", module.OCR_CORRECTION_TASK,
+            "--pdf-path", "sample.pdf",
+        ])
+        args.effective_api_key_env = module.DEFAULT_QWEN_API_KEY_ENV
+        args.effective_model = module.DEFAULT_QWEN_MODEL
+
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = module.run_ocr_correction_mode(args)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("ocr-correct に未対応", stderr.getvalue())
+
+    def test_ocr_correction_qwen_skips_config_build(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        args = module.parse_args([
+            "--provider", "qwen",
+            "--task", module.OCR_CORRECTION_TASK,
+            "--pdf-path", "sample.pdf",
+        ])
+        args.effective_api_key_env = module.DEFAULT_QWEN_API_KEY_ENV
+        args.effective_model = module.DEFAULT_QWEN_MODEL
+
+        with mock.patch.object(module, "build_ocr_correction_generation_config") as mock_build_config:
+            exit_code = module.run_ocr_correction_mode(args)
+
+        self.assertEqual(exit_code, 1)
+        mock_build_config.assert_not_called()
+
+    def test_parse_args_default_provider_is_gemini(self):
+        module = importlib.import_module(MODULE_NAME)
+        with mock.patch.object(sys, "argv", ["call_gemma4_gemini.py"]):
+            args = module.parse_args()
+        self.assertEqual(args.provider, "gemini")
+
+    def test_parse_args_accepts_qwen_provider(self):
+        module = importlib.import_module(MODULE_NAME)
+        with mock.patch.object(sys, "argv", ["call_gemma4_gemini.py", "--provider", "qwen", "hello"]):
+            args = module.parse_args()
+        self.assertEqual(args.provider, "qwen")
+        self.assertEqual(args.prompt, "hello")
+
+    def test_parse_args_rejects_invalid_provider(self):
+        module = importlib.import_module(MODULE_NAME)
+        with mock.patch.object(sys, "argv", ["call_gemma4_gemini.py", "--provider", "invalid"]):
+            with self.assertRaises(SystemExit):
+                module.parse_args()
+
+    def test_parse_args_accepts_qwen_base_url(self):
+        module = importlib.import_module(MODULE_NAME)
+        with mock.patch.object(sys, "argv", ["call_gemma4_gemini.py", "--qwen-base-url", "https://custom.example.com/v1"]):
+            args = module.parse_args()
+        self.assertEqual(args.qwen_base_url, "https://custom.example.com/v1")
+
+    def test_resolve_effective_api_key_env_respects_explicit(self):
+        module = importlib.import_module(MODULE_NAME)
+        self.assertEqual(module.resolve_effective_api_key_env("qwen", "CUSTOM", True), "CUSTOM")
+        self.assertEqual(module.resolve_effective_api_key_env("gemini", "CUSTOM", True), "CUSTOM")
+
+    def test_resolve_effective_api_key_env_defaults_by_provider(self):
+        module = importlib.import_module(MODULE_NAME)
+        self.assertEqual(module.resolve_effective_api_key_env("gemini", module.DEFAULT_API_KEY_ENV, False), module.DEFAULT_API_KEY_ENV)
+        self.assertEqual(module.resolve_effective_api_key_env("qwen", module.DEFAULT_API_KEY_ENV, False), module.DEFAULT_QWEN_API_KEY_ENV)
+
+    def test_resolve_effective_model_respects_explicit(self):
+        module = importlib.import_module(MODULE_NAME)
+        self.assertEqual(module.resolve_effective_model("qwen", "custom", True), "custom")
+        self.assertEqual(module.resolve_effective_model("gemini", "custom", True), "custom")
+
+    def test_resolve_effective_model_defaults_by_provider(self):
+        module = importlib.import_module(MODULE_NAME)
+        self.assertEqual(module.resolve_effective_model("gemini", module.DEFAULT_MODEL, False), module.DEFAULT_MODEL)
+        self.assertEqual(module.resolve_effective_model("qwen", module.DEFAULT_MODEL, False), module.DEFAULT_QWEN_MODEL)
+
+    def test_help_includes_provider_defaults(self):
+        module = importlib.import_module(MODULE_NAME)
+        with mock.patch("sys.argv", ["call_gemma4_gemini.py", "--help"]), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            try:
+                module.parse_args()
+            except SystemExit:
+                pass
+        help_text = stdout.getvalue()
+        self.assertIn("gemini", help_text)
+        self.assertIn("qwen", help_text)
+        self.assertIn("DASHSCOPE_API_KEY", help_text)
+        self.assertIn(module.DEFAULT_QWEN_MODEL, help_text)
+
+    def test_single_shot_qwen_text_only(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args(["--provider", "qwen", "hello qwen"])
+        args.effective_api_key_env = module.DEFAULT_QWEN_API_KEY_ENV
+        args.effective_model = module.DEFAULT_QWEN_MODEL
+
+        with (
+            mock.patch.object(module, "get_api_key_or_exit", return_value="test-key") as mock_get_key,
+            mock.patch.object(module, "resolve_qwen_base_url", return_value="https://test.example.com"),
+            mock.patch.object(
+                module,
+                "build_qwen_chat_request",
+                return_value={"model": "test", "messages": []},
+            ) as mock_build_req,
+            mock.patch.object(
+                module,
+                "call_qwen_chat_completion",
+                return_value={"choices": [{"message": {"content": "world"}}]},
+            ),
+            mock.patch.object(module, "extract_qwen_response_text", return_value="world"),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = module.run_single_shot_mode(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "world")
+        mock_get_key.assert_called_once_with(module.DEFAULT_QWEN_API_KEY_ENV)
+        mock_build_req.assert_called_once_with(module.DEFAULT_QWEN_MODEL, "hello qwen")
+
+    def test_single_shot_qwen_rejects_pdf_path(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args(["--provider", "qwen", "--pdf-path", "sample.pdf", "prompt"])
+        args.effective_api_key_env = module.DEFAULT_QWEN_API_KEY_ENV
+        args.effective_model = module.DEFAULT_QWEN_MODEL
+
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = module.run_single_shot_mode(args)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--pdf-path は未対応", stderr.getvalue())
+
+    def test_single_shot_qwen_uses_default_model(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args(["--provider", "qwen", "hello"])
+        args.effective_api_key_env = "test-key"
+        args.effective_model = module.DEFAULT_QWEN_MODEL
+
+        with (
+            mock.patch.object(module, "get_api_key_or_exit", return_value="test-key"),
+            mock.patch.object(module, "resolve_qwen_base_url", return_value="https://test.example.com"),
+            mock.patch.object(
+                module,
+                "build_qwen_chat_request",
+                return_value={"model": "test", "messages": []},
+            ) as mock_build_req,
+            mock.patch.object(
+                module,
+                "call_qwen_chat_completion",
+                return_value={"choices": [{"message": {"content": "hi"}}]},
+            ),
+            mock.patch.object(module, "extract_qwen_response_text", return_value="hi"),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            exit_code = module.run_single_shot_mode(args)
+
+        self.assertEqual(exit_code, 0)
+        mock_build_req.assert_called_once_with(module.DEFAULT_QWEN_MODEL, "hello")
+
+    def test_single_shot_qwen_respects_explicit_model(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args(["--provider", "qwen", "--model", "custom-qwen", "hello"])
+        args.effective_api_key_env = "test-key"
+        args.effective_model = "custom-qwen"
+
+        with (
+            mock.patch.object(module, "get_api_key_or_exit", return_value="test-key"),
+            mock.patch.object(module, "resolve_qwen_base_url", return_value="https://test.example.com"),
+            mock.patch.object(
+                module,
+                "build_qwen_chat_request",
+                return_value={"model": "test", "messages": []},
+            ) as mock_build_req,
+            mock.patch.object(
+                module,
+                "call_qwen_chat_completion",
+                return_value={"choices": [{"message": {"content": "hi"}}]},
+            ),
+            mock.patch.object(module, "extract_qwen_response_text", return_value="hi"),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            exit_code = module.run_single_shot_mode(args)
+
+        self.assertEqual(exit_code, 0)
+        mock_build_req.assert_called_once_with("custom-qwen", "hello")
+
+    def test_single_shot_gemini_unchanged(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args(["hello"])
+        args.effective_api_key_env = module.DEFAULT_API_KEY_ENV
+        args.effective_model = module.DEFAULT_MODEL
+
+        mock_response = mock.MagicMock()
+        with (
+            mock.patch.object(module, "get_api_key_or_exit", return_value="gemini-key") as mock_get_key,
+            mock.patch.object(module, "build_genai_client") as mock_build_client,
+            mock.patch.object(
+                module,
+                "generate_content_once",
+                return_value=mock_response,
+            ) as mock_generate,
+            mock.patch.object(module, "extract_response_text", return_value="hi gemini"),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = module.run_single_shot_mode(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "hi gemini")
+        mock_get_key.assert_called_once_with(module.DEFAULT_API_KEY_ENV)
+        mock_build_client.assert_called_once_with("gemini-key", args.http_timeout_ms)
+        mock_generate.assert_called_once()
 
 
 class FormatGenerateContentErrorTests(unittest.TestCase):

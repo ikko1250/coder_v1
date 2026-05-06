@@ -35,7 +35,16 @@ class CallGemma4GeminiImportableModuleTests(unittest.TestCase):
         module = importlib.import_module(MODULE_NAME)
 
         with (
-            mock.patch.object(module, "parse_args", return_value=SimpleNamespace(task=module.DEFAULT_TASK)),
+            mock.patch.object(
+                module,
+                "parse_args",
+                return_value=SimpleNamespace(
+                    task=module.DEFAULT_TASK,
+                    provider="gemini",
+                    api_key_env=module.DEFAULT_API_KEY_ENV,
+                    model=module.DEFAULT_MODEL,
+                ),
+            ),
             mock.patch.object(module, "run_single_shot_mode", return_value=7) as run_mock,
         ):
             exit_code = module.main()
