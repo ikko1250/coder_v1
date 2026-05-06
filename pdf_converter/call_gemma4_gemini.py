@@ -224,6 +224,23 @@ def resolve_effective_model(provider: str, model: str, model_provided: bool) -> 
         return DEFAULT_QWEN_MODEL
     return DEFAULT_MODEL
 
+
+def attach_effective_provider_args(args: argparse.Namespace, argv: list[str]) -> argparse.Namespace:
+    api_key_env_provided = was_option_provided(argv, "--api-key-env")
+    model_provided = was_option_provided(argv, "--model")
+    args.effective_api_key_env = resolve_effective_api_key_env(
+        args.provider,
+        args.api_key_env,
+        api_key_env_provided,
+    )
+    args.effective_model = resolve_effective_model(
+        args.provider,
+        args.model,
+        model_provided,
+    )
+    return args
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -370,7 +387,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     if argv is None:
         argv = sys.argv[1:]
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    return attach_effective_provider_args(args, argv)
 
 
 def main() -> int:
@@ -383,11 +401,8 @@ def main() -> int:
         pass
 
     args = parse_args()
-    argv_for_check = sys.argv[1:]
-    api_key_env_provided = was_option_provided(argv_for_check, "--api-key-env")
-    model_provided = was_option_provided(argv_for_check, "--model")
-    args.effective_api_key_env = resolve_effective_api_key_env(args.provider, args.api_key_env, api_key_env_provided)
-    args.effective_model = resolve_effective_model(args.provider, args.model, model_provided)
+    if not hasattr(args, "effective_api_key_env") or not hasattr(args, "effective_model"):
+        args = attach_effective_provider_args(args, sys.argv[1:])
     if args.task == OCR_CORRECTION_TASK:
         return run_ocr_correction_mode(args)
     return run_single_shot_mode(args)

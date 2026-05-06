@@ -182,6 +182,10 @@ class ExtractQwenResponseTextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             extract_qwen_response_text({"choices": [{"message": {"content": ""}}]})
 
+    def test_content_whitespace_only(self):
+        with self.assertRaises(ValueError):
+            extract_qwen_response_text({"choices": [{"message": {"content": " \n\t "}}]})
+
     def test_finish_reason_length(self):
         with self.assertRaises(ValueError) as ctx:
             extract_qwen_response_text({

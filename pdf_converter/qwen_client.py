@@ -75,7 +75,7 @@ def extract_qwen_response_text(response_json: dict[str, Any]) -> str:
         raise ValueError("Qwen response content is missing or None")
     if not isinstance(content, str):
         raise ValueError("Qwen response content is not a str")
-    if content == "":
+    if not content.strip():
         raise ValueError("Qwen response content is empty")
 
     finish_reason = choice.get("finish_reason")

@@ -202,6 +202,25 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
         self.assertEqual(module.resolve_effective_model("gemini", module.DEFAULT_MODEL, False), module.DEFAULT_MODEL)
         self.assertEqual(module.resolve_effective_model("qwen", module.DEFAULT_MODEL, False), module.DEFAULT_QWEN_MODEL)
 
+    def test_parse_args_populates_qwen_effective_defaults(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args(["--provider", "qwen", "hello"])
+
+        self.assertEqual(args.effective_api_key_env, module.DEFAULT_QWEN_API_KEY_ENV)
+        self.assertEqual(args.effective_model, module.DEFAULT_QWEN_MODEL)
+
+    def test_parse_args_populates_qwen_effective_explicit_values(self):
+        module = importlib.import_module(MODULE_NAME)
+        args = module.parse_args([
+            "--provider", "qwen",
+            "--api-key-env", "CUSTOM_QWEN_KEY",
+            "--model", "custom-qwen",
+            "hello",
+        ])
+
+        self.assertEqual(args.effective_api_key_env, "CUSTOM_QWEN_KEY")
+        self.assertEqual(args.effective_model, "custom-qwen")
+
     def test_help_includes_provider_defaults(self):
         module = importlib.import_module(MODULE_NAME)
         with mock.patch("sys.argv", ["call_gemma4_gemini.py", "--help"]), \
@@ -219,8 +238,6 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
     def test_single_shot_qwen_text_only(self):
         module = importlib.import_module(MODULE_NAME)
         args = module.parse_args(["--provider", "qwen", "hello qwen"])
-        args.effective_api_key_env = module.DEFAULT_QWEN_API_KEY_ENV
-        args.effective_model = module.DEFAULT_QWEN_MODEL
 
         with (
             mock.patch.object(module, "get_api_key_or_exit", return_value="test-key") as mock_get_key,
@@ -248,8 +265,6 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
     def test_single_shot_qwen_rejects_pdf_path(self):
         module = importlib.import_module(MODULE_NAME)
         args = module.parse_args(["--provider", "qwen", "--pdf-path", "sample.pdf", "prompt"])
-        args.effective_api_key_env = module.DEFAULT_QWEN_API_KEY_ENV
-        args.effective_model = module.DEFAULT_QWEN_MODEL
 
         with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
             exit_code = module.run_single_shot_mode(args)
