@@ -10,7 +10,7 @@ from google.genai import errors
 from google.genai import types
 
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = "gemini-3-flash-preview"
 DEFAULT_GENERATE_CONTENT_TIMEOUT_MS = 300_000
 MIN_HTTP_TIMEOUT_MS = 5_000
 MAX_HTTP_TIMEOUT_MS = 3_600_000

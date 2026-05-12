@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Gemini API 経由で生成モデルを呼び出す CLI。既定モデルは gemini-3.1-flash-lite-preview（--model で上書き可）。
+Gemini API 経由で生成モデルを呼び出す CLI。既定モデルは gemini-3-flash-preview（--model で上書き可）。
 
 既定モデルの選定経緯は document/logs/2026-04-20-gemini25-flashlite-tool-call-verification.md 参照。
 公式（モデル一覧）: https://ai.google.dev/gemini-api/docs/models
