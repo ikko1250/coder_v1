@@ -1,15 +1,49 @@
-/target
+# Rust build artifacts
+/target/
 csv_highlight_viewer_rust.zip
-/asset
-/document
-/runtime
-/tests
-/.venv
-/.venv-win
-analysis_backend/__pycache__
-/docs
+
+# Python environments
+/.venv/
+/.venv-win/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test artifacts
+.tmp_*/
+.coverage
+coverage/
+htmlcov/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets and credentials
 /pdf_converter/.env
-/pdf_converter/__pycache__/
-/output/
+
+# Temporary files
 /temp.md
 /temp.pdf
+
+# Logs
+*.log
+
+# Runtime outputs
+/runtime/
+/output/
+
+# UV cache
+.uv-cache/
