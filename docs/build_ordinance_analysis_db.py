@@ -554,7 +554,6 @@ def resolve_forbidden_dirs(project_root: Path | None = None) -> list[Path]:
         project_root = resolve_builder_project_root()
     return [
         project_root / "asset" / "ocr_manual",
-        project_root / "asset" / "texts_2nd" / "manual",
     ]
 
 

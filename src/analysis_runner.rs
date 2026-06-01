@@ -1764,7 +1764,6 @@ fn absolutize_path(path: &Path) -> Result<PathBuf, String> {
 pub(crate) fn resolve_forbidden_dirs(project_root: &Path) -> Vec<PathBuf> {
     vec![
         project_root.join("asset").join("ocr_manual"),
-        project_root.join("asset").join("texts_2nd").join("manual"),
     ]
 }
 

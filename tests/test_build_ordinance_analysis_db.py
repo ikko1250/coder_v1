@@ -229,6 +229,29 @@ class ForbiddenDirTest(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(len([i for i in issues if i.code == "invalid_file_name"]), 2)
 
+    def test_resolve_forbidden_dirs_excludes_texts_2nd_manual(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            project_root = temp_path / "project"
+            project_root.mkdir()
+            forbidden_dirs = builder.resolve_forbidden_dirs(project_root)
+            self.assertNotIn(project_root / "asset" / "texts_2nd" / "manual", forbidden_dirs)
+            self.assertIn(project_root / "asset" / "ocr_manual", forbidden_dirs)
+
+    def test_texts_2nd_style_dir_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            temp_path = Path(temp_dir)
+            input_dir = temp_path / "texts_2nd"
+            input_dir.mkdir()
+            (input_dir / "cat1_cat2.txt").write_text("test", encoding="utf-8")
+
+            forbidden_dirs = builder.resolve_forbidden_dirs(temp_path)
+            rows, issues = builder.load_source_rows_from_dir(input_dir, None, forbidden_dirs)
+            self.assertEqual(len(rows), 1)
+            self.assertFalse(
+                any(i.code == "forbidden_input_dir" for i in issues)
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
