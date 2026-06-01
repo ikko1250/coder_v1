@@ -4,6 +4,7 @@ from importlib import import_module
 
 __all__ = [
     "AnnotationFilter",
+    "CompileAuthoringResult",
     "ConfigIssue",
     "ConditionHitResult",
     "DataAccessIssue",
@@ -24,8 +25,10 @@ __all__ = [
     "build_rendered_paragraphs_df",
     "build_token_annotations_df",
     "build_tokens_with_position_df",
+    "compile_authoring_config",
     "enrich_reconstructed_paragraphs_df",
     "enrich_reconstructed_paragraphs_result",
+    "load_authoring_config_result",
     "load_filter_config",
     "load_filter_config_result",
     "read_analysis_sentences_result",
@@ -42,7 +45,11 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in __all__:
-        module_name = ".condition_model" if name in {
+        module_name = ".condition_authoring" if name in {
+            "CompileAuthoringResult",
+            "compile_authoring_config",
+            "load_authoring_config_result",
+        } else ".condition_model" if name in {
             "AnnotationFilter",
             "ConfigIssue",
             "ConditionHitResult",

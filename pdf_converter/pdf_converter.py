@@ -1,3 +1,13 @@
+from __future__ import annotations
+
+"""Legacy compatibility CLI for the original PDF layout parser.
+
+This module intentionally remains import-side-effect free because older tests and
+callers import ``pdf_converter.pdf_converter`` directly.  The newer Gemini CLI
+lives in ``pdf_converter.call_gemma4_gemini``; this file preserves the previous
+layout-parsing API surface (``main`` and ``convert_pdf``).
+"""
+
 import argparse
 import base64
 import os
@@ -88,31 +98,31 @@ def convert_pdf(
     md_filename = os.path.join(output_dir, f"{pdf_stem}.md")
     markdown_parts: list[str] = []
 
-    for i, res in enumerate(result["layoutParsingResults"]):
-        markdown_parts.append(res["markdown"]["text"])
-        for img_path, img in res["markdown"]["images"].items():
-            full_img_path = os.path.join(output_dir, img_path)
-            os.makedirs(os.path.dirname(full_img_path), exist_ok=True)
-            img_bytes = requests.get(img).content
-            with open(full_img_path, "wb") as img_file:
-                img_file.write(img_bytes)
-            print(f"Image saved to: {full_img_path}")
+    for index, layout_result in enumerate(result["layoutParsingResults"]):
+        markdown_parts.append(layout_result["markdown"]["text"])
+        for image_path, image_url in layout_result["markdown"]["images"].items():
+            full_image_path = os.path.join(output_dir, image_path)
+            os.makedirs(os.path.dirname(full_image_path), exist_ok=True)
+            image_bytes = requests.get(image_url).content
+            with open(full_image_path, "wb") as image_file:
+                image_file.write(image_bytes)
+            print(f"Image saved to: {full_image_path}")
         if save_page_jpg:
-            for img_name, img in res["outputImages"].items():
-                img_response = requests.get(img)
-                if img_response.status_code == 200:
-                    filename = os.path.join(output_dir, f"{img_name}_{i}.jpg")
-                    with open(filename, "wb") as f:
-                        f.write(img_response.content)
+            for image_name, image_url in layout_result["outputImages"].items():
+                image_response = requests.get(image_url)
+                if image_response.status_code == 200:
+                    filename = os.path.join(output_dir, f"{image_name}_{index}.jpg")
+                    with open(filename, "wb") as output_file:
+                        output_file.write(image_response.content)
                     print(f"Image saved to: {filename}")
                 else:
                     print(
-                        f"Failed to download image, status code: {img_response.status_code}"
+                        f"Failed to download image, status code: {image_response.status_code}"
                     )
 
     combined_markdown = "\n\n".join(part.strip() for part in markdown_parts if part.strip())
-    with open(md_filename, "w", encoding="utf-8") as md_file:
-        md_file.write(combined_markdown)
+    with open(md_filename, "w", encoding="utf-8") as markdown_file:
+        markdown_file.write(combined_markdown)
 
     print(f"Markdown document saved at {md_filename}")
 

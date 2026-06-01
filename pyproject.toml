@@ -27,3 +27,8 @@ call-gemma4-gemini = "pdf_converter.call_gemma4_gemini:main"
 [tool.uv.build-backend]
 module-name = "pdf_converter"
 module-root = ""
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

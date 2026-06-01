@@ -64,6 +64,25 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
         self.assertEqual(args.api_key_env, module.DEFAULT_API_KEY_ENV)
         self.assertEqual(args.model, module.DEFAULT_MODEL)
 
+    def test_write_markdown_file_declaration_includes_retryable_error_description(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        tools = module.build_ocr_correction_tools()
+        write_decl = None
+        for tool in tools:
+            for decl in tool.function_declarations:
+                if decl.name == "write_markdown_file":
+                    write_decl = decl
+                    break
+            if write_decl is not None:
+                break
+
+        self.assertIsNotNone(write_decl, "write_markdown_file declaration not found")
+        description = write_decl.description
+        self.assertIn("retryable error", description)
+        self.assertIn("expected_old_text", description)
+        self.assertIn("read_markdown_file", description)
+
     def test_build_ocr_correction_prompt_includes_no_style_rewrite_rules(self):
         module = importlib.import_module(MODULE_NAME)
 
@@ -77,6 +96,10 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
         self.assertIn("半角と全角の相互変換をしないこと", prompt)
         self.assertIn("括弧付き番号の字形を変換しないこと", prompt)
         self.assertIn("`new_text` は必ず `expected_old_text` をコピーして作り", prompt)
+        self.assertIn("retryable error", prompt)
+        self.assertIn("実本文に完全一致する expected_old_text", prompt)
+        self.assertIn("read_markdown_file", prompt)
+        self.assertIn("推測で補完せず", prompt)
 
     def test_main_dispatches_to_ocr_correction_mode(self):
         module = importlib.import_module(MODULE_NAME)

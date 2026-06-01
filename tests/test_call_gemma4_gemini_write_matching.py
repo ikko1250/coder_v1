@@ -109,6 +109,27 @@ class OcrWriteMatchingTests(unittest.TestCase):
 
         self.assertEqual(workingPath.read_text(encoding="utf-8"), "before\nreplaced\nafter\n")
 
+    def testWriteToolTextRaisesMismatchSubclassWithDiagnostic(self):
+        self.writeWorkingMarkdown("working.md", "（周辺関係者～の説明）\n\n第12条 本文\n")
+
+        with self.assertRaises(self.module.ToolWriteMismatchError) as cm:
+            self.module.write_tool_text(
+                "work/working.md",
+                "（周辺関係者～の説明）\n第12条 本文\n",
+                "（周辺関係者への説明）\n第12条 本文\n",
+            )
+
+        self.assertIsInstance(cm.exception, self.module.ToolWriteError)
+        self.assertIn("expected_old_text", str(cm.exception))
+        self.assertTrue(cm.exception.diagnostic.near_matches)
+        self.assertIn("\n\n第12条", cm.exception.diagnostic.near_matches[0].excerpt)
+
+    def testWriteToolTextRaisesAmbiguousSubclass(self):
+        self.writeWorkingMarkdown("working.md", "target\ntarget\n")
+
+        with self.assertRaises(self.module.ToolWriteAmbiguousError):
+            self.module.write_tool_text("work/working.md", "target\n", "after\n")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -71,7 +71,9 @@ from pdf_converter.ocr_tools import (
     ToolCallBudget,
     ToolCallLimitError,
     ToolReadError,
+    ToolWriteAmbiguousError,
     ToolWriteError,
+    ToolWriteMismatchError,
     WRITE_LOCK_POLL_INTERVAL_SECONDS,
     WRITE_LOCK_TIMEOUT_SECONDS,
     acquire_write_lock,
@@ -84,6 +86,7 @@ from pdf_converter.ocr_tools import (
     write_tool_text,
 )
 from pdf_converter.ocr_correction import (
+    DEFAULT_MAX_RECOVERABLE_TOOL_ERRORS_PER_RUN,
     OCR_CORRECTION_TASK,
     OcrFinalizationError,
     OcrToolExecutionError,

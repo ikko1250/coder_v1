@@ -87,6 +87,62 @@ class ToolCallLoggingTests(unittest.TestCase):
         self.assertEqual(second_event["phase"], "executed")
         self.assertEqual(second_event["status"], "ok")
 
+    def test_run_turn_loop_logs_recoverable_error_status(self):
+        log_path = self.temp_root / "tool-calls.jsonl"
+        logger = ToolCallLogger(log_path)
+        first_response = build_fake_response(types.Content(role="model", parts=[]))
+        final_response = build_fake_response(types.Content(role="model", parts=[]))
+        first_payload = self.module.OcrResponsePayload(
+            text=None,
+            function_calls=[
+                types.FunctionCall(
+                    name="write_markdown_file",
+                    args={"path": "work/test.md", "expected_old_text": "a", "new_text": "b"},
+                )
+            ],
+            finish_reason=None,
+        )
+        final_payload = self.module.OcrResponsePayload(
+            text="done",
+            function_calls=[],
+            finish_reason="STOP",
+        )
+
+        with (
+            mock.patch(
+                "pdf_converter.ocr_correction.generate_content_once",
+                side_effect=[first_response, final_response],
+            ),
+            mock.patch(
+                "pdf_converter.ocr_correction.extract_ocr_response_payload",
+                side_effect=[first_payload, final_payload],
+            ),
+            mock.patch(
+                "pdf_converter.ocr_correction.execute_ocr_function_call",
+                return_value=types.Part.from_function_response(
+                    name="write_markdown_file",
+                    response={"error": {"code": "expected_old_text_mismatch", "retryable": True}},
+                ),
+            ),
+        ):
+            result = self.module.run_ocr_correction_turn_loop(
+                client=object(),
+                model_id="gemma-4-31b-it",
+                initial_contents=["initial"],
+                config=types.GenerateContentConfig(),
+                budget=self.module.ToolCallBudget(limit=8),
+                tool_call_logger=logger,
+            )
+
+        self.assertEqual(result.text, "done")
+        lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(len(lines), 2)
+        executed_event = json.loads(lines[1])
+        self.assertEqual(executed_event["phase"], "executed")
+        self.assertEqual(executed_event["status"], "recoverable_error")
+        self.assertEqual(executed_event["details"]["error_code"], "expected_old_text_mismatch")
+        self.assertIs(executed_event["details"]["retryable"], True)
+
     def test_parse_args_accepts_tool_call_log_path(self):
         argv = [
             "call-gemma4-gemini.py",

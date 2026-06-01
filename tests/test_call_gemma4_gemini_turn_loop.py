@@ -9,6 +9,7 @@ from unittest import mock
 
 from google.genai import types
 
+from pdf_converter import ocr_correction
 import pdf_converter.ocr_paths as ocr_paths_module
 
 
@@ -191,6 +192,87 @@ class OcrTurnLoopTests(unittest.TestCase):
                 budget=self.module.ToolCallBudget(limit=1),
             )
 
+    def testExecuteOcrFunctionCallReturnsRetryableErrorOnMismatch(self):
+        from pdf_converter import ocr_correction
+        self.writeMarkdown(self.workDir, "working.md", "（周辺関係者～の説明）\n\n第12条 本文\n")
+        function_call = types.FunctionCall(
+            name="write_markdown_file",
+            args={
+                "path": "work/working.md",
+                "expected_old_text": "（周辺関係者～の説明）\n第12条 本文\n",
+                "new_text": "（周辺関係者への説明）\n第12条 本文\n",
+            },
+        )
+        result = ocr_correction.execute_ocr_function_call(
+            function_call, self.module.ToolCallBudget(limit=4)
+        )
+        self.assertIsNotNone(result.function_response)
+        response = result.function_response.response
+        self.assertIn("error", response)
+        self.assertEqual(response["error"]["code"], "expected_old_text_mismatch")
+        self.assertIs(response["error"]["retryable"], True)
+        self.assertIn("diagnostics", response["error"])
+        near_matches = response["error"]["diagnostics"]["near_matches"]
+        self.assertTrue(near_matches)
+        self.assertIn("\n\n第12条", near_matches[0]["excerpt"])
+        self.assertEqual(
+            (self.workDir / "working.md").read_text(encoding="utf-8"),
+            "（周辺関係者～の説明）\n\n第12条 本文\n",
+        )
+
+    def testRunTurnLoopContinuesAfterRecoverableWriteMismatch(self):
+        self.writeMarkdown(self.workDir, "working.md", "（周辺関係者～の説明）\n\n第12条 本文\n")
+        firstResponse = buildFakeResponse(types.Content(role="model", parts=[]))
+        finalResponse = buildFakeResponse(types.Content(role="model", parts=[]))
+        firstPayload = self.module.OcrResponsePayload(
+            text=None,
+            function_calls=[
+                types.FunctionCall(
+                    name="write_markdown_file",
+                    args={
+                        "path": "work/working.md",
+                        "expected_old_text": "（周辺関係者～の説明）\n第12条 本文\n",
+                        "new_text": "（周辺関係者への説明）\n第12条 本文\n",
+                    },
+                )
+            ],
+            finish_reason=None,
+        )
+        finalPayload = self.module.OcrResponsePayload(
+            text="retryable error was returned",
+            function_calls=[],
+            finish_reason="STOP",
+        )
+
+        with (
+            mock.patch(
+                "pdf_converter.ocr_correction.generate_content_once",
+                side_effect=[firstResponse, finalResponse],
+            ) as generateMock,
+            mock.patch(
+                "pdf_converter.ocr_correction.extract_ocr_response_payload",
+                side_effect=[firstPayload, finalPayload],
+            ),
+        ):
+            result = self.module.run_ocr_correction_turn_loop(
+                client=object(),
+                model_id="gemma-4-31b-it",
+                initial_contents=["initial"],
+                config=types.GenerateContentConfig(),
+                budget=self.module.ToolCallBudget(limit=4),
+            )
+
+        self.assertEqual(result.text, "retryable error was returned")
+        self.assertEqual(generateMock.call_count, 2)
+
+        second_call_contents = generateMock.call_args_list[1][0][2]
+        tool_contents = [c for c in second_call_contents if getattr(c, "role", None) == "tool"]
+        self.assertEqual(len(tool_contents), 1)
+        tool_parts = tool_contents[0].parts
+        self.assertTrue(tool_parts)
+        fr = tool_parts[0].function_response
+        self.assertEqual(fr.response["error"]["code"], "expected_old_text_mismatch")
+
     def testRunTurnLoopAllowsEmptyIntermediateTextWhenFunctionCallExists(self):
         response = buildFakeResponse(types.Content(role="model", parts=[]))
         finalResponse = buildFakeResponse(types.Content(role="model", parts=[]))
@@ -232,6 +314,57 @@ class OcrTurnLoopTests(unittest.TestCase):
 
         self.assertEqual(result.text, "done")
         self.assertEqual(executeMock.call_count, 1)
+
+    def testRunTurnLoopRaisesWhenRecoverableWriteErrorsExceedLimit(self):
+        self.assertTrue(
+            hasattr(self.module, "DEFAULT_MAX_RECOVERABLE_TOOL_ERRORS_PER_RUN")
+            or hasattr(ocr_correction, "DEFAULT_MAX_RECOVERABLE_TOOL_ERRORS_PER_RUN"),
+            "DEFAULT_MAX_RECOVERABLE_TOOL_ERRORS_PER_RUN must be defined in module or ocr_correction",
+        )
+        max_recoverable = getattr(
+            self.module,
+            "DEFAULT_MAX_RECOVERABLE_TOOL_ERRORS_PER_RUN",
+            getattr(ocr_correction, "DEFAULT_MAX_RECOVERABLE_TOOL_ERRORS_PER_RUN"),
+        )
+
+        response = buildFakeResponse(types.Content(role="model", parts=[]))
+        payload = self.module.OcrResponsePayload(
+            text=None,
+            function_calls=[
+                types.FunctionCall(
+                    name="write_markdown_file",
+                    args={"path": "work/test.md", "expected_old_text": "a", "new_text": "b"},
+                )
+            ],
+            finish_reason=None,
+        )
+
+        with (
+            mock.patch("pdf_converter.ocr_correction.generate_content_once", return_value=response),
+            mock.patch("pdf_converter.ocr_correction.extract_ocr_response_payload", return_value=payload),
+            mock.patch(
+                "pdf_converter.ocr_correction.execute_ocr_function_call",
+                return_value=types.Part.from_function_response(
+                    name="write_markdown_file",
+                    response={"error": {"code": "expected_old_text_mismatch", "retryable": True}},
+                ),
+            ),
+            self.assertRaises(self.module.OcrToolExecutionError) as cm,
+        ):
+            self.module.run_ocr_correction_turn_loop(
+                client=object(),
+                model_id="gemma-4-31b-it",
+                initial_contents=["initial"],
+                config=types.GenerateContentConfig(),
+                budget=self.module.ToolCallBudget(limit=64),
+            )
+
+        msg = str(cm.exception)
+        self.assertTrue(
+            ("recoverable" in msg.lower() or "retryable" in msg.lower())
+            and ("上限" in msg or "limit" in msg.lower()),
+            f"Expected exception message to mention recoverable/retryable and limit/上限, got: {msg}",
+        )
 
 
 if __name__ == "__main__":

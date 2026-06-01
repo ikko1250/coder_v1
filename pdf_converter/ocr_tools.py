@@ -36,6 +36,37 @@ class ToolCallLimitError(Exception):
     """read / write tool の総呼び出し回数上限を超えたとき。"""
 
 
+@dataclass(frozen=True)
+class WriteNearMatch:
+    line_start: int
+    line_end: int
+    excerpt: str
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class WriteMatchDiagnostic:
+    expected_old_text_preview: str
+    near_matches: list[WriteNearMatch]
+
+
+class ToolWriteMatchError(ToolWriteError):
+    """write tool の一致/不一致関連エラーの基底クラス。"""
+
+    def __init__(self, message: str, *, path: Path, diagnostic: WriteMatchDiagnostic) -> None:
+        super().__init__(message)
+        self.path = path
+        self.diagnostic = diagnostic
+
+
+class ToolWriteMismatchError(ToolWriteMatchError):
+    """expected_old_text が一致しなかったとき。"""
+
+
+class ToolWriteAmbiguousError(ToolWriteMatchError):
+    """expected_old_text が複数箇所に一致したとき。"""
+
+
 WRITE_LOCK_TIMEOUT_SECONDS = 10.0
 WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.1
 DEFAULT_MAX_TOOL_CALLS_PER_RUN = 48
@@ -290,6 +321,42 @@ def write_tool_text_limited(
     return write_tool_text(raw_path, expected_old_text, new_text)
 
 
+def _first_non_empty_line(text: str) -> str | None:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def build_write_match_diagnostic(current_text: str, expected_old_text: str) -> WriteMatchDiagnostic:
+    """expected_old_text の先頭非空行を current_text から探し、近傍 excerpt を返す。"""
+    preview = expected_old_text[:200]
+    near_matches: list[WriteNearMatch] = []
+
+    first_line = _first_non_empty_line(expected_old_text)
+    if first_line:
+        idx = current_text.find(first_line)
+        if idx >= 0:
+            context_radius = 600
+            start = max(0, idx - context_radius)
+            end = min(len(current_text), idx + len(first_line) + context_radius)
+            excerpt = current_text[start:end]
+            near_matches.append(
+                WriteNearMatch(
+                    line_start=start,
+                    line_end=end,
+                    excerpt=excerpt,
+                    note=f"expected の先頭非空行「{first_line[:50]}」に近い箇所",
+                )
+            )
+
+    return WriteMatchDiagnostic(
+        expected_old_text_preview=preview,
+        near_matches=near_matches,
+    )
+
+
 def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Path:
     """write tool 用: work/ 配下へ 1 箇所一致の置換だけを反映する。"""
     normalized_input = (raw_path or "").strip()
@@ -349,14 +416,24 @@ def write_tool_text(raw_path: str, expected_old_text: str, new_text: str) -> Pat
             normalized_expected_text,
         )
         if match_result.kind is MatchResultKind.MISMATCH:
-            raise ToolWriteError(
+            diagnostic = build_write_match_diagnostic(
+                normalized_current_text, normalized_expected_text
+            )
+            raise ToolWriteMismatchError(
                 "エラー: expected_old_text が一致しません。"
-                f" 対象: {resolved_path}"
+                f" 対象: {resolved_path}",
+                path=resolved_path,
+                diagnostic=diagnostic,
             )
         if match_result.kind is MatchResultKind.AMBIGUOUS:
-            raise ToolWriteError(
+            diagnostic = build_write_match_diagnostic(
+                normalized_current_text, normalized_expected_text
+            )
+            raise ToolWriteAmbiguousError(
                 "エラー: expected_old_text が複数箇所に一致しました。"
-                f" 対象: {resolved_path}"
+                f" 対象: {resolved_path}",
+                path=resolved_path,
+                diagnostic=diagnostic,
             )
 
         replaced_text = (

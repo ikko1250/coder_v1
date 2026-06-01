@@ -96,7 +96,7 @@ uv run call-gemma4-gemini "この PDF を要約してください" --pdf-path as
 - `--pdf-path PATH`: PDF を `application/pdf` の inline Part として送ります。
 - `--provider gemini|qwen`: 使用する API プロバイダー。既定は `gemini`。
 - `--api-key-env NAME`: API key を読む環境変数名。既定は provider によって変わります（`gemini` 時は `GEMINI_API_KEY`、`qwen` 時は `DASHSCOPE_API_KEY`）。明示的に指定した場合はその値が使われます。
-- `--model MODEL`: 使うモデル ID。既定は provider によって変わります（`gemini` 時は `gemini-3.1-flash-lite-preview`、`qwen` 時は `qwen3.6-plus`）。
+- `--model MODEL`: 使うモデル ID。既定は provider によって変わります（`gemini` 時は `gemini-3-flash-preview`、`qwen` 時は `qwen3.6-plus`）。
 - `--http-timeout-ms MS`: `generate_content` の HTTP timeout。既定は `300000`。
 - `--task single-shot`: 既定の単発実行モード。
 - `--task ocr-correct`: OCR Markdown 修正モード。
