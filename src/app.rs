@@ -74,17 +74,17 @@ mod app_condition_editor;
 #[path = "app_lifecycle.rs"]
 mod app_lifecycle;
 
+use crate::analysis_process_host::{AnalysisProcessHost, ThreadAnalysisProcessHost};
 use crate::analysis_runner::{
     build_builder_runtime_config, build_default_builder_report_path, build_runtime_config,
     resolve_annotation_csv_path, AnalysisJobEvent, AnalysisRuntimeConfig, AnalysisRuntimeOverrides,
     AnalysisWarningMessage, BuildJobControl, BuilderRuntimeConfig,
 };
 use crate::analysis_session_cache::{AnalysisResultSnapshot, AnalysisSessionCacheKey};
-use crate::analysis_process_host::{AnalysisProcessHost, ThreadAnalysisProcessHost};
 use crate::app_logger::{AppLogger, StderrAppLogger};
 use crate::csv_loader::load_records;
-use crate::file_dialog_host::{FileDialogHost, RfdFileDialogHost};
 use crate::db::resolve_default_db_path;
+use crate::file_dialog_host::{FileDialogHost, RfdFileDialogHost};
 use crate::filter::build_filter_options;
 use crate::manual_annotation_store::{
     append_manual_annotation_namespaces_text, append_manual_annotation_pairs_text,
@@ -94,8 +94,8 @@ use crate::manual_annotation_store::{
 use crate::model::{AnalysisRecord, DbViewerState, FilterColumn, TextSegment};
 use crate::tagged_text::parse_tagged_text;
 use crate::viewer_core::{
-    clamp_selected_row, CoreOutput, SegmentCacheInvalidateReason, ViewerCoreEvent, ViewerCoreMessage,
-    ViewerCoreState,
+    clamp_selected_row, CoreOutput, SegmentCacheInvalidateReason, ViewerCoreEvent,
+    ViewerCoreMessage, ViewerCoreState,
 };
 use eframe::egui;
 use egui::Ui;
@@ -176,8 +176,17 @@ const RECORD_LIST_PANEL_MIN_WIDTH: f32 = 360.0;
 const RECORD_LIST_PANEL_DEFAULT_RATIO: f32 = 0.33;
 const RECORD_LIST_PANEL_MAX_RATIO: f32 = 0.85;
 
+#[allow(dead_code)]
+#[derive(Clone)]
+struct AnalysisRunContext {
+    runtime: AnalysisRuntimeConfig,
+    compile_warnings: Vec<AnalysisWarningMessage>,
+}
+
 struct RunningAnalysisJob {
     receiver: Receiver<AnalysisJobEvent>,
+    #[allow(dead_code)]
+    analysis_context: Option<AnalysisRunContext>,
 }
 
 #[derive(Clone)]
@@ -198,7 +207,9 @@ impl AnalysisExportContext {
     }
 }
 
-pub(crate) fn display_filter_config_path_for_runtime(runtime: &AnalysisRuntimeConfig) -> &std::path::Path {
+pub(crate) fn display_filter_config_path_for_runtime(
+    runtime: &AnalysisRuntimeConfig,
+) -> &std::path::Path {
     display_filter_config_path_for_runtime_paths(
         &runtime.filter_config_path,
         runtime.filter_config_source_path.as_deref(),
@@ -549,7 +560,8 @@ impl App {
         let runtime = build_runtime_config(&analysis_request_state.runtime_overrides());
         let default_db_path = resolve_default_db_path();
         let builder_request_state = BuilderRequestState::new(default_db_path.clone());
-        let builder_runtime = build_builder_runtime_config(&builder_request_state.runtime_overrides());
+        let builder_runtime =
+            build_builder_runtime_config(&builder_request_state.runtime_overrides());
         let mut app = Self {
             file_dialog_host: Box::new(RfdFileDialogHost),
             analysis_process_host: Box::new(ThreadAnalysisProcessHost),
@@ -609,9 +621,11 @@ impl App {
             }
             ViewerCoreMessage::SelectionMoveUp => self.move_selection_up(),
             ViewerCoreMessage::SelectionMoveDown => self.move_selection_down(),
-            ViewerCoreMessage::SelectionSetFilteredRow { filtered_index } => self.apply_selection_change(
-                SelectionChange::new(Some(filtered_index), ScrollBehavior::KeepVisible),
-            ),
+            ViewerCoreMessage::SelectionSetFilteredRow { filtered_index } => self
+                .apply_selection_change(SelectionChange::new(
+                    Some(filtered_index),
+                    ScrollBehavior::KeepVisible,
+                )),
             ViewerCoreMessage::FilterToggle {
                 column,
                 value,
@@ -716,10 +730,9 @@ impl App {
         }
 
         match self.core.selected_row {
-            Some(idx) if idx + 1 < current_len => self.apply_selection_change(SelectionChange::new(
-                Some(idx + 1),
-                ScrollBehavior::KeepVisible,
-            )),
+            Some(idx) if idx + 1 < current_len => self.apply_selection_change(
+                SelectionChange::new(Some(idx + 1), ScrollBehavior::KeepVisible),
+            ),
             None => self.select_first_filtered_row(ScrollBehavior::AlignMin),
             _ => false,
         }
@@ -999,7 +1012,8 @@ impl App {
     }
 
     fn is_any_job_running(&self) -> bool {
-        self.analysis_runtime_state.current_job.is_some() || self.builder_runtime_state.current_job.is_some()
+        self.analysis_runtime_state.current_job.is_some()
+            || self.builder_runtime_state.current_job.is_some()
     }
 
     pub(crate) fn capture_idle_runtime_snapshot(&self) -> Option<IdleAnalysisRuntimeSnapshot> {
@@ -1197,7 +1211,9 @@ fn tree_category_value(record: &AnalysisRecord) -> Cow<'_, str> {
 }
 
 fn tree_annotation_value(record: &AnalysisRecord) -> Cow<'_, str> {
-    Cow::Owned(first_manual_annotation_line(&record.manual_annotation_pairs_text))
+    Cow::Owned(first_manual_annotation_line(
+        &record.manual_annotation_pairs_text,
+    ))
 }
 
 fn tree_annotated_token_count_value(record: &AnalysisRecord) -> Cow<'_, str> {

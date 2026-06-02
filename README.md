@@ -1,7 +1,7 @@
 # 条例分析ビューア
 
 Rust + `eframe` / `egui` で構築した、条例・規則テキストの分析結果を確認するためのデスクトップアプリです。  
-CSV の閲覧、フィルタリング、Python バックエンドを使った分析実行、条件 JSON の編集、manual annotation の追記を 1 つの UI にまとめています。
+CSV の閲覧、フィルタリング、Python バックエンドを使った分析実行、runtime 条件 JSON の編集、manual annotation の追記を 1 つの UI にまとめています。
 
 ![画面プレビュー](docs/image_viewer_preview.png)
 
@@ -10,7 +10,7 @@ CSV の閲覧、フィルタリング、Python バックエンドを使った分
 - CSV の読込と一覧表示
 - 自治体名、条例/規則、カテゴリなどによる絞り込み
 - Python バックエンドによる分析実行
-- 条件 JSON の読み込み・保存・編集（条件エディターヘッダーの「選択」で別ファイルを指定可能。分析実行でも同じパスを使用）
+- runtime 条件 JSON の読み込み・保存・編集（条件エディターヘッダーの「選択」で runtime JSON の別ファイルを指定可能。分析実行でも同じパスを使用）
 - **authoring JSON（`condition-authoring/v1`）の選択と分析実行**：分析設定で authoring JSON を選ぶと、実行時に自動的に runtime JSON へ compile されます。authoring JSON 自体の GUI 編集はできません。YAML・`text_not_any`（否定マッチ）は v1 では非対応です（詳細は `docs/condition-authoring-format.md` を参照）
 - SQLite DB を参照する DB Viewer
 - `manual-annotations.csv` への annotation 追記

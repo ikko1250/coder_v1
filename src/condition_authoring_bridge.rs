@@ -78,6 +78,23 @@ pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove stale file '{}': {error}",
+            path.display()
+        )),
+    }
+}
+
+fn remove_stale_compiled_outputs(paths: &CompiledOutputPath) -> Result<(), String> {
+    remove_file_if_exists(&paths.runtime_json)?;
+    remove_file_if_exists(&paths.issues_json)?;
+    Ok(())
+}
+
 /// Python CLI issues JSON の thin wrapper。
 /// Rust 側で schema を厚く再定義せず、必要最小限のフィールドのみ保持する。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -198,6 +215,7 @@ pub(crate) fn compile_authoring_to_runtime(
 
     ensure_parent_dir(&output_paths.runtime_json)?;
     ensure_parent_dir(&output_paths.issues_json)?;
+    remove_stale_compiled_outputs(&output_paths)?;
 
     let mut cmd = Command::new(&runtime.python_command);
     for arg in &runtime.python_args {
@@ -231,9 +249,23 @@ pub(crate) fn compile_authoring_to_runtime(
             .status
             .code()
             .map_or("unknown".to_string(), |c| c.to_string());
-        return Err(format!(
-            "authoring compiler exited with code {exit_code}. stderr: {stderr_summary}"
-        ));
+        return match read_authoring_issues_if_present(&output_paths.issues_json) {
+            Ok(Some(issues)) if !issues.is_empty() => {
+                let issue_summary = format_authoring_issue_summary(&issues);
+                Err(format!(
+                    "authoring compiler exited with code {exit_code}. issues: {issue_summary}. stderr: {stderr_summary}"
+                ))
+            }
+            Ok(Some(_)) => Err(format!(
+                "authoring compiler exited with code {exit_code}. issues JSON contained no issues. stderr: {stderr_summary}"
+            )),
+            Ok(None) => Err(format!(
+                "authoring compiler exited with code {exit_code}. stderr: {stderr_summary}"
+            )),
+            Err(issue_error) => Err(format!(
+                "authoring compiler exited with code {exit_code}. {issue_error}. stderr: {stderr_summary}"
+            )),
+        };
     }
 
     let issues_json_str = std::fs::read_to_string(&output_paths.issues_json).map_err(|e| {
@@ -255,6 +287,46 @@ pub(crate) fn compile_authoring_to_runtime(
 /// issues JSON 文字列を Vec<AuthoringIssue> として parse する。
 pub(crate) fn parse_authoring_issues(json_str: &str) -> Result<Vec<AuthoringIssue>, String> {
     serde_json::from_str(json_str).map_err(|e| format!("issues JSON parse error: {e}"))
+}
+
+fn read_authoring_issues_if_present(path: &Path) -> Result<Option<Vec<AuthoringIssue>>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(json) => parse_authoring_issues(&json).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "failed to read issues JSON '{}': {error}",
+            path.display()
+        )),
+    }
+}
+
+fn format_authoring_issue_summary(issues: &[AuthoringIssue]) -> String {
+    issues
+        .iter()
+        .map(|issue| {
+            let warning = issue.to_analysis_warning_message();
+            let severity = if issue.severity.is_empty() {
+                "unknown"
+            } else {
+                issue.severity.as_str()
+            };
+            let mut parts = vec![format!(
+                "[{}] {}: {}",
+                severity, warning.code, warning.message
+            )];
+            if let Some(index) = issue.condition_index {
+                parts.push(format!("condition_index={index}"));
+            }
+            if let Some(condition_id) = &issue.condition_id {
+                parts.push(format!("condition_id={condition_id}"));
+            }
+            if let Some(field_name) = &issue.field_name {
+                parts.push(format!("field_name={field_name}"));
+            }
+            parts.join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// AuthoringIssue のリストに error severity が含まれるかどうか。
@@ -847,6 +919,315 @@ sys.exit(1)
     }
 
     #[test]
+    fn compile_authoring_nonzero_includes_error_issue_details() {
+        let project_root = fake_project_root_with_cli(
+            "nonzero_error_details",
+            r#"
+import sys
+import json
+import os
+
+assert os.environ.get("CSV_VIEWER_PROJECT_ROOT")
+
+args = sys.argv[1:]
+issues_idx = args.index("--issues-json")
+issues_path = args[issues_idx + 1]
+
+with open(issues_path, "w", encoding="utf-8") as f:
+    json.dump([{
+        "code":"invalid_condition",
+        "severity":"error",
+        "scope":"filter_config",
+        "message":"condition is invalid",
+        "condition_index":2,
+        "condition_id":"cond-123",
+        "field_name":"threshold"
+    }], f)
+
+sys.stderr.write("compiler stderr detail\n")
+sys.exit(1)
+"#,
+        );
+
+        let source = temp_source_file(
+            "exec_nonzero_error",
+            r#"{\"format\":\"condition-authoring/v1\"}"#,
+        );
+        let output_dir = temp_output_dir("exec_nonzero_error");
+        let runtime = fake_runtime_for_test(
+            std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python")),
+            vec![],
+            project_root.clone(),
+        );
+
+        let result = compile_authoring_to_runtime(&runtime, &source, &output_dir);
+        assert!(result.is_err(), "expected error for non-zero exit");
+        let err = result.unwrap_err();
+        for expected in [
+            "code 1",
+            "compiler stderr detail",
+            "invalid_condition",
+            "condition is invalid",
+            "condition_id=cond-123",
+            "field_name=threshold",
+            "condition_index=2",
+        ] {
+            assert!(
+                err.contains(expected),
+                "error should contain {expected}: {err}"
+            );
+        }
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn compile_authoring_nonzero_with_malformed_issues_mentions_parse_error_and_stderr() {
+        let project_root = fake_project_root_with_cli(
+            "nonzero_malformed_issues",
+            r#"
+import sys
+import os
+
+assert os.environ.get("CSV_VIEWER_PROJECT_ROOT")
+
+args = sys.argv[1:]
+issues_idx = args.index("--issues-json")
+issues_path = args[issues_idx + 1]
+
+with open(issues_path, "w", encoding="utf-8") as f:
+    f.write("{ not valid issues json")
+
+sys.stderr.write("stderr survives malformed issues\n")
+sys.exit(1)
+"#,
+        );
+
+        let source = temp_source_file(
+            "exec_nonzero_malformed",
+            r#"{\"format\":\"condition-authoring/v1\"}"#,
+        );
+        let output_dir = temp_output_dir("exec_nonzero_malformed");
+        let runtime = fake_runtime_for_test(
+            std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python")),
+            vec![],
+            project_root.clone(),
+        );
+
+        let result = compile_authoring_to_runtime(&runtime, &source, &output_dir);
+        assert!(result.is_err(), "expected error for non-zero exit");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("parse error"),
+            "error should mention parse error: {err}"
+        );
+        assert!(
+            err.contains("stderr survives malformed issues"),
+            "error should include stderr: {err}"
+        );
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn compile_authoring_nonzero_with_warning_only_issues_is_still_error() {
+        let project_root = fake_project_root_with_cli(
+            "nonzero_warning_only",
+            r#"
+import sys
+import json
+import os
+
+assert os.environ.get("CSV_VIEWER_PROJECT_ROOT")
+
+args = sys.argv[1:]
+issues_idx = args.index("--issues-json")
+issues_path = args[issues_idx + 1]
+
+with open(issues_path, "w", encoding="utf-8") as f:
+    json.dump([{
+        "code":"unknown_field",
+        "severity":"warning",
+        "scope":"filter_config",
+        "message":"field will be ignored",
+        "condition_index":0,
+        "condition_id":"warn-cond",
+        "field_name":"extra"
+    }], f)
+
+sys.stderr.write("warning-only nonzero stderr\n")
+sys.exit(1)
+"#,
+        );
+
+        let source = temp_source_file(
+            "exec_nonzero_warning",
+            r#"{\"format\":\"condition-authoring/v1\"}"#,
+        );
+        let output_dir = temp_output_dir("exec_nonzero_warning");
+        let runtime = fake_runtime_for_test(
+            std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python")),
+            vec![],
+            project_root.clone(),
+        );
+
+        let result = compile_authoring_to_runtime(&runtime, &source, &output_dir);
+        assert!(
+            result.is_err(),
+            "warning-only issues must still be non-zero error"
+        );
+        let err = result.unwrap_err();
+        for expected in [
+            "code 1",
+            "warning",
+            "unknown_field",
+            "field will be ignored",
+            "condition_index=0",
+            "condition_id=warn-cond",
+            "field_name=extra",
+        ] {
+            assert!(
+                err.contains(expected),
+                "error should contain {expected}: {err}"
+            );
+        }
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn compile_authoring_nonzero_with_empty_issues_is_still_process_error() {
+        let project_root = fake_project_root_with_cli(
+            "nonzero_empty_issues",
+            r#"
+import sys
+import json
+import os
+
+assert os.environ.get("CSV_VIEWER_PROJECT_ROOT")
+
+args = sys.argv[1:]
+issues_idx = args.index("--issues-json")
+issues_path = args[issues_idx + 1]
+
+with open(issues_path, "w", encoding="utf-8") as f:
+    json.dump([], f)
+
+sys.stderr.write("empty issues stderr\n")
+sys.exit(1)
+"#,
+        );
+
+        let source = temp_source_file(
+            "exec_nonzero_empty",
+            r#"{\"format\":\"condition-authoring/v1\"}"#,
+        );
+        let output_dir = temp_output_dir("exec_nonzero_empty");
+        let runtime = fake_runtime_for_test(
+            std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python")),
+            vec![],
+            project_root.clone(),
+        );
+
+        let result = compile_authoring_to_runtime(&runtime, &source, &output_dir);
+        assert!(result.is_err(), "empty issues must still be non-zero error");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("code 1"),
+            "error should mention exit code: {err}"
+        );
+        assert!(
+            err.contains("empty issues stderr"),
+            "error should include stderr: {err}"
+        );
+        assert!(
+            err.contains("no issues") || err.contains("stderr"),
+            "error should be a natural process failure diagnostic: {err}"
+        );
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn compile_authoring_nonzero_does_not_read_stale_issues_json() {
+        let project_root = fake_project_root_with_cli(
+            "stale_nonzero",
+            r#"
+import sys
+import os
+
+assert os.environ.get("CSV_VIEWER_PROJECT_ROOT")
+
+# Intentionally do not write --issues-json or --output.
+sys.stderr.write("fresh compiler failure without issues json\n")
+sys.exit(7)
+"#,
+        );
+
+        let content = r#"{"format":"condition-authoring/v1"}"#;
+        let source = temp_source_file("exec_stale_nonzero", content);
+        let output_dir = temp_output_dir("exec_stale_nonzero");
+        let output_paths = CompiledOutputPath::build(&source, content, &output_dir).unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
+        std::fs::write(
+            &output_paths.issues_json,
+            r#"[{"code":"stale_issue_code","severity":"error","scope":"filter_config","message":"stale issue message must not be reused"}]"#,
+        )
+        .unwrap();
+        std::fs::write(&output_paths.runtime_json, r#"{"stale":true}"#).unwrap();
+
+        let runtime = fake_runtime_for_test(
+            std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python")),
+            vec![],
+            project_root.clone(),
+        );
+
+        let result = compile_authoring_to_runtime(&runtime, &source, &output_dir);
+        assert!(result.is_err(), "expected error for non-zero exit");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("code 7"),
+            "error should mention current exit code: {}",
+            err
+        );
+        assert!(
+            err.contains("fresh compiler failure without issues json"),
+            "error should mention current stderr: {}",
+            err
+        );
+        assert!(
+            !err.contains("stale_issue_code"),
+            "error should not contain stale issue code: {}",
+            err
+        );
+        assert!(
+            !err.contains("stale issue message must not be reused"),
+            "error should not contain stale issue message: {}",
+            err
+        );
+        assert!(
+            !output_paths.issues_json.exists(),
+            "stale issues JSON should be removed before invoking the compiler"
+        );
+        assert!(
+            !output_paths.runtime_json.exists(),
+            "stale runtime JSON should be removed before invoking the compiler"
+        );
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
     fn compile_authoring_missing_issues_json_handling() {
         let project_root = fake_project_root_with_cli(
             "missing_issues",
@@ -889,6 +1270,59 @@ sys.exit(0)
                 || err.contains("No such file"),
             "error should mention issues JSON missing: {}",
             err
+        );
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn compile_authoring_success_with_malformed_issues_json_is_error() {
+        let project_root = fake_project_root_with_cli(
+            "success_malformed_issues",
+            r#"
+import sys
+import json
+import os
+
+assert os.environ.get("CSV_VIEWER_PROJECT_ROOT")
+
+args = sys.argv[1:]
+output_idx = args.index("--output")
+issues_idx = args.index("--issues-json")
+output_path = args[output_idx + 1]
+issues_path = args[issues_idx + 1]
+
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump({"cooccurrence_conditions": []}, f)
+with open(issues_path, "w", encoding="utf-8") as f:
+    f.write("{ not valid issues json")
+
+sys.exit(0)
+"#,
+        );
+
+        let source = temp_source_file(
+            "exec_success_malformed",
+            r#"{\"format\":\"condition-authoring/v1\"}"#,
+        );
+        let output_dir = temp_output_dir("exec_success_malformed");
+        let runtime = fake_runtime_for_test(
+            std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python")),
+            vec![],
+            project_root.clone(),
+        );
+
+        let result = compile_authoring_to_runtime(&runtime, &source, &output_dir);
+        assert!(
+            result.is_err(),
+            "expected error when successful compiler writes malformed issues JSON"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("parse error"),
+            "error should mention issues parse error: {err}"
         );
 
         let _ = std::fs::remove_file(&source);

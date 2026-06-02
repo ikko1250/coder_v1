@@ -1,8 +1,8 @@
 //! Python 分析・エクスポート・警告ウィンドウ・終了ガード（未保存）。親モジュール `app` の子。
 
 use super::{
-    AnalysisExportContext, AnalysisJobStatus, AnalysisRuntimeState, App, BuilderJobStatus,
-    RunningAnalysisJob, RunningBuildJob,
+    AnalysisExportContext, AnalysisJobStatus, AnalysisRunContext, AnalysisRuntimeState, App,
+    BuilderJobStatus, RunningAnalysisJob, RunningBuildJob,
 };
 use crate::analysis_runner::{
     build_runtime_config, cleanup_job_directories, resolve_filter_config_path,
@@ -95,6 +95,11 @@ pub(super) fn start_analysis_job_with_mode(
         .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
     let prepared_runtime = prepare_runtime_for_analysis(runtime)?;
     let runtime = prepared_runtime.runtime;
+    let compile_warnings = prepared_runtime.authoring_warnings;
+    let analysis_context = AnalysisRunContext {
+        runtime: runtime.clone(),
+        compile_warnings: compile_warnings.clone(),
+    };
 
     if mode == AnalysisStartMode::Normal {
         let snapshot_hit = app
@@ -115,15 +120,20 @@ pub(super) fn start_analysis_job_with_mode(
 
     let force_reload_db_frames = mode == AnalysisStartMode::ForceWorkerRunAndReloadDb;
 
-    let (job_id, receiver) = app.analysis_process_host.spawn_analysis_job(AnalysisJobRequest {
-        db_path: app.db_viewer_state.db_path.clone(),
-        runtime,
-        force_reload_db_frames,
-    });
+    let (job_id, receiver) = app
+        .analysis_process_host
+        .spawn_analysis_job(AnalysisJobRequest {
+            db_path: app.db_viewer_state.db_path.clone(),
+            runtime,
+            force_reload_db_frames,
+        });
 
-    app.analysis_runtime_state.last_warnings = prepared_runtime.authoring_warnings;
+    app.analysis_runtime_state.last_warnings = compile_warnings;
     app.analysis_runtime_state.warning_window_open = false;
-    app.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
+    app.analysis_runtime_state.current_job = Some(RunningAnalysisJob {
+        receiver,
+        analysis_context: Some(analysis_context),
+    });
     app.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis {
         job_id: job_id.clone(),
     };
@@ -203,18 +213,16 @@ fn resolved_annotation_csv_path_for_runtime(app: &App) -> PathBuf {
         .unwrap_or_default()
 }
 
-fn current_session_cache_key(app: &App, runtime: &AnalysisRuntimeConfig) -> Option<AnalysisSessionCacheKey> {
-    let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
+fn current_session_cache_key(
+    app: &App,
+    runtime: &AnalysisRuntimeConfig,
+) -> Option<AnalysisSessionCacheKey> {
     build_session_cache_key(
         &app.db_viewer_state.db_path,
         &runtime.filter_config_path,
-        &annotation_csv_path,
+        &runtime.annotation_csv_path,
         runtime,
     )
-}
-
-fn build_status_summary_from_meta(meta: &AnalysisMeta) -> String {
-    build_status_summary_with_warnings(meta, meta.warning_messages.len())
 }
 
 fn build_status_summary_with_warnings(meta: &AnalysisMeta, warning_count: usize) -> String {
@@ -241,32 +249,46 @@ fn merge_warnings(
     merged
 }
 
-fn analysis_result_snapshot_from_success(app: &App, success: &AnalysisJobSuccess) -> AnalysisResultSnapshot {
-    let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
+fn runtime_for_completed_analysis<'a>(
+    app: &'a App,
+    context: &'a Option<AnalysisRunContext>,
+) -> Option<&'a AnalysisRuntimeConfig> {
+    context
+        .as_ref()
+        .map(|ctx| &ctx.runtime)
+        .or_else(|| app.analysis_runtime_state.runtime.as_ref())
+}
+
+fn analysis_result_snapshot_from_success(
+    success: &AnalysisJobSuccess,
+    runtime: &AnalysisRuntimeConfig,
+    merged_warnings: &[AnalysisWarningMessage],
+    status_summary: &str,
+) -> AnalysisResultSnapshot {
     AnalysisResultSnapshot {
         records: success.records.clone(),
         source_label: format!("分析結果: {}", success.meta.job_id),
-        last_warnings: success.meta.warning_messages.clone(),
+        last_warnings: merged_warnings.to_vec(),
         db_path: PathBuf::from(&success.meta.db_path),
-        filter_config_path: PathBuf::from(&success.meta.filter_config_path),
-        filter_config_source_path: app
-            .analysis_runtime_state
-            .runtime
-            .as_ref()
-            .and_then(|r| r.filter_config_source_path.clone()),
-        annotation_csv_path,
-        status_summary: build_status_summary_from_meta(&success.meta),
+        filter_config_path: runtime.filter_config_path.clone(),
+        filter_config_source_path: runtime.filter_config_source_path.clone(),
+        annotation_csv_path: runtime.annotation_csv_path.clone(),
+        status_summary: status_summary.to_string(),
     }
 }
 
-fn try_store_session_analysis_cache(app: &mut App, success: &AnalysisJobSuccess) {
-    let Some(runtime) = app.analysis_runtime_state.runtime.as_ref() else {
-        return;
-    };
+fn try_store_session_analysis_cache(
+    app: &mut App,
+    success: &AnalysisJobSuccess,
+    runtime: &AnalysisRuntimeConfig,
+    merged_warnings: &[AnalysisWarningMessage],
+    status_summary: &str,
+) {
     let Some(key) = current_session_cache_key(app, runtime) else {
         return;
     };
-    let snapshot = analysis_result_snapshot_from_success(app, success);
+    let snapshot =
+        analysis_result_snapshot_from_success(success, runtime, merged_warnings, status_summary);
     app.analysis_runtime_state.session_analysis_cache = Some((key, snapshot));
 }
 
@@ -338,7 +360,10 @@ pub(super) fn start_export_job(app: &mut App, output_csv_path: PathBuf) -> Resul
         let _ = sender.send(event);
     });
 
-    app.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
+    app.analysis_runtime_state.current_job = Some(RunningAnalysisJob {
+        receiver,
+        analysis_context: None,
+    });
     app.analysis_runtime_state.status = AnalysisJobStatus::RunningExport {
         job_id: job_id.clone(),
     };
@@ -489,10 +514,17 @@ pub(super) fn start_build_job(app: &mut App) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "builder 用 Python 実行環境を解決できません".to_string())?;
     let forbidden_dirs = crate::analysis_runner::resolve_forbidden_dirs(&runtime.project_root);
-    if let Some(msg) = crate::analysis_runner::check_forbidden_input_dir(&input_dir, &forbidden_dirs) {
+    if let Some(msg) =
+        crate::analysis_runner::check_forbidden_input_dir(&input_dir, &forbidden_dirs)
+    {
         return Err(msg);
     }
-    if app.builder_request_state.analysis_db_path.as_os_str().is_empty() {
+    if app
+        .builder_request_state
+        .analysis_db_path
+        .as_os_str()
+        .is_empty()
+    {
         return Err("出力 DB パスを指定してください".to_string());
     }
     if app.builder_request_state.purge && app.builder_request_state.fresh_db {
@@ -508,21 +540,22 @@ pub(super) fn start_build_job(app: &mut App) -> Result<(), String> {
     let report_path = app.builder_request_state.resolved_report_path();
 
     let (job_id, receiver, control) =
-        app.analysis_process_host.spawn_build_job(AnalysisDbBuildRequest {
-            runtime,
-            input_dir,
-            analysis_db_path: app.builder_request_state.analysis_db_path.clone(),
-            report_path: report_path.clone(),
-            skip_tokenize: app.builder_request_state.skip_tokenize,
-            sudachi_dict: app.builder_request_state.sudachi_dict.as_str().to_string(),
-            split_mode: app.builder_request_state.split_mode.as_str().to_string(),
-            split_inside_parentheses: app.builder_request_state.split_inside_parentheses,
-            merge_table_lines: app.builder_request_state.merge_table_lines,
-            purge: app.builder_request_state.purge,
-            fresh_db: app.builder_request_state.fresh_db,
-            limit,
-            note: app.builder_request_state.note_input.trim().to_string(),
-        })?;
+        app.analysis_process_host
+            .spawn_build_job(AnalysisDbBuildRequest {
+                runtime,
+                input_dir,
+                analysis_db_path: app.builder_request_state.analysis_db_path.clone(),
+                report_path: report_path.clone(),
+                skip_tokenize: app.builder_request_state.skip_tokenize,
+                sudachi_dict: app.builder_request_state.sudachi_dict.as_str().to_string(),
+                split_mode: app.builder_request_state.split_mode.as_str().to_string(),
+                split_inside_parentheses: app.builder_request_state.split_inside_parentheses,
+                merge_table_lines: app.builder_request_state.merge_table_lines,
+                purge: app.builder_request_state.purge,
+                fresh_db: app.builder_request_state.fresh_db,
+                limit,
+                note: app.builder_request_state.note_input.trim().to_string(),
+            })?;
 
     app.builder_runtime_state.pending_switch_db_path = None;
     app.builder_runtime_state.current_job = Some(RunningBuildJob {
@@ -538,13 +571,13 @@ pub(super) fn start_build_job(app: &mut App) -> Result<(), String> {
 }
 
 pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
-    let Some(running_job) = app.analysis_runtime_state.current_job.as_ref() else {
+    let Some(mut running_job) = app.analysis_runtime_state.current_job.take() else {
         return poll_builder_job(app);
     };
 
     match running_job.receiver.try_recv() {
         Ok(AnalysisJobEvent::AnalysisCompleted(result)) => {
-            app.analysis_runtime_state.current_job = None;
+            let analysis_context = running_job.analysis_context.take();
             match result {
                 Ok(success) => {
                     if !app.core.job_id_matches_expected(&success.meta.job_id) {
@@ -562,7 +595,7 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                     }
                     app.core.clear_expected_job_id();
                     return AnalysisJobPollOutput {
-                        core_event: Some(handle_analysis_success(app, success)),
+                        core_event: Some(handle_analysis_success(app, success, analysis_context)),
                         needs_repaint: true,
                         repaint_after: None,
                     };
@@ -583,7 +616,7 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                         };
                     }
                     app.core.clear_expected_job_id();
-                    handle_analysis_failure(app, failure);
+                    handle_analysis_failure(app, failure, analysis_context);
                     return AnalysisJobPollOutput {
                         core_event: None,
                         needs_repaint: true,
@@ -592,63 +625,62 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
                 }
             }
         }
-        Ok(AnalysisJobEvent::ExportCompleted(result)) => {
-            app.analysis_runtime_state.current_job = None;
-            match result {
-                Ok(success) => {
-                    if !app.core.job_id_matches_expected(&success.meta.job_id) {
-                        app.core.clear_expected_job_id();
-                        app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
-                        app.logger.warn(&format!(
-                            "ignored stale export completion event: {}",
-                            success.meta.job_id
-                        ));
-                        return AnalysisJobPollOutput {
-                            core_event: None,
-                            needs_repaint: true,
-                            repaint_after: None,
-                        };
-                    }
+        Ok(AnalysisJobEvent::ExportCompleted(result)) => match result {
+            Ok(success) => {
+                if !app.core.job_id_matches_expected(&success.meta.job_id) {
                     app.core.clear_expected_job_id();
-                    handle_export_success(app, success);
+                    app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                    app.logger.warn(&format!(
+                        "ignored stale export completion event: {}",
+                        success.meta.job_id
+                    ));
                     return AnalysisJobPollOutput {
                         core_event: None,
                         needs_repaint: true,
                         repaint_after: None,
                     };
                 }
-                Err(failure) => {
-                    let accept = match failure.meta.as_ref() {
-                        Some(meta) => app.core.job_id_matches_expected(&meta.job_id),
-                        None => app.core.accept_failure_without_meta_job_id(),
-                    };
-                    if !accept {
-                        app.core.clear_expected_job_id();
-                        app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
-                        app.logger.warn("ignored stale export failure event");
-                        return AnalysisJobPollOutput {
-                            core_event: None,
-                            needs_repaint: true,
-                            repaint_after: None,
-                        };
-                    }
-                    app.core.clear_expected_job_id();
-                    handle_export_failure(app, failure);
-                    return AnalysisJobPollOutput {
-                        core_event: None,
-                        needs_repaint: true,
-                        repaint_after: None,
-                    };
-                }
+                app.core.clear_expected_job_id();
+                handle_export_success(app, success);
+                return AnalysisJobPollOutput {
+                    core_event: None,
+                    needs_repaint: true,
+                    repaint_after: None,
+                };
             }
-        }
-        Err(TryRecvError::Empty) => AnalysisJobPollOutput {
-            core_event: None,
-            needs_repaint: false,
-            repaint_after: Some(Duration::from_millis(100)),
+            Err(failure) => {
+                let accept = match failure.meta.as_ref() {
+                    Some(meta) => app.core.job_id_matches_expected(&meta.job_id),
+                    None => app.core.accept_failure_without_meta_job_id(),
+                };
+                if !accept {
+                    app.core.clear_expected_job_id();
+                    app.analysis_runtime_state.status = AnalysisJobStatus::Idle;
+                    app.logger.warn("ignored stale export failure event");
+                    return AnalysisJobPollOutput {
+                        core_event: None,
+                        needs_repaint: true,
+                        repaint_after: None,
+                    };
+                }
+                app.core.clear_expected_job_id();
+                handle_export_failure(app, failure);
+                return AnalysisJobPollOutput {
+                    core_event: None,
+                    needs_repaint: true,
+                    repaint_after: None,
+                };
+            }
         },
+        Err(TryRecvError::Empty) => {
+            app.analysis_runtime_state.current_job = Some(running_job);
+            AnalysisJobPollOutput {
+                core_event: None,
+                needs_repaint: false,
+                repaint_after: Some(Duration::from_millis(100)),
+            }
+        }
         Ok(AnalysisJobEvent::BuildCompleted(_)) => {
-            app.analysis_runtime_state.current_job = None;
             app.core.clear_expected_job_id();
             set_failed_status_for_current_job(
                 app,
@@ -661,7 +693,6 @@ pub(super) fn poll_analysis_job(app: &mut App) -> AnalysisJobPollOutput {
             }
         }
         Err(TryRecvError::Disconnected) => {
-            app.analysis_runtime_state.current_job = None;
             app.core.clear_expected_job_id();
             set_failed_status_for_current_job(
                 app,
@@ -732,27 +763,45 @@ fn poll_builder_job(app: &mut App) -> AnalysisJobPollOutput {
     }
 }
 
-fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> ViewerCoreMessage {
-    try_store_session_analysis_cache(app, &success);
-
+fn handle_analysis_success(
+    app: &mut App,
+    success: AnalysisJobSuccess,
+    context: Option<AnalysisRunContext>,
+) -> ViewerCoreMessage {
+    let effective_runtime = runtime_for_completed_analysis(app, &context).cloned();
+    let filter_config_path = effective_runtime
+        .as_ref()
+        .map(|runtime| runtime.filter_config_path.clone())
+        .or_else(|| resolved_filter_config_path(app).ok())
+        .unwrap_or_default();
+    let filter_config_source_path = effective_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.filter_config_source_path.clone());
+    let annotation_csv_path = effective_runtime
+        .as_ref()
+        .map(|runtime| runtime.annotation_csv_path.clone())
+        .unwrap_or_else(|| resolved_annotation_csv_path_for_runtime(app));
     let worker_warnings = success.meta.warning_messages.clone();
-    let compile_warnings = app.analysis_runtime_state.last_warnings.clone();
+    let compile_warnings = context
+        .as_ref()
+        .map(|ctx| ctx.compile_warnings.clone())
+        .unwrap_or_default();
     let merged_warnings = merge_warnings(compile_warnings, worker_warnings);
     let summary = build_status_summary_with_warnings(&success.meta, merged_warnings.len());
-    app.analysis_runtime_state.last_warnings = merged_warnings;
+    app.analysis_runtime_state.last_warnings = merged_warnings.clone();
     app.analysis_runtime_state.warning_window_open = false;
-    let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
     app.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
         db_path: PathBuf::from(&success.meta.db_path),
-        filter_config_path: PathBuf::from(&success.meta.filter_config_path),
-        filter_config_source_path: app
-            .analysis_runtime_state
-            .runtime
-            .as_ref()
-            .and_then(|r| r.filter_config_source_path.clone()),
+        filter_config_path,
+        filter_config_source_path,
         annotation_csv_path,
     });
-    app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisSucceeded { summary };
+    app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisSucceeded {
+        summary: summary.clone(),
+    };
+    if let Some(runtime) = effective_runtime.as_ref() {
+        try_store_session_analysis_cache(app, &success, runtime, &merged_warnings, &summary);
+    }
     app.logger
         .info(&format!("analysis job succeeded: {}", success.meta.job_id));
     let source_label = format!("分析結果: {}", success.meta.job_id);
@@ -799,13 +848,20 @@ fn handle_build_failure(app: &mut App, failure: AnalysisJobFailure) {
     app.error_message = Some(error_message);
 }
 
-fn handle_analysis_failure(app: &mut App, failure: AnalysisJobFailure) {
+fn handle_analysis_failure(
+    app: &mut App,
+    failure: AnalysisJobFailure,
+    context: Option<AnalysisRunContext>,
+) {
     let worker_warnings = failure
         .meta
         .as_ref()
         .map(|meta| meta.warning_messages.clone())
         .unwrap_or_default();
-    let compile_warnings = app.analysis_runtime_state.last_warnings.clone();
+    let compile_warnings = context
+        .as_ref()
+        .map(|ctx| ctx.compile_warnings.clone())
+        .unwrap_or_default();
     let merged_warnings = merge_warnings(compile_warnings, worker_warnings);
     let summary = failure.message.clone();
     app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisFailed { summary };
@@ -1016,10 +1072,10 @@ pub(super) fn guard_root_close_with_dirty_editor(app: &mut App, ctx: &egui::Cont
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_runner::BuilderRuntimeConfig;
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1060,6 +1116,224 @@ mod tests {
         }
     }
 
+    fn minimal_paragraph_record(row_no: usize) -> AnalysisRecord {
+        AnalysisRecord {
+            row_no,
+            analysis_unit: AnalysisUnit::Paragraph,
+            paragraph_id: format!("p-{row_no}"),
+            sentence_id: String::new(),
+            document_id: "doc-1".to_string(),
+            category1: "cat-1".to_string(),
+            category2: "cat-2".to_string(),
+            sentence_count: "1".to_string(),
+            sentence_no_in_paragraph: String::new(),
+            sentence_no_in_document: String::new(),
+            sentence_text: String::new(),
+            sentence_text_tagged: String::new(),
+            paragraph_text: format!("paragraph text {row_no}"),
+            paragraph_text_tagged: String::new(),
+            matched_condition_ids_text: String::new(),
+            matched_categories_text: String::new(),
+            matched_form_group_ids_text: String::new(),
+            matched_form_group_logics_text: String::new(),
+            form_group_explanations_text: String::new(),
+            text_groups_explanations_text: String::new(),
+            mixed_scope_warning_text: String::new(),
+            match_group_ids_text: String::new(),
+            match_group_count: String::new(),
+            annotated_token_count: String::new(),
+            manual_annotation_count: String::new(),
+            manual_annotation_pairs_text: String::new(),
+            manual_annotation_namespaces_text: String::new(),
+        }
+    }
+
+    fn builder_runtime_for_test(
+        project_root: &Path,
+        builder_script_path: PathBuf,
+    ) -> BuilderRuntimeConfig {
+        BuilderRuntimeConfig {
+            python_command: python_command_for_test(),
+            python_args: vec![],
+            python_label: "python-test".to_string(),
+            project_root: project_root.to_path_buf(),
+            builder_script_path,
+        }
+    }
+
+    #[test]
+    fn poll_analysis_empty_preserves_running_job_context() {
+        let mut app = App::new(None);
+        let root = temp_root("poll_empty_context");
+        let runtime = runtime_for_test(&root, root.join("conditions.json"));
+        let warning = compile_warning();
+        let (_sender, receiver) = mpsc::channel();
+        app.analysis_runtime_state.current_job = Some(RunningAnalysisJob {
+            receiver,
+            analysis_context: Some(AnalysisRunContext {
+                runtime: runtime.clone(),
+                compile_warnings: vec![warning.clone()],
+            }),
+        });
+
+        let output = poll_analysis_job(&mut app);
+
+        assert!(!output.needs_repaint);
+        assert_eq!(output.repaint_after, Some(Duration::from_millis(100)));
+        let running_job = app
+            .analysis_runtime_state
+            .current_job
+            .as_ref()
+            .expect("empty poll must restore running analysis job");
+        let context = running_job
+            .analysis_context
+            .as_ref()
+            .expect("empty poll must preserve analysis context");
+        assert_eq!(context.runtime, runtime);
+        assert_eq!(context.compile_warnings, vec![warning]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn export_job_uses_no_analysis_context() {
+        let mut app = App::new(None);
+        let root = temp_root("export_no_context");
+        let filter_config_path = root.join("conditions.json");
+        fs::write(&filter_config_path, r#"{"cooccurrence_conditions": []}"#).unwrap();
+        app.analysis_runtime_state.runtime = Some(runtime_for_test(&root, filter_config_path));
+        app.core.all_records = vec![minimal_paragraph_record(1)];
+        app.core.filtered_indices = vec![0];
+        let output_csv_path = root.join("export.csv");
+
+        start_export_job(&mut app, output_csv_path.clone()).unwrap();
+
+        assert!(matches!(
+            app.analysis_runtime_state.status,
+            AnalysisJobStatus::RunningExport { .. }
+        ));
+        assert!(app
+            .analysis_runtime_state
+            .current_job
+            .as_ref()
+            .expect("export job should be running")
+            .analysis_context
+            .is_none());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.analysis_runtime_state.current_job.is_some() {
+            let output = poll_analysis_job(&mut app);
+            if output.needs_repaint {
+                break;
+            }
+            assert_eq!(output.repaint_after, Some(Duration::from_millis(100)));
+            assert!(
+                Instant::now() < deadline,
+                "export job was not polled to completion"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        assert!(app.analysis_runtime_state.current_job.is_none());
+        assert!(matches!(
+            app.analysis_runtime_state.status,
+            AnalysisJobStatus::ExportSucceeded { .. }
+        ));
+        assert!(!matches!(
+            app.analysis_runtime_state.status,
+            AnalysisJobStatus::AnalysisFailed { .. }
+        ));
+        assert!(output_csv_path.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn poll_analysis_without_analysis_job_still_polls_builder_job() {
+        let mut app = App::new(None);
+        let root = temp_root("poll_delegates_builder");
+        let input_dir = root.join("input");
+        fs::create_dir_all(&input_dir).unwrap();
+        let analysis_db_path = root.join("built-analysis.db");
+        let report_path = root.join("build-report.json");
+        let builder_script_path = root.join("fake_builder.py");
+        fs::write(
+            &builder_script_path,
+            r#"
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--input-dir', required=True)
+parser.add_argument('--analysis-db', required=True)
+parser.add_argument('--report-path', required=True)
+parser.add_argument('--skip-tokenize', action='store_true')
+parser.add_argument('--sudachi-dict')
+parser.add_argument('--split-mode')
+parser.add_argument('--split-inside-parentheses', action='store_true')
+parser.add_argument('--merge-table-lines', action='store_true')
+parser.add_argument('--purge', action='store_true')
+parser.add_argument('--fresh-db', action='store_true')
+parser.add_argument('--limit')
+parser.add_argument('--note')
+args = parser.parse_args()
+with open(args.analysis_db, 'w', encoding='utf-8') as f:
+    f.write('db')
+with open(args.report_path, 'w', encoding='utf-8') as f:
+    f.write('{}')
+"#,
+        )
+        .unwrap();
+        let (job_id, receiver, control) =
+            crate::analysis_runner::spawn_build_job(AnalysisDbBuildRequest {
+                runtime: builder_runtime_for_test(&root, builder_script_path),
+                input_dir,
+                analysis_db_path: analysis_db_path.clone(),
+                report_path: report_path.clone(),
+                skip_tokenize: true,
+                sudachi_dict: "core".to_string(),
+                split_mode: "C".to_string(),
+                split_inside_parentheses: false,
+                merge_table_lines: false,
+                purge: false,
+                fresh_db: false,
+                limit: None,
+                note: String::new(),
+            })
+            .unwrap();
+        app.builder_runtime_state.current_job = Some(RunningBuildJob {
+            receiver,
+            control,
+            started_at: Instant::now(),
+        });
+        app.builder_runtime_state.status = BuilderJobStatus::Running { job_id };
+        assert!(app.analysis_runtime_state.current_job.is_none());
+        assert!(app.builder_runtime_state.current_job.is_some());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.builder_runtime_state.current_job.is_some() {
+            let output = poll_analysis_job(&mut app);
+            if output.needs_repaint {
+                break;
+            }
+            assert_eq!(output.repaint_after, Some(Duration::from_millis(100)));
+            assert!(
+                Instant::now() < deadline,
+                "builder job was not polled to completion"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        assert!(app.analysis_runtime_state.current_job.is_none());
+        assert!(app.builder_runtime_state.current_job.is_none());
+        assert!(matches!(
+            app.builder_runtime_state.status,
+            BuilderJobStatus::Succeeded { .. }
+        ));
+        assert_eq!(
+            app.builder_runtime_state.pending_switch_db_path,
+            Some(analysis_db_path)
+        );
+        assert!(report_path.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn prepare_runtime_keeps_runtime_json_effective_path() {
         let root = temp_root("runtime_json");
@@ -1094,12 +1368,19 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
 "#,
         );
         let source_path = root.join("authoring.json");
-        fs::write(&source_path, r#"{"format":"condition-authoring/v1","rules":[]}"#).unwrap();
+        fs::write(
+            &source_path,
+            r#"{"format":"condition-authoring/v1","rules":[]}"#,
+        )
+        .unwrap();
         let runtime = runtime_for_test(&root, source_path.clone());
 
         let prepared = prepare_runtime_for_analysis(runtime).unwrap();
 
-        assert_eq!(prepared.runtime.filter_config_source_path, Some(source_path));
+        assert_eq!(
+            prepared.runtime.filter_config_source_path,
+            Some(source_path)
+        );
         assert!(prepared
             .runtime
             .filter_config_path
@@ -1129,7 +1410,11 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
 "#,
         );
         let source_path = root.join("authoring.json");
-        fs::write(&source_path, r#"{"format":"condition-authoring/v1","rules":[]}"#).unwrap();
+        fs::write(
+            &source_path,
+            r#"{"format":"condition-authoring/v1","rules":[]}"#,
+        )
+        .unwrap();
         let runtime = runtime_for_test(&root, source_path);
 
         let error = prepare_runtime_for_analysis(runtime).unwrap_err();
@@ -1151,7 +1436,11 @@ sys.exit(7)
 "#,
         );
         let source_path = root.join("authoring.json");
-        fs::write(&source_path, r#"{"format":"condition-authoring/v1","rules":[]}"#).unwrap();
+        fs::write(
+            &source_path,
+            r#"{"format":"condition-authoring/v1","rules":[]}"#,
+        )
+        .unwrap();
         let runtime = runtime_for_test(&root, source_path);
 
         let error = prepare_runtime_for_analysis(runtime).unwrap_err();
@@ -1188,8 +1477,16 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
         fs::write(&annotation_path, "annotation").unwrap();
         let source_a = root.join("authoring-a.json");
         let source_b = root.join("authoring-b.json");
-        fs::write(&source_a, r#"{"format":"condition-authoring/v1","compiled_id":"a"}"#).unwrap();
-        fs::write(&source_b, r#"{"format":"condition-authoring/v1","compiled_id":"b"}"#).unwrap();
+        fs::write(
+            &source_a,
+            r#"{"format":"condition-authoring/v1","compiled_id":"a"}"#,
+        )
+        .unwrap();
+        fs::write(
+            &source_b,
+            r#"{"format":"condition-authoring/v1","compiled_id":"b"}"#,
+        )
+        .unwrap();
 
         let mut runtime_a = runtime_for_test(&root, source_a);
         runtime_a.annotation_csv_path = annotation_path.clone();
@@ -1257,15 +1554,305 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
         }
     }
 
+    fn analysis_meta_for_test(
+        job_id: &str,
+        warning_messages: Vec<AnalysisWarningMessage>,
+    ) -> AnalysisMeta {
+        AnalysisMeta {
+            job_id: job_id.to_string(),
+            status: "succeeded".to_string(),
+            started_at: "0".to_string(),
+            finished_at: "1".to_string(),
+            duration_seconds: 1.5,
+            db_path: "/tmp/db.sqlite3".to_string(),
+            filter_config_path: "/tmp/worker-filter.json".to_string(),
+            output_csv_path: "".to_string(),
+            analysis_unit: crate::model::AnalysisUnit::Paragraph,
+            target_paragraph_count: 10,
+            selected_paragraph_count: 5,
+            selected_sentence_count: 0,
+            warning_messages,
+            error_summary: "".to_string(),
+        }
+    }
+
+    struct AuthoringSuccessFixture {
+        app: App,
+        root: PathBuf,
+        stale_path: PathBuf,
+        effective_path: PathBuf,
+        source_path: PathBuf,
+        effective_annotation_path: PathBuf,
+        effective_runtime: AnalysisRuntimeConfig,
+    }
+
+    fn run_authoring_success_fixture(name: &str) -> AuthoringSuccessFixture {
+        let mut app = App::new(None);
+        let root = temp_root(name);
+        let stale_path = root.join("source.authoring.json");
+        let effective_path = root.join("effective.runtime.json");
+        let source_path = root.join("original.authoring.json");
+        let stale_annotation_path = root.join("stale-annotations.csv");
+        let effective_annotation_path = root.join("effective-annotations.csv");
+        let db_path = root.join("analysis.db");
+        fs::write(
+            &stale_path,
+            r#"{"format":"condition-authoring/v1","rules":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            &source_path,
+            r#"{"format":"condition-authoring/v1","rules":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            &effective_path,
+            r#"{"cooccurrence_conditions": [{"condition_id":"effective"}]}"#,
+        )
+        .unwrap();
+        fs::write(&stale_annotation_path, "stale\n").unwrap();
+        fs::write(&effective_annotation_path, "effective\n").unwrap();
+        fs::write(&db_path, "db").unwrap();
+
+        app.db_viewer_state.db_path = db_path.clone();
+        let mut stale_runtime = runtime_for_test(&root, stale_path.clone());
+        stale_runtime.annotation_csv_path = stale_annotation_path;
+        app.analysis_runtime_state.runtime = Some(stale_runtime);
+        app.analysis_runtime_state.last_warnings = vec![AnalysisWarningMessage {
+            code: "stale_warning".to_string(),
+            ..compile_warning()
+        }];
+
+        let mut effective_runtime = runtime_for_test(&root, effective_path.clone());
+        effective_runtime.filter_config_source_path = Some(source_path.clone());
+        effective_runtime.annotation_csv_path = effective_annotation_path.clone();
+
+        let mut success = AnalysisJobSuccess {
+            meta: analysis_meta_for_test("success-context", vec![worker_warning()]),
+            records: Vec::new(),
+        };
+        success.meta.db_path = db_path.display().to_string();
+        success.meta.filter_config_path = root.join("worker-filter.json").display().to_string();
+        let _message = handle_analysis_success(
+            &mut app,
+            success,
+            Some(AnalysisRunContext {
+                runtime: effective_runtime.clone(),
+                compile_warnings: vec![compile_warning()],
+            }),
+        );
+
+        AuthoringSuccessFixture {
+            app,
+            root,
+            stale_path,
+            effective_path,
+            source_path,
+            effective_annotation_path,
+            effective_runtime,
+        }
+    }
+
+    #[test]
+    fn authoring_analysis_success_uses_effective_runtime_for_export_context() {
+        let fixture = run_authoring_success_fixture("authoring_success_export_context");
+
+        let export_context = fixture
+            .app
+            .analysis_runtime_state
+            .last_export_context
+            .as_ref()
+            .expect("success should populate export context");
+        assert_eq!(export_context.filter_config_path, fixture.effective_path);
+        assert_eq!(
+            export_context.filter_config_source_path,
+            Some(fixture.source_path.clone())
+        );
+        assert_eq!(
+            export_context.display_filter_config_path().as_ref(),
+            fixture.source_path.as_path()
+        );
+        assert_eq!(
+            export_context.annotation_csv_path,
+            fixture.effective_annotation_path
+        );
+        assert_ne!(export_context.filter_config_path, fixture.stale_path);
+        assert_ne!(
+            export_context.filter_config_path,
+            fixture
+                .app
+                .analysis_runtime_state
+                .runtime
+                .as_ref()
+                .expect("stale app runtime is intentionally present")
+                .filter_config_path
+        );
+
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn authoring_analysis_success_cache_snapshot_stores_merged_warnings() {
+        let fixture = run_authoring_success_fixture("authoring_success_cache_snapshot");
+
+        let (_cache_key, snapshot) = fixture
+            .app
+            .analysis_runtime_state
+            .session_analysis_cache
+            .as_ref()
+            .expect("successful analysis with valid runtime paths should populate session cache");
+        assert_eq!(snapshot.last_warnings.len(), 2);
+        assert_eq!(snapshot.last_warnings[0].code, "authoring_unknown_field");
+        assert_eq!(snapshot.last_warnings[1].code, "distance_match_fallback");
+        assert_eq!(snapshot.filter_config_path, fixture.effective_path);
+        assert_eq!(
+            snapshot.filter_config_source_path,
+            Some(fixture.source_path.clone())
+        );
+        assert_eq!(
+            snapshot.annotation_csv_path,
+            fixture.effective_annotation_path
+        );
+        assert_ne!(snapshot.filter_config_path, fixture.stale_path);
+        assert!(matches!(
+            fixture.app.analysis_runtime_state.status,
+            AnalysisJobStatus::AnalysisSucceeded { ref summary } if summary.contains("警告 2 件")
+        ));
+        assert!(
+            snapshot.status_summary.contains("警告 2 件"),
+            "snapshot summary should preserve merged warning count: {}",
+            snapshot.status_summary
+        );
+
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn authoring_analysis_cache_key_uses_effective_runtime_for_store() {
+        let fixture = run_authoring_success_fixture("authoring_cache_key_store");
+
+        let (stored_key, _snapshot) = fixture
+            .app
+            .analysis_runtime_state
+            .session_analysis_cache
+            .as_ref()
+            .expect("successful analysis with valid runtime paths should populate session cache");
+        let expected_key = build_session_cache_key(
+            &fixture.app.db_viewer_state.db_path,
+            &fixture.effective_runtime.filter_config_path,
+            &fixture.effective_runtime.annotation_csv_path,
+            &fixture.effective_runtime,
+        )
+        .expect("fixture paths should produce a cache key");
+        assert_eq!(stored_key, &expected_key);
+        assert_ne!(
+            stored_key.filter_config_sha256,
+            build_session_cache_key(
+                &fixture.app.db_viewer_state.db_path,
+                &fixture.stale_path,
+                &fixture.effective_runtime.annotation_csv_path,
+                &fixture.effective_runtime,
+            )
+            .expect("stale fixture path should still be hashable")
+            .filter_config_sha256
+        );
+
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn authoring_analysis_failure_merges_compile_and_worker_warnings() {
+        let mut app = App::new(None);
+        let root = temp_root("authoring_failure_merged_warnings");
+        let runtime = runtime_for_test(&root, root.join("effective.runtime.json"));
+        app.analysis_runtime_state.warning_window_open = true;
+        app.analysis_runtime_state.last_warnings = vec![AnalysisWarningMessage {
+            code: "stale_warning".to_string(),
+            ..compile_warning()
+        }];
+        let failure = AnalysisJobFailure {
+            meta: Some(analysis_meta_for_test(
+                "failure-context",
+                vec![worker_warning()],
+            )),
+            stderr: String::new(),
+            message: "failed".to_string(),
+        };
+
+        handle_analysis_failure(
+            &mut app,
+            failure,
+            Some(AnalysisRunContext {
+                runtime,
+                compile_warnings: vec![compile_warning()],
+            }),
+        );
+
+        assert_eq!(app.analysis_runtime_state.last_warnings.len(), 2);
+        assert_eq!(
+            app.analysis_runtime_state.last_warnings[0].code,
+            "authoring_unknown_field"
+        );
+        assert_eq!(
+            app.analysis_runtime_state.last_warnings[1].code,
+            "distance_match_fallback"
+        );
+        assert!(!app
+            .analysis_runtime_state
+            .last_warnings
+            .iter()
+            .any(|warning| warning.code == "stale_warning"));
+        assert!(!app.analysis_runtime_state.warning_window_open);
+        assert!(matches!(
+            app.analysis_runtime_state.status,
+            AnalysisJobStatus::AnalysisFailed { ref summary } if summary == "failed"
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn analysis_failure_without_context_uses_worker_warnings_only() {
+        let mut app = App::new(None);
+        app.analysis_runtime_state.warning_window_open = true;
+        app.analysis_runtime_state.last_warnings = vec![AnalysisWarningMessage {
+            code: "stale_warning".to_string(),
+            ..compile_warning()
+        }];
+        let failure = AnalysisJobFailure {
+            meta: Some(analysis_meta_for_test(
+                "failure-without-context",
+                vec![worker_warning()],
+            )),
+            stderr: String::new(),
+            message: "failed without context".to_string(),
+        };
+
+        handle_analysis_failure(&mut app, failure, None);
+
+        assert_eq!(app.analysis_runtime_state.last_warnings.len(), 1);
+        assert_eq!(
+            app.analysis_runtime_state.last_warnings[0].code,
+            "distance_match_fallback"
+        );
+        assert!(!app
+            .analysis_runtime_state
+            .last_warnings
+            .iter()
+            .any(|warning| warning.code == "authoring_unknown_field"
+                || warning.code == "stale_warning"));
+        assert!(!app.analysis_runtime_state.warning_window_open);
+        assert!(matches!(
+            app.analysis_runtime_state.status,
+            AnalysisJobStatus::AnalysisFailed { ref summary } if summary == "failed without context"
+        ));
+    }
 
     #[test]
     fn analysis_result_snapshot_preserves_filter_config_source_path() {
-        let mut app = App::new(None);
         let source_path = PathBuf::from("/tmp/source.authoring.json");
         let effective_path = PathBuf::from("/tmp/effective.runtime.json");
         let mut runtime = runtime_for_test(&PathBuf::from("/tmp/project"), effective_path.clone());
         runtime.filter_config_source_path = Some(source_path.clone());
-        app.analysis_runtime_state.runtime = Some(runtime);
         let success = AnalysisJobSuccess {
             meta: AnalysisMeta {
                 job_id: "test".to_string(),
@@ -1274,7 +1861,7 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
                 finished_at: "1".to_string(),
                 duration_seconds: 1.0,
                 db_path: "/tmp/db.sqlite3".to_string(),
-                filter_config_path: effective_path.display().to_string(),
+                filter_config_path: "/tmp/worker-filter.json".to_string(),
                 output_csv_path: "".to_string(),
                 analysis_unit: crate::model::AnalysisUnit::Paragraph,
                 target_paragraph_count: 0,
@@ -1286,10 +1873,20 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
             records: Vec::new(),
         };
 
-        let snapshot = analysis_result_snapshot_from_success(&app, &success);
+        let merged_warnings = vec![worker_warning()];
+        let status_summary =
+            build_status_summary_with_warnings(&success.meta, merged_warnings.len());
+        let snapshot = analysis_result_snapshot_from_success(
+            &success,
+            &runtime,
+            &merged_warnings,
+            &status_summary,
+        );
 
         assert_eq!(snapshot.filter_config_path, effective_path);
         assert_eq!(snapshot.filter_config_source_path, Some(source_path));
+        assert_eq!(snapshot.last_warnings, merged_warnings);
+        assert_eq!(snapshot.status_summary, status_summary);
     }
 
     #[test]
@@ -1312,8 +1909,14 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
 
         let export_context = app.analysis_runtime_state.last_export_context.unwrap();
         assert_eq!(export_context.filter_config_path, effective_path);
-        assert_eq!(export_context.filter_config_source_path, Some(source_path.clone()));
-        assert_eq!(export_context.display_filter_config_path(), source_path.as_path());
+        assert_eq!(
+            export_context.filter_config_source_path,
+            Some(source_path.clone())
+        );
+        assert_eq!(
+            export_context.display_filter_config_path(),
+            source_path.as_path()
+        );
     }
 
     #[test]
@@ -1351,7 +1954,10 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
             .iter()
             .filter(|w| w.code == "authoring_unknown_field")
             .count();
-        assert_eq!(compile_count, 1, "compile warning should appear exactly once");
+        assert_eq!(
+            compile_count, 1,
+            "compile warning should appear exactly once"
+        );
     }
 
     #[test]
@@ -1373,7 +1979,11 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
             error_summary: "".to_string(),
         };
         let summary = build_status_summary_with_warnings(&meta, 3);
-        assert!(summary.contains("警告 3 件"), "summary should show total warnings: {}", summary);
+        assert!(
+            summary.contains("警告 3 件"),
+            "summary should show total warnings: {}",
+            summary
+        );
     }
 
     #[test]
@@ -1395,6 +2005,10 @@ with open(args.issues_json, 'w', encoding='utf-8') as f:
             error_summary: "".to_string(),
         };
         let summary = build_status_summary_with_warnings(&meta, 0);
-        assert!(!summary.contains("警告"), "summary should not mention warnings: {}", summary);
+        assert!(
+            !summary.contains("警告"),
+            "summary should not mention warnings: {}",
+            summary
+        );
     }
 }

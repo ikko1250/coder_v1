@@ -51,6 +51,8 @@ desktop.ini
 # Local/generated project artifacts
 # These directories contain many analysis outputs, local design notes, and work logs.
 # Already tracked files remain tracked; use `git add -f` for intentional new files.
+/.hermes/
+/spikes/
 /asset/**
 /docs/**
 /document/**
