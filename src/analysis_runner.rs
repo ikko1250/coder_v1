@@ -37,6 +37,7 @@ pub(crate) struct AnalysisRuntimeConfig {
     pub(crate) project_root: PathBuf,
     pub(crate) script_path: PathBuf,
     pub(crate) filter_config_path: PathBuf,
+    pub(crate) filter_config_source_path: Option<PathBuf>,
     pub(crate) annotation_csv_path: PathBuf,
     pub(crate) jobs_root: PathBuf,
 }
@@ -436,6 +437,7 @@ pub(crate) fn build_runtime_config(
         project_root,
         script_path,
         filter_config_path,
+        filter_config_source_path: None,
         annotation_csv_path,
         jobs_root,
     })
@@ -1134,8 +1136,9 @@ mod json_response_tests {
 mod tests {
     use super::json_response_tests::{read_json_response, read_meta_json};
     use super::{
-        build_builder_command, build_default_builder_report_path, AnalysisDbBuildRequest,
-        AnalysisWarningMessage, BuilderRuntimeConfig,
+        build_builder_command, build_default_builder_report_path, build_runtime_config,
+        AnalysisDbBuildRequest, AnalysisRuntimeConfig, AnalysisRuntimeOverrides,
+        AnalysisWarningMessage, BuilderRuntimeConfig, WorkerRuntimeFingerprint,
     };
     use std::ffi::OsString;
     use std::fs;
@@ -1490,6 +1493,73 @@ mod tests {
         assert_eq!(first_record.sentence_no_in_paragraph, "2");
         assert_eq!(first_record.sentence_text, "文本文");
         assert_eq!(first_record.primary_text_tagged(), "<hit>文</hit>本文");
+    }
+
+    #[test]
+    fn build_runtime_config_source_path_is_none() {
+        let overrides = AnalysisRuntimeOverrides::default();
+        let runtime = build_runtime_config(&overrides).unwrap();
+        assert_eq!(runtime.filter_config_source_path, None);
+    }
+
+    #[test]
+    fn runtime_clone_preserves_source_path() {
+        let runtime = AnalysisRuntimeConfig {
+            python_command: OsString::from("python"),
+            python_args: vec![],
+            python_label: "python".to_string(),
+            project_root: PathBuf::from("/tmp/project"),
+            script_path: PathBuf::from("/tmp/project/run-analysis.py"),
+            filter_config_path: PathBuf::from("/tmp/effective.runtime.json"),
+            filter_config_source_path: Some(PathBuf::from("/tmp/source-authoring.json")),
+            annotation_csv_path: PathBuf::from("/tmp/annotations.csv"),
+            jobs_root: PathBuf::from("/tmp/project/runtime/jobs"),
+        };
+
+        let cloned = runtime.clone();
+        assert_eq!(
+            cloned.filter_config_source_path,
+            Some(PathBuf::from("/tmp/source-authoring.json"))
+        );
+        assert_eq!(cloned.filter_config_path, PathBuf::from("/tmp/effective.runtime.json"));
+    }
+
+    #[test]
+    fn worker_request_uses_effective_path_not_source_path() {
+        let overrides = AnalysisRuntimeOverrides::default();
+        let mut runtime = build_runtime_config(&overrides).unwrap();
+        runtime.filter_config_path = PathBuf::from("/tmp/effective.runtime.json");
+        runtime.filter_config_source_path = Some(PathBuf::from("/tmp/source.authoring.json"));
+
+        let request = super::WorkerAnalyzeRequest {
+            request_id: "test".to_string(),
+            request_type: "analyze",
+            job_id: "test".to_string(),
+            db_path: "/tmp/db.sqlite3".to_string(),
+            filter_config_path: runtime.filter_config_path.display().to_string(),
+            annotation_csv_path: runtime.annotation_csv_path.display().to_string(),
+            limit_rows: None,
+            force_reload: false,
+        };
+
+        assert_eq!(request.filter_config_path, "/tmp/effective.runtime.json");
+    }
+
+    #[test]
+    fn worker_runtime_fingerprint_ignores_source_and_effective_path() {
+        let overrides = AnalysisRuntimeOverrides::default();
+        let mut runtime_a = build_runtime_config(&overrides).unwrap();
+        runtime_a.filter_config_path = PathBuf::from("/tmp/effective-a.runtime.json");
+        runtime_a.filter_config_source_path = Some(PathBuf::from("/tmp/source-a.authoring.json"));
+
+        let mut runtime_b = build_runtime_config(&overrides).unwrap();
+        runtime_b.filter_config_path = PathBuf::from("/tmp/effective-b.runtime.json");
+        runtime_b.filter_config_source_path = Some(PathBuf::from("/tmp/source-b.authoring.json"));
+
+        let fingerprint_a = WorkerRuntimeFingerprint::from_runtime(&runtime_a);
+        let fingerprint_b = WorkerRuntimeFingerprint::from_runtime(&runtime_b);
+
+        assert_eq!(fingerprint_a, fingerprint_b);
     }
 }
 

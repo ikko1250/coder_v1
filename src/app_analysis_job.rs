@@ -13,6 +13,8 @@ use crate::analysis_runner::{
 use crate::analysis_session_cache::{
     build_session_cache_key, AnalysisResultSnapshot, AnalysisSessionCacheKey,
 };
+use crate::condition_authoring_bridge::compile_authoring_to_runtime;
+use crate::condition_config_format::{detect_condition_config_format, ConditionConfigFormat};
 use crate::model::{AnalysisRecord, AnalysisUnit};
 use crate::viewer_core::{ViewerCoreCloseInput, ViewerCoreMessage};
 use crate::viewer_export::write_visible_records_csv;
@@ -91,6 +93,8 @@ pub(super) fn start_analysis_job_with_mode(
         .runtime
         .clone()
         .ok_or_else(|| "Python 実行環境を解決できません".to_string())?;
+    let prepared_runtime = prepare_runtime_for_analysis(runtime)?;
+    let runtime = prepared_runtime.runtime;
 
     if mode == AnalysisStartMode::Normal {
         let snapshot_hit = app
@@ -117,7 +121,7 @@ pub(super) fn start_analysis_job_with_mode(
         force_reload_db_frames,
     });
 
-    app.analysis_runtime_state.last_warnings.clear();
+    app.analysis_runtime_state.last_warnings = prepared_runtime.authoring_warnings;
     app.analysis_runtime_state.warning_window_open = false;
     app.analysis_runtime_state.current_job = Some(RunningAnalysisJob { receiver });
     app.analysis_runtime_state.status = AnalysisJobStatus::RunningAnalysis {
@@ -126,6 +130,68 @@ pub(super) fn start_analysis_job_with_mode(
     app.core.set_expected_job_id(job_id.clone());
     app.logger.info(&format!("analysis job started: {job_id}"));
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedAnalysisRuntime {
+    runtime: AnalysisRuntimeConfig,
+    authoring_warnings: Vec<AnalysisWarningMessage>,
+}
+
+fn compiled_conditions_output_dir(runtime: &AnalysisRuntimeConfig) -> PathBuf {
+    runtime
+        .project_root
+        .join("runtime")
+        .join("compiled-conditions")
+}
+
+fn prepare_runtime_for_analysis(
+    mut runtime: AnalysisRuntimeConfig,
+) -> Result<PreparedAnalysisRuntime, String> {
+    match detect_condition_config_format(&runtime.filter_config_path)? {
+        ConditionConfigFormat::Runtime => Ok(PreparedAnalysisRuntime {
+            runtime,
+            authoring_warnings: Vec::new(),
+        }),
+        ConditionConfigFormat::AuthoringV1 => {
+            let source_path = runtime.filter_config_path.clone();
+            let output_dir = compiled_conditions_output_dir(&runtime);
+            let compile_result = compile_authoring_to_runtime(&runtime, &source_path, &output_dir)?;
+            if compile_result.has_errors() {
+                let summary = compile_result
+                    .issues
+                    .iter()
+                    .filter(|issue| issue.is_error())
+                    .map(|issue| issue.to_analysis_warning_message().message)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(if summary.trim().is_empty() {
+                    "authoring JSON のコンパイル中にエラーが発生しました。".to_string()
+                } else {
+                    format!("authoring JSON のコンパイル中にエラーが発生しました: {summary}")
+                });
+            }
+            let authoring_warnings = compile_result
+                .issues
+                .iter()
+                .map(|issue| issue.to_analysis_warning_message())
+                .collect();
+            runtime.filter_config_path = compile_result.runtime_json_path;
+            runtime.filter_config_source_path = Some(source_path);
+            Ok(PreparedAnalysisRuntime {
+                runtime,
+                authoring_warnings,
+            })
+        }
+        ConditionConfigFormat::UnsupportedYaml => Err(format!(
+            "authoring condition YAML is not supported in MVP: {}",
+            runtime.filter_config_path.display()
+        )),
+        ConditionConfigFormat::Invalid(message) => Err(format!(
+            "condition config format is invalid ({}): {message}",
+            runtime.filter_config_path.display()
+        )),
+    }
 }
 
 fn resolved_annotation_csv_path_for_runtime(app: &App) -> PathBuf {
@@ -148,7 +214,10 @@ fn current_session_cache_key(app: &App, runtime: &AnalysisRuntimeConfig) -> Opti
 }
 
 fn build_status_summary_from_meta(meta: &AnalysisMeta) -> String {
-    let warning_count = meta.warning_messages.len();
+    build_status_summary_with_warnings(meta, meta.warning_messages.len())
+}
+
+fn build_status_summary_with_warnings(meta: &AnalysisMeta, warning_count: usize) -> String {
     let mut summary = format!(
         "{}{}抽出 / {:.2} 秒",
         meta.selected_unit_count(),
@@ -161,6 +230,17 @@ fn build_status_summary_from_meta(meta: &AnalysisMeta) -> String {
     summary
 }
 
+/// compile warnings と worker warnings を併合する。
+/// compile warnings が上書きで消えないよう、worker warnings を末尾に追加する。
+fn merge_warnings(
+    compile_warnings: Vec<AnalysisWarningMessage>,
+    worker_warnings: Vec<AnalysisWarningMessage>,
+) -> Vec<AnalysisWarningMessage> {
+    let mut merged = compile_warnings;
+    merged.extend(worker_warnings);
+    merged
+}
+
 fn analysis_result_snapshot_from_success(app: &App, success: &AnalysisJobSuccess) -> AnalysisResultSnapshot {
     let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
     AnalysisResultSnapshot {
@@ -169,6 +249,11 @@ fn analysis_result_snapshot_from_success(app: &App, success: &AnalysisJobSuccess
         last_warnings: success.meta.warning_messages.clone(),
         db_path: PathBuf::from(&success.meta.db_path),
         filter_config_path: PathBuf::from(&success.meta.filter_config_path),
+        filter_config_source_path: app
+            .analysis_runtime_state
+            .runtime
+            .as_ref()
+            .and_then(|r| r.filter_config_source_path.clone()),
         annotation_csv_path,
         status_summary: build_status_summary_from_meta(&success.meta),
     }
@@ -191,6 +276,7 @@ fn apply_session_cache_hit(app: &mut App, snapshot: &AnalysisResultSnapshot) -> 
     app.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
         db_path: snapshot.db_path.clone(),
         filter_config_path: snapshot.filter_config_path.clone(),
+        filter_config_source_path: snapshot.filter_config_source_path.clone(),
         annotation_csv_path: snapshot.annotation_csv_path.clone(),
     });
     let summary = format!("前回結果を再表示（{}）", snapshot.status_summary);
@@ -649,20 +735,27 @@ fn poll_builder_job(app: &mut App) -> AnalysisJobPollOutput {
 fn handle_analysis_success(app: &mut App, success: AnalysisJobSuccess) -> ViewerCoreMessage {
     try_store_session_analysis_cache(app, &success);
 
-    let warnings = success.meta.warning_messages.clone();
-    let source_label = format!("分析結果: {}", success.meta.job_id);
-    let summary = build_status_summary_from_meta(&success.meta);
-    app.analysis_runtime_state.last_warnings = warnings;
+    let worker_warnings = success.meta.warning_messages.clone();
+    let compile_warnings = app.analysis_runtime_state.last_warnings.clone();
+    let merged_warnings = merge_warnings(compile_warnings, worker_warnings);
+    let summary = build_status_summary_with_warnings(&success.meta, merged_warnings.len());
+    app.analysis_runtime_state.last_warnings = merged_warnings;
     app.analysis_runtime_state.warning_window_open = false;
     let annotation_csv_path = resolved_annotation_csv_path_for_runtime(app);
     app.analysis_runtime_state.last_export_context = Some(AnalysisExportContext {
         db_path: PathBuf::from(&success.meta.db_path),
         filter_config_path: PathBuf::from(&success.meta.filter_config_path),
+        filter_config_source_path: app
+            .analysis_runtime_state
+            .runtime
+            .as_ref()
+            .and_then(|r| r.filter_config_source_path.clone()),
         annotation_csv_path,
     });
     app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisSucceeded { summary };
     app.logger
         .info(&format!("analysis job succeeded: {}", success.meta.job_id));
+    let source_label = format!("分析結果: {}", success.meta.job_id);
     ViewerCoreMessage::ReplaceRecords {
         records: success.records,
         source_label,
@@ -707,15 +800,17 @@ fn handle_build_failure(app: &mut App, failure: AnalysisJobFailure) {
 }
 
 fn handle_analysis_failure(app: &mut App, failure: AnalysisJobFailure) {
-    let warnings = failure
+    let worker_warnings = failure
         .meta
         .as_ref()
         .map(|meta| meta.warning_messages.clone())
         .unwrap_or_default();
+    let compile_warnings = app.analysis_runtime_state.last_warnings.clone();
+    let merged_warnings = merge_warnings(compile_warnings, worker_warnings);
     let summary = failure.message.clone();
     app.analysis_runtime_state.status = AnalysisJobStatus::AnalysisFailed { summary };
     app.logger.error("analysis job failed");
-    app.analysis_runtime_state.last_warnings = warnings;
+    app.analysis_runtime_state.last_warnings = merged_warnings;
     app.analysis_runtime_state.warning_window_open = false;
 
     let mut error_message = failure.message;
@@ -918,5 +1013,388 @@ pub(super) fn guard_root_close_with_dirty_editor(app: &mut App, ctx: &egui::Cont
     );
     if app.condition_editor_state.window_open {
         app.focus_condition_editor_viewport(ctx);
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "csv_viewer_app_analysis_{}_{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn python_command_for_test() -> OsString {
+        std::env::var_os("PYTHON").unwrap_or_else(|| OsString::from("python"))
+    }
+
+    fn write_fake_authoring_cli(project_root: &Path, body: &str) {
+        let backend_dir = project_root.join("analysis_backend");
+        fs::create_dir_all(&backend_dir).unwrap();
+        fs::write(backend_dir.join("__init__.py"), "").unwrap();
+        fs::write(backend_dir.join("condition_authoring_cli.py"), body).unwrap();
+    }
+
+    fn runtime_for_test(project_root: &Path, filter_config_path: PathBuf) -> AnalysisRuntimeConfig {
+        AnalysisRuntimeConfig {
+            python_command: python_command_for_test(),
+            python_args: vec![],
+            python_label: "python-test".to_string(),
+            project_root: project_root.to_path_buf(),
+            script_path: project_root.join("run-analysis.py"),
+            filter_config_path,
+            filter_config_source_path: None,
+            annotation_csv_path: project_root.join("asset/manual-annotations.csv"),
+            jobs_root: project_root.join("runtime/jobs"),
+        }
+    }
+
+    #[test]
+    fn prepare_runtime_keeps_runtime_json_effective_path() {
+        let root = temp_root("runtime_json");
+        let config_path = root.join("conditions.json");
+        fs::write(&config_path, r#"{"cooccurrence_conditions": []}"#).unwrap();
+        let runtime = runtime_for_test(&root, config_path.clone());
+
+        let prepared = prepare_runtime_for_analysis(runtime).unwrap();
+
+        assert_eq!(prepared.runtime.filter_config_path, config_path);
+        assert_eq!(prepared.runtime.filter_config_source_path, None);
+        assert!(prepared.authoring_warnings.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepare_runtime_compiles_authoring_json_to_effective_runtime_path() {
+        let root = temp_root("authoring_success");
+        write_fake_authoring_cli(
+            &root,
+            r#"
+import argparse, json
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+parser.add_argument('--issues-json', required=True)
+args = parser.parse_args()
+with open(args.output, 'w', encoding='utf-8') as f:
+    json.dump({'cooccurrence_conditions': [{'condition_id': 'compiled'}]}, f)
+with open(args.issues_json, 'w', encoding='utf-8') as f:
+    json.dump([{'code': 'label_ignored', 'severity': 'warning', 'scope': 'rule', 'message': 'warning only'}], f)
+"#,
+        );
+        let source_path = root.join("authoring.json");
+        fs::write(&source_path, r#"{"format":"condition-authoring/v1","rules":[]}"#).unwrap();
+        let runtime = runtime_for_test(&root, source_path.clone());
+
+        let prepared = prepare_runtime_for_analysis(runtime).unwrap();
+
+        assert_eq!(prepared.runtime.filter_config_source_path, Some(source_path));
+        assert!(prepared
+            .runtime
+            .filter_config_path
+            .starts_with(root.join("runtime/compiled-conditions")));
+        assert!(prepared.runtime.filter_config_path.is_file());
+        assert_eq!(prepared.authoring_warnings.len(), 1);
+        assert_eq!(prepared.authoring_warnings[0].code, "label_ignored");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepare_runtime_blocks_authoring_error_issue() {
+        let root = temp_root("authoring_error_issue");
+        write_fake_authoring_cli(
+            &root,
+            r#"
+import argparse, json
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+parser.add_argument('--issues-json', required=True)
+args = parser.parse_args()
+with open(args.output, 'w', encoding='utf-8') as f:
+    json.dump({'cooccurrence_conditions': []}, f)
+with open(args.issues_json, 'w', encoding='utf-8') as f:
+    json.dump([{'code': 'invalid_rule', 'severity': 'error', 'scope': 'rule', 'message': 'bad rule'}], f)
+"#,
+        );
+        let source_path = root.join("authoring.json");
+        fs::write(&source_path, r#"{"format":"condition-authoring/v1","rules":[]}"#).unwrap();
+        let runtime = runtime_for_test(&root, source_path);
+
+        let error = prepare_runtime_for_analysis(runtime).unwrap_err();
+
+        assert!(error.contains("コンパイル中にエラー"), "{error}");
+        assert!(error.contains("bad rule"), "{error}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepare_runtime_blocks_authoring_cli_nonzero() {
+        let root = temp_root("authoring_nonzero");
+        write_fake_authoring_cli(
+            &root,
+            r#"
+import sys
+print('compiler failed loudly', file=sys.stderr)
+sys.exit(7)
+"#,
+        );
+        let source_path = root.join("authoring.json");
+        fs::write(&source_path, r#"{"format":"condition-authoring/v1","rules":[]}"#).unwrap();
+        let runtime = runtime_for_test(&root, source_path);
+
+        let error = prepare_runtime_for_analysis(runtime).unwrap_err();
+
+        assert!(error.contains("exited with code 7"), "{error}");
+        assert!(error.contains("compiler failed loudly"), "{error}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepared_authoring_runtime_cache_key_uses_generated_runtime_content() {
+        let root = temp_root("authoring_cache_key");
+        write_fake_authoring_cli(
+            &root,
+            r#"
+import argparse, json
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+parser.add_argument('--issues-json', required=True)
+args = parser.parse_args()
+with open(args.input, 'r', encoding='utf-8') as f:
+    source = json.load(f)
+compiled_id = source.get('compiled_id', 'none')
+with open(args.output, 'w', encoding='utf-8') as f:
+    json.dump({'cooccurrence_conditions': [{'condition_id': compiled_id}]}, f)
+with open(args.issues_json, 'w', encoding='utf-8') as f:
+    json.dump([], f)
+"#,
+        );
+        let db_path = root.join("analysis.db");
+        let annotation_path = root.join("annotations.csv");
+        fs::write(&db_path, "db").unwrap();
+        fs::write(&annotation_path, "annotation").unwrap();
+        let source_a = root.join("authoring-a.json");
+        let source_b = root.join("authoring-b.json");
+        fs::write(&source_a, r#"{"format":"condition-authoring/v1","compiled_id":"a"}"#).unwrap();
+        fs::write(&source_b, r#"{"format":"condition-authoring/v1","compiled_id":"b"}"#).unwrap();
+
+        let mut runtime_a = runtime_for_test(&root, source_a);
+        runtime_a.annotation_csv_path = annotation_path.clone();
+        let mut runtime_b = runtime_for_test(&root, source_b);
+        runtime_b.annotation_csv_path = annotation_path.clone();
+        let prepared_a = prepare_runtime_for_analysis(runtime_a).unwrap();
+        let prepared_b = prepare_runtime_for_analysis(runtime_b).unwrap();
+
+        let key_a = build_session_cache_key(
+            &db_path,
+            &prepared_a.runtime.filter_config_path,
+            &annotation_path,
+            &prepared_a.runtime,
+        )
+        .unwrap();
+        let key_b = build_session_cache_key(
+            &db_path,
+            &prepared_b.runtime.filter_config_path,
+            &annotation_path,
+            &prepared_b.runtime,
+        )
+        .unwrap();
+
+        assert_ne!(key_a.filter_config_sha256, key_b.filter_config_sha256);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ---- Task 7: warning merge tests ----
+
+    fn compile_warning() -> AnalysisWarningMessage {
+        AnalysisWarningMessage {
+            code: "authoring_unknown_field".to_string(),
+            message: "unknown field ignored".to_string(),
+            severity: Some("warning".to_string()),
+            scope: Some("authoring_compiler".to_string()),
+            condition_id: None,
+            field_name: Some("extra".to_string()),
+            unit_id: None,
+            query_name: None,
+            db_path: None,
+            requested_mode: None,
+            used_mode: None,
+            combination_count: None,
+            combination_cap: None,
+            safety_limit: None,
+        }
+    }
+
+    fn worker_warning() -> AnalysisWarningMessage {
+        AnalysisWarningMessage {
+            code: "distance_match_fallback".to_string(),
+            message: "mode fallback".to_string(),
+            severity: Some("warning".to_string()),
+            scope: Some("worker".to_string()),
+            condition_id: None,
+            field_name: None,
+            unit_id: None,
+            query_name: None,
+            db_path: None,
+            requested_mode: Some("exact".to_string()),
+            used_mode: Some("approx".to_string()),
+            combination_count: None,
+            combination_cap: None,
+            safety_limit: None,
+        }
+    }
+
+
+    #[test]
+    fn analysis_result_snapshot_preserves_filter_config_source_path() {
+        let mut app = App::new(None);
+        let source_path = PathBuf::from("/tmp/source.authoring.json");
+        let effective_path = PathBuf::from("/tmp/effective.runtime.json");
+        let mut runtime = runtime_for_test(&PathBuf::from("/tmp/project"), effective_path.clone());
+        runtime.filter_config_source_path = Some(source_path.clone());
+        app.analysis_runtime_state.runtime = Some(runtime);
+        let success = AnalysisJobSuccess {
+            meta: AnalysisMeta {
+                job_id: "test".to_string(),
+                status: "succeeded".to_string(),
+                started_at: "0".to_string(),
+                finished_at: "1".to_string(),
+                duration_seconds: 1.0,
+                db_path: "/tmp/db.sqlite3".to_string(),
+                filter_config_path: effective_path.display().to_string(),
+                output_csv_path: "".to_string(),
+                analysis_unit: crate::model::AnalysisUnit::Paragraph,
+                target_paragraph_count: 0,
+                selected_paragraph_count: 0,
+                selected_sentence_count: 0,
+                warning_messages: Vec::new(),
+                error_summary: "".to_string(),
+            },
+            records: Vec::new(),
+        };
+
+        let snapshot = analysis_result_snapshot_from_success(&app, &success);
+
+        assert_eq!(snapshot.filter_config_path, effective_path);
+        assert_eq!(snapshot.filter_config_source_path, Some(source_path));
+    }
+
+    #[test]
+    fn apply_session_cache_hit_restores_filter_config_source_path() {
+        let mut app = App::new(None);
+        let source_path = PathBuf::from("/tmp/source.authoring.json");
+        let effective_path = PathBuf::from("/tmp/effective.runtime.json");
+        let snapshot = AnalysisResultSnapshot {
+            records: Vec::new(),
+            source_label: "cached".to_string(),
+            last_warnings: Vec::new(),
+            db_path: PathBuf::from("/tmp/db.sqlite3"),
+            filter_config_path: effective_path.clone(),
+            filter_config_source_path: Some(source_path.clone()),
+            annotation_csv_path: PathBuf::from("/tmp/annotations.csv"),
+            status_summary: "分析完了".to_string(),
+        };
+
+        apply_session_cache_hit(&mut app, &snapshot).unwrap();
+
+        let export_context = app.analysis_runtime_state.last_export_context.unwrap();
+        assert_eq!(export_context.filter_config_path, effective_path);
+        assert_eq!(export_context.filter_config_source_path, Some(source_path.clone()));
+        assert_eq!(export_context.display_filter_config_path(), source_path.as_path());
+    }
+
+    #[test]
+    fn merge_compile_and_worker_warnings_both_present() {
+        let compile = vec![compile_warning()];
+        let worker = vec![worker_warning()];
+        let merged = merge_warnings(compile, worker);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].code, "authoring_unknown_field");
+        assert_eq!(merged[1].code, "distance_match_fallback");
+    }
+
+    #[test]
+    fn merge_compile_warnings_only_preserved() {
+        let compile = vec![compile_warning()];
+        let merged = merge_warnings(compile, vec![]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].code, "authoring_unknown_field");
+    }
+
+    #[test]
+    fn merge_worker_warnings_only_when_no_compile_warnings() {
+        let worker = vec![worker_warning()];
+        let merged = merge_warnings(vec![], worker);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].code, "distance_match_fallback");
+    }
+
+    #[test]
+    fn merge_warnings_no_duplication_in_single_run() {
+        let compile = vec![compile_warning()];
+        let worker = vec![worker_warning()];
+        let merged = merge_warnings(compile.clone(), worker);
+        let compile_count = merged
+            .iter()
+            .filter(|w| w.code == "authoring_unknown_field")
+            .count();
+        assert_eq!(compile_count, 1, "compile warning should appear exactly once");
+    }
+
+    #[test]
+    fn build_status_summary_reflects_total_warning_count() {
+        let meta = AnalysisMeta {
+            job_id: "test".to_string(),
+            status: "succeeded".to_string(),
+            started_at: "0".to_string(),
+            finished_at: "1".to_string(),
+            duration_seconds: 1.5,
+            db_path: "db".to_string(),
+            filter_config_path: "cfg".to_string(),
+            output_csv_path: "".to_string(),
+            analysis_unit: crate::model::AnalysisUnit::Paragraph,
+            target_paragraph_count: 10,
+            selected_paragraph_count: 5,
+            selected_sentence_count: 0,
+            warning_messages: vec![worker_warning()],
+            error_summary: "".to_string(),
+        };
+        let summary = build_status_summary_with_warnings(&meta, 3);
+        assert!(summary.contains("警告 3 件"), "summary should show total warnings: {}", summary);
+    }
+
+    #[test]
+    fn build_status_summary_zero_warnings_omits_warning_text() {
+        let meta = AnalysisMeta {
+            job_id: "test".to_string(),
+            status: "succeeded".to_string(),
+            started_at: "0".to_string(),
+            finished_at: "1".to_string(),
+            duration_seconds: 1.5,
+            db_path: "db".to_string(),
+            filter_config_path: "cfg".to_string(),
+            output_csv_path: "".to_string(),
+            analysis_unit: crate::model::AnalysisUnit::Paragraph,
+            target_paragraph_count: 10,
+            selected_paragraph_count: 5,
+            selected_sentence_count: 0,
+            warning_messages: vec![],
+            error_summary: "".to_string(),
+        };
+        let summary = build_status_summary_with_warnings(&meta, 0);
+        assert!(!summary.contains("警告"), "summary should not mention warnings: {}", summary);
     }
 }

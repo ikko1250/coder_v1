@@ -50,7 +50,7 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
         .analysis_runtime_state
         .runtime
         .as_ref()
-        .map(|runtime| runtime.filter_config_path.display().to_string())
+        .map(|runtime| crate::app::display_filter_config_path_for_runtime(runtime).display().to_string())
         .unwrap_or_else(|| "-".to_string());
     let resolved_annotation_label = app
         .resolved_annotation_csv_path()
@@ -164,6 +164,41 @@ pub(super) fn draw_analysis_settings_window(app: &mut App, ctx: &egui::Context) 
     }
     if needs_repaint {
         ctx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::App;
+    use std::io::Write;
+
+    fn write_temp_json(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "csv_viewer_settings_test_{}_{}.json",
+            name,
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn authoring_json_selection_accepted_for_analysis_settings() {
+        let json = r#"{"format": "condition-authoring/v1", "conditions": []}"#;
+        let path = write_temp_json("authoring_settings", json);
+
+        let mut app = App::new(None);
+        // 分析設定で authoring JSON を選択した場合、override として受け入れられる
+        app.analysis_request_state.filter_config_path_override = Some(path.clone());
+
+        // override が設定されていることを確認
+        assert_eq!(
+            app.analysis_request_state.filter_config_path_override,
+            Some(path.clone())
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }
 

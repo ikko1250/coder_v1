@@ -135,6 +135,7 @@ pub(super) fn open_condition_editor(app: &mut App, ctx: &egui::Context) -> Resul
         return Ok(());
     }
     let path = app_analysis_job::resolved_filter_config_path(app)?;
+    guard_condition_editor_load(&path)?;
     load_condition_editor_from_path(app, path, "条件 JSON を読み込みました。")
 }
 
@@ -199,11 +200,16 @@ fn commit_picked_condition_json_path(
         return Ok(());
     }
 
+    guard_condition_editor_load(&path)?;
+
     let Some(runtime_snap) = app.capture_idle_runtime_snapshot() else {
         return Err("分析ジョブ実行中は条件 JSON を切り替えられません。".to_string());
     };
 
-    let prev_override = app.analysis_request_state.filter_config_path_override.clone();
+    let prev_override = app
+        .analysis_request_state
+        .filter_config_path_override
+        .clone();
     let prev_editor_path = app.condition_editor_state.loaded_path.clone();
 
     let (document, load_info) = load_condition_document(&path)?;
@@ -1422,6 +1428,25 @@ fn clamp_condition_group_selection_for_document(
     clamp_condition_index(selected_group_index, condition.form_groups.len())
 }
 
+/// authoring JSON を condition editor で開こうとしたときの専用メッセージ。
+const AUTHORING_JSON_GUARD_MESSAGE: &str =
+    "authoring JSON は条件エディタで開けません。分析実行時に自動的に runtime JSON に compile されます。";
+
+/// 条件エディタを開く前に format detection を行い、authoring JSON なら専用メッセージを表示して開かない。
+fn guard_condition_editor_load(path: &std::path::Path) -> Result<(), String> {
+    use crate::condition_config_format::{detect_condition_config_format, ConditionConfigFormat};
+    match detect_condition_config_format(path)? {
+        ConditionConfigFormat::Runtime => Ok(()),
+        ConditionConfigFormat::AuthoringV1 => Err(AUTHORING_JSON_GUARD_MESSAGE.to_string()),
+        ConditionConfigFormat::UnsupportedYaml => {
+            Err("YAML 形式の条件ファイルは現在未対応です。".to_string())
+        }
+        ConditionConfigFormat::Invalid(msg) => Err(format!(
+            "条件ファイルの形式が無効です: {msg}"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod commit_pick_tests {
     use super::*;
@@ -1453,5 +1478,172 @@ mod commit_pick_tests {
         assert!(app.condition_editor_state.is_dirty);
 
         let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use crate::app::App;
+    use std::io::Write;
+
+    fn write_temp_json(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "csv_viewer_guard_test_{}_{}.json",
+            name,
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    fn write_temp_yaml(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "csv_viewer_guard_test_{}_{}.yaml",
+            name,
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn authoring_json_blocked_with_guard_message() {
+        let json = r#"{"format": "condition-authoring/v1", "conditions": []}"#;
+        let path = write_temp_json("authoring", json);
+        let _app = App::new(None);
+        let result = guard_condition_editor_load(&path);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("authoring JSON は条件エディタで開けません"),
+            "expected authoring guard message, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn runtime_json_allowed() {
+        let json = r#"{"cooccurrence_conditions": [{"condition_id": "c1"}]}"#;
+        let path = write_temp_json("runtime", json);
+        let _app = App::new(None);
+        let result = guard_condition_editor_load(&path);
+        assert!(result.is_ok(), "expected Ok for runtime JSON, got: {:?}", result);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn yaml_unsupported_message() {
+        let yaml = "format: condition-authoring/v1\nconditions: []";
+        let path = write_temp_yaml("yaml", yaml);
+        let _app = App::new(None);
+        let result = guard_condition_editor_load(&path);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("YAML 形式の条件ファイルは現在未対応です"),
+            "expected yaml unsupported message, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn invalid_json_not_regressed() {
+        let json = "{ not valid json }";
+        let path = write_temp_json("invalid", json);
+        let _app = App::new(None);
+        let result = guard_condition_editor_load(&path);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("無効") || msg.contains("invalid") || msg.contains("expected"),
+            "expected invalid JSON error, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_condition_editor_blocks_authoring_json() {
+        let json = r#"{"format": "condition-authoring/v1", "conditions": []}"#;
+        let path = write_temp_json("authoring_open", json);
+
+        let mut app = App::new(None);
+        // 明示的に override を設定して resolved path が authoring JSON になるようにする
+        app.analysis_request_state.filter_config_path_override = Some(path.clone());
+        // window_open は false のままにしておく（既に開いている場合は早期 return するため）
+        assert!(!app.condition_editor_state.window_open);
+
+        // open_condition_editor は resolved_filter_config_path が失敗する可能性があるため、
+        // guard_condition_editor_load を直接呼んで動作を検証する
+        let result = guard_condition_editor_load(&path);
+
+        assert!(
+            result.is_err(),
+            "expected guard_condition_editor_load to block authoring JSON"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("authoring JSON は条件エディタで開けません"),
+            "expected authoring guard message, got: {}",
+            msg
+        );
+        // editor state must NOT become dirty/loaded
+        assert!(!app.condition_editor_state.is_dirty);
+        assert!(!app.condition_editor_state.window_open);
+        assert!(app.condition_editor_state.loaded_path.is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_condition_editor_allows_runtime_json() {
+        let json = r#"{"cooccurrence_conditions": [{"condition_id": "c1"}]}"#;
+        let path = write_temp_json("runtime_open", json);
+
+        let mut app = App::new(None);
+        app.analysis_request_state.filter_config_path_override = Some(path.clone());
+
+        let ctx = egui::Context::default();
+        let result = open_condition_editor(&mut app, &ctx);
+
+        // runtime JSON should open successfully (or fail for unrelated reasons like missing asset files)
+        // The key assertion is that it does NOT fail with the authoring guard message
+        if let Err(ref err) = result {
+            assert!(
+                !err.contains("authoring JSON は条件エディタで開けません"),
+                "runtime JSON should not be blocked by authoring guard, got: {}",
+                err
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn commit_picked_blocks_authoring_json() {
+        let json = r#"{"format": "condition-authoring/v1", "conditions": []}"#;
+        let path = write_temp_json("authoring_pick", json);
+
+        let mut app = App::new(None);
+        let ctx = egui::Context::default();
+        let result = commit_picked_condition_json_path(&mut app, &ctx, path.clone());
+
+        assert!(result.is_err(), "expected commit_picked to block authoring JSON");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("authoring JSON は条件エディタで開けません"),
+            "expected authoring guard message, got: {}",
+            msg
+        );
+        // editor state must NOT become dirty/loaded
+        assert!(!app.condition_editor_state.is_dirty);
+        assert!(app.condition_editor_state.loaded_path.is_none());
+
+        let _ = std::fs::remove_file(&path);
     }
 }

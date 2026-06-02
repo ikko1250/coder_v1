@@ -184,7 +184,32 @@ struct RunningAnalysisJob {
 struct AnalysisExportContext {
     db_path: PathBuf,
     filter_config_path: PathBuf,
+    filter_config_source_path: Option<PathBuf>,
     annotation_csv_path: PathBuf,
+}
+
+impl AnalysisExportContext {
+    /// UI 表示・ログ用: source path があれば優先、なければ effective path
+    fn display_filter_config_path(&self) -> std::borrow::Cow<'_, std::path::Path> {
+        std::borrow::Cow::Borrowed(display_filter_config_path_for_runtime_paths(
+            &self.filter_config_path,
+            self.filter_config_source_path.as_deref(),
+        ))
+    }
+}
+
+pub(crate) fn display_filter_config_path_for_runtime(runtime: &AnalysisRuntimeConfig) -> &std::path::Path {
+    display_filter_config_path_for_runtime_paths(
+        &runtime.filter_config_path,
+        runtime.filter_config_source_path.as_deref(),
+    )
+}
+
+fn display_filter_config_path_for_runtime_paths<'a>(
+    effective_path: &'a std::path::Path,
+    source_path: Option<&'a std::path::Path>,
+) -> &'a std::path::Path {
+    source_path.unwrap_or(effective_path)
 }
 
 #[derive(Clone)]
@@ -1177,4 +1202,84 @@ fn tree_annotation_value(record: &AnalysisRecord) -> Cow<'_, str> {
 
 fn tree_annotated_token_count_value(record: &AnalysisRecord) -> Cow<'_, str> {
     Cow::Borrowed(&record.annotated_token_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnalysisExportContext;
+    use std::path::PathBuf;
+
+    #[test]
+    fn runtime_display_prefers_source_path() {
+        use crate::analysis_runner::AnalysisRuntimeConfig;
+        use std::ffi::OsString;
+
+        let runtime = AnalysisRuntimeConfig {
+            python_command: OsString::from("python"),
+            python_args: vec![],
+            python_label: "python".to_string(),
+            project_root: PathBuf::from("/tmp/project"),
+            script_path: PathBuf::from("/tmp/project/run-analysis.py"),
+            filter_config_path: PathBuf::from("/tmp/effective.runtime.json"),
+            filter_config_source_path: Some(PathBuf::from("/tmp/source.authoring.json")),
+            annotation_csv_path: PathBuf::from("/tmp/annotations.csv"),
+            jobs_root: PathBuf::from("/tmp/project/runtime/jobs"),
+        };
+
+        assert_eq!(
+            super::display_filter_config_path_for_runtime(&runtime),
+            PathBuf::from("/tmp/source.authoring.json").as_path()
+        );
+    }
+
+    #[test]
+    fn runtime_display_falls_back_to_effective_path() {
+        use crate::analysis_runner::AnalysisRuntimeConfig;
+        use std::ffi::OsString;
+
+        let runtime = AnalysisRuntimeConfig {
+            python_command: OsString::from("python"),
+            python_args: vec![],
+            python_label: "python".to_string(),
+            project_root: PathBuf::from("/tmp/project"),
+            script_path: PathBuf::from("/tmp/project/run-analysis.py"),
+            filter_config_path: PathBuf::from("/tmp/effective.runtime.json"),
+            filter_config_source_path: None,
+            annotation_csv_path: PathBuf::from("/tmp/annotations.csv"),
+            jobs_root: PathBuf::from("/tmp/project/runtime/jobs"),
+        };
+
+        assert_eq!(
+            super::display_filter_config_path_for_runtime(&runtime),
+            PathBuf::from("/tmp/effective.runtime.json").as_path()
+        );
+    }
+
+    #[test]
+    fn export_context_display_prefers_source_path() {
+        let ctx = AnalysisExportContext {
+            db_path: PathBuf::from("/tmp/db.sqlite3"),
+            filter_config_path: PathBuf::from("/tmp/effective.runtime.json"),
+            filter_config_source_path: Some(PathBuf::from("/tmp/source.authoring.json")),
+            annotation_csv_path: PathBuf::from("/tmp/annotations.csv"),
+        };
+        assert_eq!(
+            ctx.display_filter_config_path(),
+            PathBuf::from("/tmp/source.authoring.json").as_path()
+        );
+    }
+
+    #[test]
+    fn export_context_display_falls_back_to_effective_path() {
+        let ctx = AnalysisExportContext {
+            db_path: PathBuf::from("/tmp/db.sqlite3"),
+            filter_config_path: PathBuf::from("/tmp/effective.runtime.json"),
+            filter_config_source_path: None,
+            annotation_csv_path: PathBuf::from("/tmp/annotations.csv"),
+        };
+        assert_eq!(
+            ctx.display_filter_config_path(),
+            PathBuf::from("/tmp/effective.runtime.json").as_path()
+        );
+    }
 }

@@ -7,6 +7,8 @@ mod analysis_session_cache;
 mod app;
 mod app_host;
 mod app_logger;
+mod condition_authoring_bridge;
+mod condition_config_format;
 mod condition_editor;
 mod condition_editor_filter;
 mod condition_editor_view;

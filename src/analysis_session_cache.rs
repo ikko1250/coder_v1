@@ -54,6 +54,7 @@ pub(crate) struct AnalysisResultSnapshot {
     pub(crate) last_warnings: Vec<AnalysisWarningMessage>,
     pub(crate) db_path: PathBuf,
     pub(crate) filter_config_path: PathBuf,
+    pub(crate) filter_config_source_path: Option<PathBuf>,
     pub(crate) annotation_csv_path: PathBuf,
     /// `AnalysisJobStatus::Succeeded` 用の一行（キャッシュヒット時は接頭辞を付けて表示する）。
     pub(crate) status_summary: String,

@@ -58,7 +58,7 @@ pub(super) fn draw_toolbar(app: &mut App, ui: &mut Ui) {
                 .analysis_runtime_state
                 .runtime
                 .as_ref()
-                .map(|runtime| runtime.filter_config_path.display().to_string())
+                .map(|runtime| crate::app::display_filter_config_path_for_runtime(runtime).display().to_string())
                 .unwrap_or_else(|| "-".to_string());
             let annotation_label = app
                 .resolved_annotation_csv_path()
