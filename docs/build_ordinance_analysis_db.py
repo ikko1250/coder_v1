@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 ANALYSIS_DB_PATH = "data/ordinance_analysis.db"
 REPORT_PATH_SUFFIX = ".report.json"
@@ -17,10 +17,32 @@ FILE_NAME_PATTERN = re.compile(
     r"^(?:\d+_)?(?P<category1>[^_]+)_(?P<category2>[^_]+)$"
 )
 
-SENTENCE_END_CHARS = set("。．.!?！？")
+# Treat OCR/PDF-extracted halfwidth ideographic full stop as a sentence end
+# for boundary detection only. Do not normalize stored text.
+SENTENCE_END_CHARS = set("。｡．.!?！？")
 SENTENCE_CLOSING_CHARS = set("」』）)]】〉》\"'")
 OPENING_BRACKETS = {"(": ")", "（": "）", "「": "」", "『": "』", "【": "】", "［": "］", "〈": "〉", "《": "》"}
 CLOSING_BRACKETS = {right: left for left, right in OPENING_BRACKETS.items()}
+ASCII_QUOTE_CHARS = {"\"", "'"}
+OCR_COMPATIBLE_CLOSING_BRACKETS = {
+    ")": {"(", "（"},
+    "）": {"(", "（"},
+}
+ENUMERATION_BOUNDARY_PATTERN = re.compile(r"\s*\(\d+\)(?=\s|$)")
+CIRCLED_LEGAL_ITEM_NUMBERS = {
+    marker: number
+    for number, marker in enumerate(
+        "⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇",
+        start=1,
+    )
+}
+KATAKANA_LEGAL_ITEM_NUMBERS = {
+    marker: number
+    for number, marker in enumerate(
+        "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン",
+        start=1,
+    )
+}
 
 
 @dataclass
@@ -299,6 +321,14 @@ def is_table_rule_line(line: str) -> bool:
     return all(re.fullmatch(r":?-{2,}:?", cell) for cell in cells)
 
 
+def is_markdown_table_row_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or not contains_unescaped_pipe(stripped):
+        return False
+
+    return len(split_table_cells(stripped)) >= 2
+
+
 def split_table_row_and_trailing_text(line: str) -> Tuple[str, Optional[str]]:
     stripped = line.strip()
     if not stripped.startswith("|"):
@@ -459,10 +489,228 @@ def split_into_paragraphs(text: str, merge_table_lines: bool = False) -> List[st
     return [block.paragraph_text for block in build_paragraph_blocks(text, merge_table_lines=merge_table_lines)]
 
 
+def pop_matching_or_compatible_bracket(bracket_stack: List[str], closing_char: str) -> None:
+    expected_open = CLOSING_BRACKETS.get(closing_char)
+    compatible_opens = OCR_COMPATIBLE_CLOSING_BRACKETS.get(
+        closing_char,
+        {expected_open} if expected_open else set(),
+    )
+    compatible_opens = {open_char for open_char in compatible_opens if open_char}
+
+    if bracket_stack and bracket_stack[-1] in compatible_opens:
+        bracket_stack.pop()
+        return
+
+    for index in range(len(bracket_stack) - 1, -1, -1):
+        if bracket_stack[index] in compatible_opens:
+            del bracket_stack[index:]
+            return
+
+
+def preview_sentence_closing_chars(
+    text: str,
+    index: int,
+    bracket_stack: List[str],
+) -> Tuple[int, List[str]]:
+    """Return index after trailing closing chars and the stack after consuming them.
+
+    This is look-ahead only. The caller commits idx/buf/bracket_stack only if it
+    decides this sentence end should split.
+    """
+    preview_index = index
+    preview_stack = list(bracket_stack)
+    size = len(text)
+    while preview_index < size and text[preview_index] in SENTENCE_CLOSING_CHARS:
+        closing_char = text[preview_index]
+        if closing_char in CLOSING_BRACKETS:
+            pop_matching_or_compatible_bracket(preview_stack, closing_char)
+        preview_index += 1
+    return preview_index, preview_stack
+
+
+def is_enumeration_boundary_after(text: str, index: int) -> bool:
+    return ENUMERATION_BOUNDARY_PATTERN.match(text, index) is not None
+
+
+def is_escaped_at(text: str, index: int) -> bool:
+    backslash_count = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslash_count += 1
+        cursor -= 1
+    return backslash_count % 2 == 1
+
+
+def is_ascii_quote_delimiter(text: str, index: int) -> bool:
+    ch = text[index]
+    if ch not in ASCII_QUOTE_CHARS or is_escaped_at(text, index):
+        return False
+
+    if ch == "'":
+        previous_char = text[index - 1] if index > 0 else ""
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if previous_char.isalnum() and next_char.isalnum():
+            return False
+
+    return True
+
+
+def update_ascii_quote_stack(text: str, index: int, quote_stack: List[str]) -> None:
+    ch = text[index]
+    if not is_ascii_quote_delimiter(text, index):
+        return
+
+    if quote_stack and quote_stack[-1] == ch:
+        quote_stack.pop()
+        return
+    quote_stack.append(ch)
+
+
+def is_katakana_char(ch: str) -> bool:
+    return "\u30a0" <= ch <= "\u30ff"
+
+
+def is_eligible_katakana_legal_item_marker(text: str, index: int) -> bool:
+    next_index = index + 1
+    if next_index >= len(text):
+        return False
+
+    next_char = text[next_index]
+    if next_char.isascii() and next_char.isalnum():
+        return False
+    if is_katakana_char(next_char):
+        return False
+    if next_char in {"ー", "・"}:
+        return False
+
+    following_text = text[next_index:]
+    if following_text.startswith("から") or following_text.startswith("まで"):
+        return False
+    return True
+
+
+def find_depth_zero_legal_item_markers(
+    text: str,
+    marker_numbers: Dict[str, int],
+    eligibility_checker: Callable[[str, int], bool],
+) -> List[Tuple[int, int]]:
+    markers: List[Tuple[int, int]] = []
+    bracket_stack: List[str] = []
+    quote_stack: List[str] = []
+
+    for idx, ch in enumerate(text):
+        if ch in ASCII_QUOTE_CHARS:
+            update_ascii_quote_stack(text, idx, quote_stack)
+
+        if ch in OPENING_BRACKETS:
+            bracket_stack.append(ch)
+        elif ch in CLOSING_BRACKETS:
+            pop_matching_or_compatible_bracket(bracket_stack, ch)
+
+        if (
+            not bracket_stack
+            and not quote_stack
+            and ch in marker_numbers
+            and eligibility_checker(text, idx)
+        ):
+            markers.append((idx, marker_numbers[ch]))
+
+    return markers
+
+
+def group_maximal_consecutive_marker_runs(markers: List[Tuple[int, int]]) -> List[List[Tuple[int, int]]]:
+    if not markers:
+        return []
+
+    runs: List[List[Tuple[int, int]]] = [[markers[0]]]
+    for marker in markers[1:]:
+        previous_number = runs[-1][-1][1]
+        current_number = marker[1]
+        if current_number == previous_number + 1:
+            runs[-1].append(marker)
+        else:
+            runs.append([marker])
+    return runs
+
+
+def find_single_accepted_legal_item_run(markers: List[Tuple[int, int]]) -> Optional[List[Tuple[int, int]]]:
+    accepted_runs = [
+        run
+        for run in group_maximal_consecutive_marker_runs(markers)
+        if len(run) >= 2
+    ]
+    if len(accepted_runs) != 1:
+        return None
+    return accepted_runs[0]
+
+
+def is_eligible_circled_legal_item_marker(text: str, index: int) -> bool:
+    return index + 1 < len(text) and text[index + 1].isspace()
+
+
+def split_legal_item_sequences(text: str) -> List[str]:
+    family_runs: List[List[Tuple[int, int]]] = []
+
+    circled_run = find_single_accepted_legal_item_run(
+        find_depth_zero_legal_item_markers(
+            text,
+            CIRCLED_LEGAL_ITEM_NUMBERS,
+            is_eligible_circled_legal_item_marker,
+        )
+    )
+    if circled_run is not None:
+        family_runs.append(circled_run)
+
+    katakana_run = find_single_accepted_legal_item_run(
+        find_depth_zero_legal_item_markers(
+            text,
+            KATAKANA_LEGAL_ITEM_NUMBERS,
+            is_eligible_katakana_legal_item_marker,
+        )
+    )
+    if katakana_run is not None:
+        family_runs.append(katakana_run)
+
+    if not family_runs:
+        return [text]
+
+    family_runs.sort(key=lambda run: run[0][0])
+    split_positions: List[int] = []
+    for run_index, run in enumerate(family_runs):
+        marker_positions = [position for position, _ in run]
+        if run_index > 0:
+            split_positions.append(marker_positions[0])
+        split_positions.extend(marker_positions[1:])
+
+    split_positions = sorted(set(split_positions))
+    pieces: List[str] = []
+    start = 0
+    for split_position in split_positions:
+        piece = text[start:split_position].strip()
+        if piece:
+            pieces.append(piece)
+        start = split_position
+
+    tail = text[start:].strip()
+    if tail:
+        pieces.append(tail)
+    return pieces or [text]
+
+
+def split_circled_legal_item_sequence(text: str) -> List[str]:
+    return split_legal_item_sequences(text)
+
+
+def split_katakana_legal_item_sequence(text: str) -> List[str]:
+    return split_legal_item_sequences(text)
+
+
 def split_into_sentences(paragraph_text: str, split_inside_parentheses: bool = False) -> List[str]:
     text = paragraph_text.strip()
     if not text:
         return []
+    if is_markdown_table_row_line(text):
+        return [text]
 
     sentences: List[str] = []
     buf: List[str] = []
@@ -478,24 +726,29 @@ def split_into_sentences(paragraph_text: str, split_inside_parentheses: bool = F
         if ch in OPENING_BRACKETS:
             bracket_stack.append(ch)
         elif ch in CLOSING_BRACKETS:
-            expected_open = CLOSING_BRACKETS[ch]
-            if bracket_stack and bracket_stack[-1] == expected_open:
-                bracket_stack.pop()
-            elif expected_open in bracket_stack:
-                last_index = len(bracket_stack) - 1 - bracket_stack[::-1].index(expected_open)
-                bracket_stack = bracket_stack[:last_index]
+            pop_matching_or_compatible_bracket(bracket_stack, ch)
 
         if ch in SENTENCE_END_CHARS:
-            if (not split_inside_parentheses) and bracket_stack:
+            closing_end_idx, stack_after_closing = preview_sentence_closing_chars(
+                text,
+                idx,
+                bracket_stack,
+            )
+            should_split = split_inside_parentheses or not bracket_stack
+            if (
+                not should_split
+                and not stack_after_closing
+                and is_enumeration_boundary_after(text, closing_end_idx)
+            ):
+                should_split = True
+
+            if not should_split:
                 continue
 
-            while idx < size and text[idx] in SENTENCE_CLOSING_CHARS:
+            while idx < closing_end_idx:
                 buf.append(text[idx])
-                if text[idx] in CLOSING_BRACKETS:
-                    expected_open = CLOSING_BRACKETS[text[idx]]
-                    if bracket_stack and bracket_stack[-1] == expected_open:
-                        bracket_stack.pop()
                 idx += 1
+            bracket_stack = stack_after_closing
             sentence = "".join(buf).strip()
             if sentence:
                 sentences.append(sentence)
@@ -506,7 +759,13 @@ def split_into_sentences(paragraph_text: str, split_inside_parentheses: bool = F
         if tail:
             sentences.append(tail)
 
-    return sentences
+    if split_inside_parentheses:
+        return sentences
+
+    legal_item_split_sentences: List[str] = []
+    for sentence in sentences:
+        legal_item_split_sentences.extend(split_legal_item_sequences(sentence))
+    return legal_item_split_sentences
 
 
 def split_table_paragraph_into_sentences(paragraph_text: str) -> Tuple[List[str], int]:
