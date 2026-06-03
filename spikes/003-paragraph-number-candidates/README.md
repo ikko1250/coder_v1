@@ -56,6 +56,34 @@ The selected run is recorded in `paragraph_number_candidates.summary.json` as `s
 4. Check `sample_marker_value_2_without_1` and `sample_later_marker_without_prior_1` for implicit-first paragraph cases.
 5. Inspect reject samples by reason to confirm marker-local negative guards are not overrejecting.
 
+## Negative Guard Notes
+
+Marker-local reject reasons are tied to the numeric span being classified. A legal reference elsewhere in the same sentence should be recorded as nearby context, not as a marker-local reject for a different span.
+
+Additional negative guard categories and demotion reasons include:
+
+- `revision_note_or_metadata`: reject reason and candidate type for revision metadata such as `(令７規則９・一部改正)` and `旧第２項`.
+- `ocr_or_formatting_noise`: reject reason and candidate type for clear OCR or formatting intrusions such as `に１より`.
+- `ocr_or_formatting_noise_demoted`: non-reject low-confidence demotion reason for boundary-like but incomplete cases such as `事項２。` or an empty after-context.
+
+Guard precedence keeps these cases stable:
+
+- In `第10条第2項`, `10` remains `multi_digit_numeric_span`, while `2` is `article_subnumber_or_citation`.
+- In `別表第２(第4条関係)`, `２` is `table_or_appendix_noise`, while `4` is `article_subnumber_or_citation`.
+- Protected positives such as `事項２事業者は`, `区域２周辺の者は`, and `基準２条例...` must remain in `review.csv`.
+- Bracket or quote depth alone is not a reject reason; non-metadata bracket/quote candidates remain low-confidence review rows.
+
+For before/after comparisons, write new outputs to a separate directory, for example:
+
+```sh
+"/f/program_2026/csv_viewer_v2/coder_v1/.venv/Scripts/python.exe" \
+  spikes/003-paragraph-number-candidates/collect_paragraph_number_candidates.py \
+  --analysis-db asset/texts_2nd/analysis_a1.2.db \
+  --out-dir spikes/003-paragraph-number-candidates/out-negative-guard-check
+```
+
+Do not overwrite the baseline `out` directory when comparing summary counters.
+
 ## Non-Goals
 
 - No automatic sentence splitting.

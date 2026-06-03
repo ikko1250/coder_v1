@@ -137,6 +137,7 @@ PRECEDING_PATTERNS = expandVariants(
 ARTICLE_PREFIXES = expandVariants(["第"])
 ARTICLE_UNITS = expandVariants(["条", "項", "号", "章", "節", "款", "目"])
 SUBNUMBER_PREFIXES = expandVariants(["条の", "項の", "号の"])
+RELATIVE_ARTICLE_PREFIXES = expandVariants(["前", "同"])
 ERA_PREFIXES = expandVariants(["令和", "平成", "昭和"])
 DATE_UNITS = expandVariants(["年", "月", "日", "時"])
 QUANTITY_UNITS = expandVariants(
@@ -144,16 +145,24 @@ QUANTITY_UNITS = expandVariants(
         "通",
         "部",
         "親等",
+        "キロワット",
+        "メガワット",
+        "平方メートル",
         "メートル",
         "ｍ",
         "m",
-        "平方メートル",
         "㎡",
+        "万円",
         "%",
         "％",
         "円",
         "人",
         "件",
+        "回",
+        "ヶ月",
+        "か月",
+        "箇月",
+        "週間",
         "以上",
         "未満",
         "以下",
@@ -162,8 +171,17 @@ QUANTITY_UNITS = expandVariants(
 )
 FRACTION_PARTS = expandVariants(["分の"])
 FORM_PREFIXES = expandVariants(["様式第", "別記様式第"])
-FORM_SUFFIXES = expandVariants(["号"])
-NOTE_PREFIXES = expandVariants(["※"])
+FORM_SUFFIXES = expandVariants(["号", "号様式"])
+FORM_REVERSED_SUFFIXES = expandVariants(["号様式"])
+TABLE_PREFIXES = expandVariants(["別表第", "別記", "表"])
+TABLE_SUFFIXES = expandVariants(["面"])
+NOTE_PREFIXES = expandVariants(["※", "注"])
+REVISION_SOURCE_TOKENS = expandVariants(["条例", "規則", "告示"])
+REVISION_ACTION_TOKENS = expandVariants(["改正", "追加", "全改", "繰下", "繰上"])
+REVISION_ERA_PREFIXES = expandVariants(["令", "令和", "平", "平成", "昭", "昭和"])
+REVISION_PREFIXES = expandVariants(["旧第"])
+OCR_INTRUSION_PREFIXES = expandVariants(["に", "又"])
+OCR_INTRUSION_SUFFIXES = expandVariants(["より", "は"])
 LEGAL_NEARBY_PATTERNS = expandVariants(["条例第", "規則第", "法第", "第"])
 SUBJECT_PARTICLE = expandVariants(["は"])
 SENTENCE_PERIODS = expandVariants(["。"])
@@ -374,6 +392,14 @@ def containsAny(text: str, patterns: Sequence[str]) -> str:
     return ""
 
 
+def stripLocalSpaces(text: str) -> str:
+    return text.strip(" \t　")
+
+
+def localWindow(row: SentenceRow, span: NumericSpan, beforeLen: int = 16, afterLen: int = 24) -> str:
+    return row.sentenceText[max(0, span.start - beforeLen) : min(len(row.sentenceText), span.end + afterLen)]
+
+
 def resolveBracketQuoteDepth(text: str, targetIndex: int) -> tuple[int, int]:
     bracketStack: list[str] = []
     quoteStack: list[str] = []
@@ -467,8 +493,11 @@ def detectExplicitRun(spans: Sequence[NumericSpan]) -> dict[int, list[NumericSpa
 def detectNegativeEvidence(row: SentenceRow, span: NumericSpan) -> tuple[str, list[str], str, str, str, str]:
     before = row.sentenceText[: span.start]
     after = row.sentenceText[span.end :]
-    windowBefore = before[-16:]
-    windowAfter = after[:16]
+    beforeStripped = stripLocalSpaces(before)
+    afterStripped = stripLocalSpaces(after)
+    windowBefore = beforeStripped[-16:]
+    windowAfter = afterStripped[:16]
+    localText = localWindow(row, span)
     matchedText = ""
     spanStart = ""
     spanEnd = ""
@@ -487,9 +516,36 @@ def detectNegativeEvidence(row: SentenceRow, span: NumericSpan) -> tuple[str, li
     if span.spanShape == "formatted_numeric_span":
         return markerLocal("numeric_formatting_context")
 
-    if endsWithAny(windowBefore, FORM_PREFIXES, window=12) and startsWithAny(windowAfter, FORM_SUFFIXES):
+    if (
+        endsWithAny(windowBefore, REVISION_PREFIXES, window=8)
+        or (
+            (
+                endsWithAny(windowBefore, REVISION_ERA_PREFIXES, window=8)
+                or endsWithAny(windowBefore, REVISION_SOURCE_TOKENS, window=8)
+            )
+            and containsAny(localText, REVISION_SOURCE_TOKENS)
+            and containsAny(localText, REVISION_ACTION_TOKENS)
+        )
+    ):
+        return markerLocal("revision_note_or_metadata")
+
+    if endsWithAny(windowBefore, NOTE_PREFIXES, window=4):
+        return markerLocal("page_or_table_note_marker")
+    if beforeStripped.endswith("A") and (span.rawText in {"3", "4"} or span.normalizedText in {"3", "4"}):
+        return markerLocal("table_or_appendix_noise")
+    if endsWithAny(windowBefore, TABLE_PREFIXES, window=12):
+        return markerLocal("table_or_appendix_noise")
+    if endsWithAny(windowBefore, ARTICLE_PREFIXES, window=8) and startsWithAny(windowAfter, TABLE_SUFFIXES):
+        return markerLocal("table_or_appendix_noise")
+
+    if (
+        endsWithAny(windowBefore, FORM_PREFIXES, window=12)
+        or (endsWithAny(windowBefore, ARTICLE_PREFIXES, window=8) and startsWithAny(windowAfter, FORM_REVERSED_SUFFIXES))
+    ) and startsWithAny(windowAfter, FORM_SUFFIXES):
         return markerLocal("attachment_form_number")
     if endsWithAny(windowBefore, ARTICLE_PREFIXES, window=8) and startsWithAny(windowAfter, ARTICLE_UNITS):
+        return markerLocal("article_subnumber_or_citation")
+    if endsWithAny(windowBefore, RELATIVE_ARTICLE_PREFIXES, window=8) and startsWithAny(windowAfter, ARTICLE_UNITS):
         return markerLocal("article_subnumber_or_citation")
     if endsWithAny(windowBefore, SUBNUMBER_PREFIXES, window=8):
         return markerLocal("article_subnumber_or_citation")
@@ -497,18 +553,27 @@ def detectNegativeEvidence(row: SentenceRow, span: NumericSpan) -> tuple[str, li
         return markerLocal("era_date_or_effective_date")
     if startsWithAny(windowAfter, DATE_UNITS):
         return markerLocal("era_date_or_effective_date")
+    if beforeStripped.endswith("年") and startsWithAny(windowAfter, ["回"]):
+        return markerLocal("quantity_date_unit")
     if startsWithAny(windowAfter, QUANTITY_UNITS):
         return markerLocal("quantity_date_unit")
     if startsWithAny(windowAfter, FRACTION_PARTS) or endsWithAny(windowBefore, FRACTION_PARTS, window=8):
         return markerLocal("quantity_date_unit")
-    if endsWithAny(windowBefore, NOTE_PREFIXES, window=4):
-        return markerLocal("page_or_table_note_marker")
+    if endsWithAny(windowBefore, OCR_INTRUSION_PREFIXES, window=4) and startsWithAny(windowAfter, OCR_INTRUSION_SUFFIXES):
+        return markerLocal("ocr_or_formatting_noise")
     if before.endswith("(") or before.endswith("（") or after.startswith(")") or after.startswith("）"):
         return markerLocal("parenthetical_or_enumeration_noise")
     if after.startswith(".") or after.startswith("．"):
         return markerLocal("numeric_sequence_or_index")
 
     return "", [], spanStart, spanEnd, matchedText, negativeSpanId
+
+
+def detectOcrDemotionEvidence(before: str, after: str) -> str:
+    afterStripped = stripLocalSpaces(after)
+    if afterStripped == "" or startsWithAny(afterStripped, ["。", "、", ")", "）"]):
+        return "ocr_or_formatting_noise_demoted"
+    return ""
 
 
 def detectNearbyLegalReference(row: SentenceRow, span: NumericSpan) -> bool:
@@ -533,6 +598,11 @@ def classifyCandidate(
     precedingPattern = detectPrecedingEvidence(before)
     weakSubject = detectWeakSubject(after)
     negativeType, negativeReasons, negativeStart, negativeEnd, negativeText, negativeSpanId = detectNegativeEvidence(row, span)
+    demotionReason = ""
+    if not negativeType:
+        demotionReason = detectOcrDemotionEvidence(before, after)
+        if demotionReason:
+            negativeReasons.append(demotionReason)
     positiveReasons: list[str] = []
     targetedExclusionReasons: list[str] = []
 
@@ -599,6 +669,11 @@ def classifyCandidate(
         confidence = "reject"
         actionability = "reject_marker_local_negative"
         collectionStage = "numeric_span_noise" if span.spanShape != "single_digit" else "broad_only"
+    elif demotionReason:
+        collectionStage = "broad_only"
+        candidateType = "ambiguous"
+        confidence = "low"
+        actionability = "review_candidate"
     elif sentenceInitial:
         collectionStage = "sentence_initial"
         candidateType = "sentence_initial_numbered_paragraph"
