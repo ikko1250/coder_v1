@@ -63,6 +63,12 @@ class ParagraphNumberCandidateCollectorTest(unittest.TestCase):
             offsetResolutionReason="test",
         )
 
+    def _assertSelfMatchedReject(self, candidate) -> None:
+        self.assertEqual(candidate.confidence, "reject")
+        self.assertEqual(candidate.negative_span_id, str(candidate.numeric_span_id))
+        self.assertEqual(candidate.matched_negative_span_start, str(candidate.numeric_span_start))
+        self.assertEqual(candidate.matched_negative_span_end, str(candidate.numeric_span_end))
+
     def test_tokenizer_keeps_multi_digit_and_formatted_spans_whole(self) -> None:
         spans = collector.tokenizeNumericSpans("第12条 ２０年 10,000 １／１０，０００ ３．５ ２事業者")
         self.assertEqual([span.rawText for span in spans], ["12", "２０", "10,000", "１／１０，０００", "３．５", "２"])
@@ -87,13 +93,59 @@ class ParagraphNumberCandidateCollectorTest(unittest.TestCase):
         row = self._row("基準２条例第12条第２項の適用")
         candidates = collector.collectCandidatesFromRow(row)
         firstTwo = next(candidate for candidate in candidates if candidate.marker == "２" and candidate.offset == 2)
+        self.assertNotEqual(firstTwo.confidence, "reject")
         self.assertNotEqual(firstTwo.candidate_type, "article_subnumber_or_citation")
         self.assertIn("legal_reference_nearby_but_not_marker_local", firstTwo.negative_reasons)
+        articleNumber = next(candidate for candidate in candidates if candidate.marker == "12")
+        self.assertEqual(articleNumber.candidate_type, "multi_digit_numeric_span")
+        self._assertSelfMatchedReject(articleNumber)
         citationTwo = next(candidate for candidate in candidates if candidate.marker == "２" and candidate.offset > 2)
         self.assertEqual(citationTwo.candidate_type, "article_subnumber_or_citation")
-        self.assertEqual(citationTwo.negative_span_id, str(citationTwo.numeric_span_id))
-        self.assertEqual(citationTwo.matched_negative_span_start, str(citationTwo.numeric_span_start))
-        self.assertEqual(citationTwo.matched_negative_span_end, str(citationTwo.numeric_span_end))
+        self._assertSelfMatchedReject(citationTwo)
+
+    def test_article_citation_precedence_marks_each_numeric_span(self) -> None:
+        row = self._row("第10条第2項")
+        candidates = collector.collectCandidatesFromRow(row)
+        self.assertEqual(
+            [(candidate.marker, candidate.candidate_type) for candidate in candidates],
+            [
+                ("10", "multi_digit_numeric_span"),
+                ("2", "article_subnumber_or_citation"),
+            ],
+        )
+        self._assertSelfMatchedReject(candidates[0])
+        self._assertSelfMatchedReject(candidates[1])
+
+    @unittest.expectedFailure
+    def test_revision_note_prefix_precedence_uses_future_reason(self) -> None:
+        row = self._row("旧第２項 旧第２号")
+        candidates = collector.collectCandidatesFromRow(row)
+        self.assertEqual(
+            [(candidate.marker, candidate.candidate_type) for candidate in candidates],
+            [
+                ("２", "revision_note_or_metadata"),
+                ("２", "revision_note_or_metadata"),
+            ],
+        )
+        for candidate in candidates:
+            self.assertNotEqual(candidate.candidate_type, "article_subnumber_or_citation")
+            self._assertSelfMatchedReject(candidate)
+
+    def test_protected_positive_fixtures_are_not_rejected(self) -> None:
+        cases = [
+            "事項２事業者は届け出る。",
+            "事項2 市長は届け出る。",
+            "区域２周辺の者は対応する。",
+            "本文<br>事項２事業者は届け出る。",
+        ]
+        for sentence in cases:
+            with self.subTest(sentence=sentence):
+                candidates = collector.collectCandidatesFromRow(self._row(sentence))
+                self.assertEqual(len(candidates), 1)
+                candidate = candidates[0]
+                self.assertNotEqual(candidate.confidence, "reject")
+                self.assertNotEqual(candidate.candidate_type, "article_subnumber_or_citation")
+                self.assertEqual(candidate.split_decision, "report_only")
 
     def test_marker_local_negative_reason_categories(self) -> None:
         cases = [
@@ -108,8 +160,7 @@ class ParagraphNumberCandidateCollectorTest(unittest.TestCase):
             with self.subTest(sentence=sentence):
                 candidate = collector.collectCandidatesFromRow(self._row(sentence))[0]
                 self.assertEqual(candidate.candidate_type, expectedType)
-                self.assertEqual(candidate.confidence, "reject")
-                self.assertEqual(candidate.negative_span_id, str(candidate.numeric_span_id))
+                self._assertSelfMatchedReject(candidate)
 
     def test_sentence_initial_numbered_paragraph_is_report_only(self) -> None:
         row = self._row("２　前項の規定により届け出る。")
