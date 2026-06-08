@@ -127,6 +127,50 @@ class CallGemma4GeminiCliArgCompatibilityTests(unittest.TestCase):
         self.assertEqual(exit_code, 23)
         ocr_mock.assert_called_once()
 
+    def test_main_dispatches_to_python_text_correction_without_api_key(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        with (
+            mock.patch.object(
+                module,
+                "parse_args",
+                return_value=SimpleNamespace(
+                    task=module.PYTHON_TEXT_CORRECTION_TASK,
+                    pdf_path="sample.pdf",
+                    markdown_path=None,
+                    working_dir=None,
+                ),
+            ),
+            mock.patch.object(module, "run_python_text_correction_mode", return_value=17) as local_mock,
+            mock.patch.object(
+                module,
+                "run_single_shot_mode",
+                side_effect=AssertionError("single-shot mode should not be used for python-text-correct"),
+            ),
+            mock.patch.object(
+                module,
+                "run_ocr_correction_mode",
+                side_effect=AssertionError("ocr-correct mode should not be used for python-text-correct"),
+            ),
+        ):
+            exit_code = module.main()
+
+        self.assertEqual(exit_code, 17)
+        local_mock.assert_called_once()
+
+    def test_parse_args_accepts_python_text_correction_task(self):
+        module = importlib.import_module(MODULE_NAME)
+
+        args = module.parse_args([
+            "--task",
+            module.PYTHON_TEXT_CORRECTION_TASK,
+            "--pdf-path",
+            "sample.pdf",
+        ])
+
+        self.assertEqual(args.task, module.PYTHON_TEXT_CORRECTION_TASK)
+        self.assertEqual(args.pdf_path, "sample.pdf")
+
     def test_ocr_mode_rejects_whitespace_only_pdf_path(self):
         module = importlib.import_module(MODULE_NAME)
 
