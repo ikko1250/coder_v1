@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 
@@ -68,9 +69,13 @@ def _document_category2_select(document_columns: set[str]) -> str:
 
 def _read_database_df_result(db_path: Path, query: str, *, query_name: str) -> DataAccessResult:
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             return DataAccessResult(
-                data_frame=pl.read_database(query=query, connection=conn),
+                data_frame=_sqlite_select_to_polars(
+                    conn,
+                    query,
+                    empty_schema={},
+                ),
                 issues=[],
             )
     except (sqlite3.Error, KeyError) as exc:
@@ -109,7 +114,7 @@ def read_analysis_tokens(db_path: Path, limit_rows: int | None = None) -> pl.Dat
 
 def read_analysis_sentences_result(db_path: Path, limit_rows: int | None = None) -> DataAccessResult:
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             sentence_columns = _read_table_columns(conn, "analysis_sentences")
             paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
             sentence_text_joined = (
@@ -194,7 +199,7 @@ def read_paragraph_document_metadata_result(
 
     rows: list[tuple[int, int, str | None, str | None, int]] = []
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
             document_columns = _read_table_columns(conn, "analysis_documents")
             if "is_table_paragraph" in paragraph_columns:
@@ -274,7 +279,7 @@ def read_sentence_document_metadata_result(
         tuple[int, int, int, str | None, str | None, int | None, int | None, str | None, int]
     ] = []
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             sentence_columns = _read_table_columns(conn, "analysis_sentences")
             paragraph_columns = _read_table_columns(conn, "analysis_paragraphs")
             document_columns = _read_table_columns(conn, "analysis_documents")
