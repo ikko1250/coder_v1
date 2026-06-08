@@ -56,19 +56,24 @@ def match_lines(
 
     body_extracted = _body_extracted_lines(extracted_lines)
     extracted_by_normalized: dict[str, list[ExtractedLine]] = {}
-    for extracted in body_extracted:
+    extracted_indexes: dict[tuple[int, int], int] = {}
+    for extracted_index, extracted in enumerate(body_extracted):
         extracted_by_normalized.setdefault(extracted.normalized_text, []).append(extracted)
+        extracted_indexes[(extracted.page_index, extracted.line_index)] = extracted_index
 
-    used_refs: set[tuple[int, int]] = set()
+    used_indexes: set[int] = set()
     matches: list[LineMatch] = []
+    cursor_index = 0
     for markdown in _body_markdown_lines(markdown_lines):
         exact_candidates = [
             candidate for candidate in extracted_by_normalized.get(markdown.normalized_text, [])
-            if (candidate.page_index, candidate.line_index) not in used_refs
+            if extracted_indexes[(candidate.page_index, candidate.line_index)] not in used_indexes
         ]
         if len(exact_candidates) == 1:
             candidate = exact_candidates[0]
-            used_refs.add((candidate.page_index, candidate.line_index))
+            candidate_index = extracted_indexes[(candidate.page_index, candidate.line_index)]
+            used_indexes.add(candidate_index)
+            cursor_index = max(cursor_index, candidate_index + 1)
             match_kind = MATCH_KIND_EXACT if markdown.text == candidate.text else MATCH_KIND_NORMALIZED_EXACT
             matches.append(
                 LineMatch(
@@ -80,10 +85,29 @@ def match_lines(
             )
             continue
         if len(exact_candidates) > 1:
+            nearby_candidates = [
+                candidate for candidate in exact_candidates
+                if abs(extracted_indexes[(candidate.page_index, candidate.line_index)] - cursor_index)
+                <= config.near_window_size
+            ]
+            if len(nearby_candidates) == 1:
+                candidate = nearby_candidates[0]
+                candidate_index = extracted_indexes[(candidate.page_index, candidate.line_index)]
+                used_indexes.add(candidate_index)
+                cursor_index = max(cursor_index, candidate_index + 1)
+                matches.append(
+                    LineMatch(
+                        markdown_line_indexes=(markdown.line_index,),
+                        extracted_line_refs=(_line_ref(candidate),),
+                        match_kind=MATCH_KIND_EXACT if markdown.text == candidate.text else MATCH_KIND_NORMALIZED_EXACT,
+                        score=1.0,
+                    )
+                )
+                continue
             matches.append(
                 LineMatch(
                     markdown_line_indexes=(markdown.line_index,),
-                    extracted_line_refs=tuple(_line_ref(candidate) for candidate in exact_candidates),
+                    extracted_line_refs=tuple(_line_ref(candidate) for candidate in exact_candidates[:3]),
                     match_kind=MATCH_KIND_AMBIGUOUS,
                     score=1.0,
                     warning_codes=(WARNING_LOW_CONFIDENCE_MATCH,),
@@ -91,11 +115,16 @@ def match_lines(
             )
             continue
 
-        near_match = _find_near_match(markdown, body_extracted, used_refs, config)
+        near_match = _find_near_match(markdown, body_extracted, used_indexes, cursor_index, config)
         matches.append(near_match)
         if near_match.match_kind in {MATCH_KIND_NEAR, MATCH_KIND_NORMALIZED_EXACT, MATCH_KIND_EXACT}:
             for ref in near_match.extracted_line_refs:
-                used_refs.add((ref.page_index, ref.line_index))
+                matched_index = extracted_indexes.get((ref.page_index, ref.line_index))
+                if matched_index is not None:
+                    used_indexes.add(matched_index)
+                    cursor_index = max(cursor_index, matched_index + 1)
+        else:
+            cursor_index = min(len(body_extracted), cursor_index + 1)
 
     return tuple(matches)
 
@@ -103,18 +132,23 @@ def match_lines(
 def _find_near_match(
     markdown: MarkdownLine,
     extracted_lines: list[ExtractedLine],
-    used_refs: set[tuple[int, int]],
+    used_indexes: set[int],
+    cursor_index: int,
     config: LineMatchingConfig,
 ) -> LineMatch:
-    available = [
-        line for line in extracted_lines
-        if (line.page_index, line.line_index) not in used_refs
-    ]
+    search_start = max(0, cursor_index - config.near_window_size)
+    search_end = min(len(extracted_lines), cursor_index + config.near_window_size + 1)
     candidates: list[tuple[float, tuple[ExtractedLine, ...]]] = []
-    for index, extracted in enumerate(available):
+    for index in range(search_start, search_end):
+        if index in used_indexes:
+            continue
+        extracted = extracted_lines[index]
         candidates.append((_score(markdown.normalized_text, extracted.normalized_text), (extracted,)))
         for merge_count in range(2, config.max_merged_extracted_lines + 1):
-            merged = available[index:index + merge_count]
+            merged_indexes = list(range(index, min(index + merge_count, len(extracted_lines))))
+            if any(merged_index in used_indexes for merged_index in merged_indexes):
+                continue
+            merged = [extracted_lines[merged_index] for merged_index in merged_indexes]
             if len(merged) != merge_count:
                 continue
             merged_text = " ".join(line.normalized_text for line in merged)
