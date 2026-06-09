@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from pdf_converter.python_text_correction_model import (
+    BlockMatch,
     CorrectionCandidate,
     ExtractedLine,
     LineMatch,
@@ -13,6 +15,9 @@ from pdf_converter.python_text_correction_model import (
     MarkdownLine,
     PdfTextExtractionMetadata,
     PythonTextCorrectionReportPaths,
+    ReviewCandidate,
+    SuppressedCandidate,
+    TextBlock,
     dataclass_to_jsonable,
 )
 
@@ -27,6 +32,12 @@ def build_report_paths(run_id: str, output_root: Path | None = None) -> PythonTe
         extracted_lines_path=run_dir / "extracted-lines.jsonl",
         line_matches_path=run_dir / "line-matches.jsonl",
         correction_candidates_path=run_dir / "correction-candidates.jsonl",
+        blocks_path=run_dir / "blocks.jsonl",
+        block_matches_path=run_dir / "block-matches.jsonl",
+        review_candidates_path=run_dir / "review-candidates.jsonl",
+        table_review_candidates_path=run_dir / "table-review-candidates.jsonl",
+        candidate_summary_md_path=run_dir / "candidate-summary.md",
+        candidate_summary_json_path=run_dir / "candidate-summary.json",
         warnings_path=run_dir / "warnings.md",
     )
 
@@ -44,8 +55,19 @@ def write_python_text_correction_reports(
     matches: tuple[LineMatch, ...],
     candidates: tuple[CorrectionCandidate, ...],
     warnings: list[str],
+    blocks: tuple[TextBlock, ...] = (),
+    block_matches: tuple[BlockMatch, ...] = (),
+    review_candidates: tuple[ReviewCandidate, ...] = (),
+    table_review_candidates: tuple[ReviewCandidate, ...] = (),
+    suppressed_candidates: tuple[SuppressedCandidate, ...] = (),
 ) -> None:
     report_paths.run_dir.mkdir(parents=True, exist_ok=True)
+    summary = _build_candidate_summary(
+        candidates=candidates,
+        review_candidates=review_candidates,
+        table_review_candidates=table_review_candidates,
+        suppressed_candidates=suppressed_candidates,
+    )
     _write_json(
         report_paths.manifest_path,
         {
@@ -61,12 +83,24 @@ def write_python_text_correction_reports(
                 "markdownLines": len(markdown_lines),
                 "lineMatches": len(matches),
                 "correctionCandidates": len(candidates),
+                "safeCandidates": len(candidates),
+                "reviewCandidates": len(review_candidates),
+                "tableReviewCandidates": len(table_review_candidates),
+                "suppressedCandidates": len(suppressed_candidates),
+                "blocks": len(blocks),
+                "blockMatches": len(block_matches),
                 "warnings": len(warnings),
             },
             "outputs": {
                 "extractedLines": str(report_paths.extracted_lines_path),
                 "lineMatches": str(report_paths.line_matches_path),
                 "correctionCandidates": str(report_paths.correction_candidates_path),
+                "blocks": str(report_paths.blocks_path),
+                "blockMatches": str(report_paths.block_matches_path),
+                "reviewCandidates": str(report_paths.review_candidates_path),
+                "tableReviewCandidates": str(report_paths.table_review_candidates_path),
+                "candidateSummaryMarkdown": str(report_paths.candidate_summary_md_path),
+                "candidateSummaryJson": str(report_paths.candidate_summary_json_path),
                 "warnings": str(report_paths.warnings_path),
             },
         },
@@ -74,6 +108,12 @@ def write_python_text_correction_reports(
     _write_jsonl(report_paths.extracted_lines_path, extracted_lines)
     _write_jsonl(report_paths.line_matches_path, matches)
     _write_jsonl(report_paths.correction_candidates_path, candidates)
+    _write_jsonl(report_paths.blocks_path, blocks)
+    _write_jsonl(report_paths.block_matches_path, block_matches)
+    _write_jsonl(report_paths.review_candidates_path, review_candidates)
+    _write_jsonl(report_paths.table_review_candidates_path, table_review_candidates)
+    _write_json(report_paths.candidate_summary_json_path, summary)
+    _write_candidate_summary_markdown(report_paths.candidate_summary_md_path, summary)
     _write_warnings(report_paths.warnings_path, warnings)
 
 
@@ -98,4 +138,61 @@ def _write_warnings(path: Path, warnings: list[str]) -> None:
     lines = ["# Warnings", ""]
     for warning in warnings:
         lines.append(f"- {warning}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _build_candidate_summary(
+    *,
+    candidates: tuple[CorrectionCandidate, ...],
+    review_candidates: tuple[ReviewCandidate, ...],
+    table_review_candidates: tuple[ReviewCandidate, ...],
+    suppressed_candidates: tuple[SuppressedCandidate, ...],
+) -> dict[str, Any]:
+    priority_counts = Counter(candidate.priority for candidate in review_candidates + table_review_candidates)
+    risk_flag_counts: Counter[str] = Counter()
+    page_counts: Counter[str] = Counter()
+    for candidate in review_candidates + table_review_candidates:
+        page_key = "unknown" if candidate.page_index is None else str(candidate.page_index + 1)
+        page_counts[page_key] += 1
+        for risk_flag in candidate.risk_flags:
+            risk_flag_counts[risk_flag] += 1
+    suppressed_reason_counts = Counter(candidate.suppressed_reason for candidate in suppressed_candidates)
+    return {
+        "schemaVersion": 1,
+        "counts": {
+            "safeCandidates": len(candidates),
+            "reviewCandidates": len(review_candidates),
+            "tableReviewCandidates": len(table_review_candidates),
+            "suppressedCandidates": len(suppressed_candidates),
+        },
+        "byPriority": dict(sorted(priority_counts.items())),
+        "byPage": dict(sorted(page_counts.items())),
+        "byRiskFlag": dict(sorted(risk_flag_counts.items())),
+        "bySuppressedReason": dict(sorted(suppressed_reason_counts.items())),
+        "reviewCandidateIds": [candidate.candidate_id for candidate in review_candidates],
+        "tableReviewCandidateIds": [candidate.candidate_id for candidate in table_review_candidates],
+    }
+
+
+def _write_candidate_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
+    counts = summary["counts"]
+    lines = [
+        "# Candidate Summary",
+        "",
+        f"- safeCandidates: {counts['safeCandidates']}",
+        f"- reviewCandidates: {counts['reviewCandidates']}",
+        f"- tableReviewCandidates: {counts['tableReviewCandidates']}",
+        f"- suppressedCandidates: {counts['suppressedCandidates']}",
+        "",
+        "## Priority",
+        "",
+    ]
+    for key, value in summary["byPriority"].items():
+        lines.append(f"- {key}: {value}")
+    lines.extend(["", "## Suppressed Reasons", ""])
+    if summary["bySuppressedReason"]:
+        for key, value in summary["bySuppressedReason"].items():
+            lines.append(f"- {key}: {value}")
+    else:
+        lines.append("- none: 0")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

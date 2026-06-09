@@ -34,6 +34,23 @@ def test_match_lines_near_generates_typo_candidate():
     assert candidates[0].reason == "typo_candidate"
 
 
+def test_correction_candidate_schema_stays_compatible():
+    markdown = classify_markdown_lines("solar powar rule")
+    extracted = classify_extracted_lines((ExtractedLine(0, 0, "solar power rule"),))
+
+    matches = match_lines(markdown, extracted)
+    candidate = build_correction_candidates(markdown, extracted, matches)[0]
+
+    assert candidate.candidate_id == "C0001"
+    assert candidate.markdown_line_indexes == (0,)
+    assert candidate.extracted_line_refs[0].page_index == 0
+    assert candidate.extracted_line_refs[0].line_index == 0
+    assert candidate.old_text == "solar powar rule"
+    assert candidate.suggested_text == "solar power rule"
+    assert candidate.reason == "typo_candidate"
+    assert candidate.requires_human_review is True
+
+
 def test_table_lines_do_not_generate_candidates():
     markdown = classify_markdown_lines("| solar povver |")
     extracted = classify_extracted_lines((ExtractedLine(0, 0, "| solar power |"),))

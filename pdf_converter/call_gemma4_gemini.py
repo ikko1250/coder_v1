@@ -443,6 +443,13 @@ def run_python_text_correction_mode(args: argparse.Namespace) -> int:
         print(f"Manifest: {result.report_paths.manifest_path}")
         print(f"Warnings: {result.report_paths.warnings_path}")
         print(f"Candidates: {result.report_paths.correction_candidates_path}")
+        print(f"Review candidates: {result.report_paths.review_candidates_path}")
+        print(f"Table review candidates: {result.report_paths.table_review_candidates_path}")
+        print(f"Candidate summary: {result.report_paths.candidate_summary_md_path}")
+    print(f"Safe candidates: {result.candidate_count}")
+    print(f"Review candidates: {result.review_candidate_count}")
+    print(f"Table review candidates: {result.table_review_candidate_count}")
+    print(f"Suppressed candidates: {result.suppressed_candidate_count}")
     print(f"Low confidence ratio: {result.low_confidence_ratio:.3f}")
     return 0
 

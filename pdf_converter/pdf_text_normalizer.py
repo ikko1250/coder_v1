@@ -33,6 +33,9 @@ def is_table_like_line(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
+    lowered = stripped.lower()
+    if "<table" in lowered or "<td" in lowered or "<th" in lowered:
+        return True
     if stripped.count("|") >= 2:
         return True
     if "\t" in stripped and len([part for part in stripped.split("\t") if part.strip()]) >= 3:

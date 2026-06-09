@@ -15,6 +15,7 @@ LINE_KIND_TABLE = "table_candidate"
 MATCH_KIND_EXACT = "exact"
 MATCH_KIND_NORMALIZED_EXACT = "normalized_exact"
 MATCH_KIND_NEAR = "near"
+MATCH_KIND_WEAK_NEAR = "weak_near"
 MATCH_KIND_UNMATCHED = "unmatched"
 MATCH_KIND_AMBIGUOUS = "ambiguous"
 
@@ -25,6 +26,28 @@ WARNING_LOW_CONFIDENCE_RUN = "low_confidence_run"
 WARNING_PAGE_NUMBER_CANDIDATE = "page_number_candidate"
 WARNING_READING_ORDER_CANDIDATE = "reading_order_candidate"
 WARNING_TABLE_CANDIDATE = "table_candidate"
+
+CANDIDATE_KIND_REVIEW = "review"
+CANDIDATE_KIND_TABLE_REVIEW = "table_review"
+
+SOURCE_METHOD_BLOCK_NEAR = "block_near"
+SOURCE_METHOD_KNOWN_OCR_PATTERN = "known_ocr_pattern"
+SOURCE_METHOD_NGRAM_DIFF = "ngram_diff"
+
+PRIORITY_HIGH = "high"
+PRIORITY_MEDIUM = "medium"
+PRIORITY_LOW = "low"
+
+APPLY_POLICY_NEVER_AUTO_APPLY = "never_auto_apply"
+
+REVIEW_STATUS_UNREVIEWED = "unreviewed"
+
+SUPPRESSED_AMBIGUOUS_ANCHOR = "ambiguous_anchor"
+SUPPRESSED_LARGE_DIFF = "large_diff"
+SUPPRESSED_LOW_SCORE = "low_score"
+SUPPRESSED_TABLE_CONTEXT = "table_context"
+SUPPRESSED_TOO_MANY_CANDIDATES_ON_PAGE = "too_many_candidates_on_page"
+SUPPRESSED_WIDTH_OR_SYMBOL_ONLY = "width_or_symbol_only"
 
 
 @dataclass(frozen=True)
@@ -75,6 +98,83 @@ class CorrectionCandidate:
 
 
 @dataclass(frozen=True)
+class ReviewCandidate:
+    candidate_id: str
+    display_index: int
+    source_document_id: str
+    run_id: str
+    candidate_kind: str
+    source_methods: tuple[str, ...]
+    priority: str
+    page_index: int | None
+    markdown_line_range: tuple[int, int]
+    extracted_line_range: tuple[tuple[int, int], ...]
+    old_text: str
+    suggested_text: str
+    diff_span: tuple[int, int]
+    context_before: str
+    context_after: str
+    reason: str
+    score: float
+    risk_flags: tuple[str, ...] = ()
+    suppressed_reason: str | None = None
+    apply_policy: str = APPLY_POLICY_NEVER_AUTO_APPLY
+    review_status: str = REVIEW_STATUS_UNREVIEWED
+    review_decision: str | None = None
+    reviewer_note: str | None = None
+    requires_human_review: bool = True
+    evidence: tuple[dict[str, Any], ...] = ()
+    table_id: str | None = None
+    row_index: int | None = None
+    col_index: int | None = None
+    cell_text: str | None = None
+    cell_context: str | None = None
+    table_detection_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class SuppressedCandidate:
+    source_document_id: str
+    run_id: str
+    candidate_kind: str
+    source_method: str
+    page_index: int | None
+    markdown_line_range: tuple[int, int]
+    old_text: str
+    suggested_text: str
+    diff_span: tuple[int, int]
+    suppressed_reason: str
+    score: float
+    risk_flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TextBlock:
+    block_id: str
+    source: str
+    page_range: tuple[int, int] | None
+    line_refs: tuple[int | tuple[int, int], ...]
+    text: str
+    normalized_text: str
+    kind: str
+    confidence: float = 1.0
+    warning_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BlockMatch:
+    block_match_id: str
+    markdown_block_id: str
+    extracted_block_id: str | None
+    match_kind: str
+    score: float
+    alignment_confidence: str
+    ambiguity_count: int = 0
+    warning_codes: tuple[str, ...] = ()
+    candidate_suppression_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class LineMatchingConfig:
     near_score_threshold: float = 0.92
     ambiguous_score_margin: float = 0.03
@@ -82,6 +182,18 @@ class LineMatchingConfig:
     max_merged_markdown_lines: int = 3
     max_merged_extracted_lines: int = 3
     low_confidence_match_ratio_threshold: float = 0.35
+
+
+@dataclass(frozen=True)
+class ReviewCandidateConfig:
+    max_review_candidates_per_page: int = 25
+    min_review_score: float = 0.72
+    max_diff_chars: int = 3
+    max_block_chars: int = 1200
+    max_review_context_chars: int = 30
+    block_near_score_threshold: float = 0.70
+    block_weak_near_score_threshold: float = 0.58
+    block_ambiguous_score_margin: float = 0.03
 
 
 @dataclass(frozen=True)
@@ -110,6 +222,12 @@ class PythonTextCorrectionReportPaths:
     extracted_lines_path: Path
     line_matches_path: Path
     correction_candidates_path: Path
+    blocks_path: Path
+    block_matches_path: Path
+    review_candidates_path: Path
+    table_review_candidates_path: Path
+    candidate_summary_md_path: Path
+    candidate_summary_json_path: Path
     warnings_path: Path
 
 
@@ -121,6 +239,9 @@ class PythonTextCorrectionResult:
     working_markdown_path: Path | None = None
     report_paths: PythonTextCorrectionReportPaths | None = None
     candidate_count: int = 0
+    review_candidate_count: int = 0
+    table_review_candidate_count: int = 0
+    suppressed_candidate_count: int = 0
     warning_count: int = 0
     low_confidence_ratio: float = 0.0
 
