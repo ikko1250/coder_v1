@@ -31,3 +31,39 @@ def test_find_known_ocr_pattern_candidates_can_skip_table_lines():
     )
 
     assert candidates == ()
+
+
+def test_find_known_ocr_pattern_candidates_detects_renova_apply_patterns():
+    markdown = classify_markdown_lines("① 壳上收益 12,864 百万円\n2025年3月未現在\n单位：百万円")
+
+    candidates = find_known_ocr_pattern_candidates(
+        markdown,
+        source_document_id="レノバ_report",
+        run_id="run",
+        max_context_chars=10,
+    )
+
+    assert {candidate.old_text for candidate in candidates} == {"壳上收益", "未現在", "单位"}
+    assert all(candidate.priority == "high" for candidate in candidates)
+    assert all("scope" in candidate.evidence[0] for candidate in candidates)
+
+
+def test_document_specific_known_pattern_requires_document_context():
+    markdown = classify_markdown_lines("労北風力合同会社")
+
+    unrelated = find_known_ocr_pattern_candidates(
+        markdown,
+        source_document_id="other_report",
+        run_id="run",
+        max_context_chars=10,
+    )
+    renova = find_known_ocr_pattern_candidates(
+        markdown,
+        source_document_id="レノバ_report",
+        run_id="run",
+        max_context_chars=10,
+    )
+
+    assert unrelated == ()
+    assert len(renova) == 1
+    assert renova[0].suggested_text == "苓北"

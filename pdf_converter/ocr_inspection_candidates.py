@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import replace
 
@@ -24,13 +25,17 @@ from pdf_converter.python_text_correction_model import (
     RecommendedBatch,
     REQUIRED_EVIDENCE_ADJACENT_PAGES,
     REQUIRED_EVIDENCE_NONE,
+    REQUIRED_EVIDENCE_PDF_PAGE_IMAGE,
     ReviewCandidate,
     SOURCE_METHOD_BLOCK_AMBIGUOUS,
     SOURCE_METHOD_BLOCK_UNMATCHED,
     SOURCE_METHOD_LINE_AMBIGUOUS,
     SOURCE_METHOD_LINE_UNMATCHED,
     SUPPRESSED_DUPLICATE,
+    SUPPRESSED_DUPLICATE_EXTRACTED_TEXT,
+    SUPPRESSED_FORMAT_SYMBOL_DIFF,
     SUPPRESSED_LOW_SCORE,
+    SUPPRESSED_PARTIAL_SEGMENT_MATCH,
     SUPPRESSED_TOO_MANY_INSPECTION_CANDIDATES,
     TextBlock,
 )
@@ -41,6 +46,10 @@ PRIORITY_RANK = {
     PRIORITY_MEDIUM: 1,
     PRIORITY_LOW: 2,
 }
+
+RISK_FLAG_FORMAT_SYMBOL_DIFF = "format_symbol_diff"
+RISK_FLAG_PARTIAL_SEGMENT_MATCH = "partial_segment_match"
+RISK_FLAG_SEMANTIC_SYMBOL_DIFF = "semantic_symbol_diff"
 
 
 def build_match_inspection_candidates(
@@ -104,6 +113,13 @@ def apply_inspection_limits(
 ) -> tuple[InspectionCandidate, ...]:
     deduped: dict[tuple[object, ...], InspectionCandidate] = {}
     for candidate in candidates:
+        candidate = _apply_quality_filter_precedence(
+            candidate,
+            config=config,
+            suppressed_collector=suppressed_collector,
+        )
+        if candidate is None:
+            continue
         if candidate.score < config.min_inspection_score:
             _suppress_candidate(candidate, suppressed_collector, SUPPRESSED_LOW_SCORE)
             continue
@@ -384,6 +400,164 @@ def _candidate_sort_key(candidate: InspectionCandidate) -> tuple[object, ...]:
         candidate.source_method,
         candidate.markdown_line_range,
     )
+
+
+def _apply_quality_filter_precedence(
+    candidate: InspectionCandidate,
+    *,
+    config: InspectionCandidateConfig,
+    suppressed_collector: SuppressedCandidateCollector,
+) -> InspectionCandidate | None:
+    guarded = False
+    if _is_semantic_symbol_diff(candidate):
+        guarded = True
+        candidate = _with_risk_flag(
+            replace(candidate, inspection_priority=_max_priority(candidate.inspection_priority, PRIORITY_MEDIUM)),
+            RISK_FLAG_SEMANTIC_SYMBOL_DIFF,
+        )
+    if not guarded and _is_duplicate_extracted_text(candidate):
+        _suppress_candidate(candidate, suppressed_collector, SUPPRESSED_DUPLICATE_EXTRACTED_TEXT)
+        return None
+    guarded = guarded or _has_quality_guard(candidate)
+    if not guarded and _is_partial_segment_match(candidate, config):
+        if candidate.score < 0.60:
+            _suppress_candidate(candidate, suppressed_collector, SUPPRESSED_PARTIAL_SEGMENT_MATCH)
+            return None
+        return _with_risk_flag(
+            replace(
+                candidate,
+                inspection_priority=PRIORITY_LOW,
+                required_evidence=REQUIRED_EVIDENCE_PDF_PAGE_IMAGE,
+            ),
+            RISK_FLAG_PARTIAL_SEGMENT_MATCH,
+        )
+    if not guarded and _is_format_symbol_diff(candidate):
+        _suppress_candidate(candidate, suppressed_collector, SUPPRESSED_FORMAT_SYMBOL_DIFF)
+        return None
+    return candidate
+
+
+def _has_quality_guard(candidate: InspectionCandidate) -> bool:
+    markdown = candidate.normalized_markdown_text
+    extracted = candidate.normalized_extracted_text
+    if _has_cjk_substitution(markdown, extracted):
+        return True
+    if _has_number_or_footnote_difference(markdown, extracted):
+        return True
+    if "known_pattern" in candidate.risk_flags:
+        return True
+    return False
+
+
+def _is_duplicate_extracted_text(candidate: InspectionCandidate) -> bool:
+    markdown = candidate.normalized_markdown_text
+    extracted = candidate.normalized_extracted_text
+    if not markdown or not extracted:
+        return False
+    if extracted.count(markdown) < 2:
+        return False
+    remainder = extracted.replace(markdown, " ")
+    remainder = re.sub(r"\s+", "", remainder)
+    if remainder:
+        return False
+    refs = candidate.extracted_line_range
+    if len(refs) <= 1:
+        return True
+    pages = {page for page, _line in refs}
+    if len(pages) > 1:
+        return False
+    line_numbers = sorted(line for _page, line in refs)
+    return line_numbers[-1] - line_numbers[0] <= len(line_numbers)
+
+
+def _is_partial_segment_match(candidate: InspectionCandidate, config: InspectionCandidateConfig) -> bool:
+    markdown = candidate.normalized_markdown_text
+    extracted = candidate.normalized_extracted_text
+    if len(markdown) < config.partial_segment_min_markdown_chars or not extracted:
+        return False
+    if extracted not in markdown and markdown not in extracted:
+        return False
+    shorter = min(len(markdown), len(extracted))
+    longer = max(len(markdown), len(extracted))
+    if longer == 0:
+        return False
+    coverage = shorter / longer
+    if extracted in markdown:
+        return coverage <= config.partial_segment_max_extracted_coverage_of_markdown
+    return coverage <= (1.0 - config.partial_segment_min_shared_ratio)
+
+
+def _is_semantic_symbol_diff(candidate: InspectionCandidate) -> bool:
+    markdown = candidate.normalized_markdown_text
+    extracted = candidate.normalized_extracted_text
+    if "·" in markdown and "・" in extracted:
+        return True
+    if _has_footnote_star_diff(markdown, extracted):
+        return True
+    return False
+
+
+def _has_footnote_star_diff(markdown: str, extracted: str) -> bool:
+    if "*" not in markdown or "＊" not in extracted:
+        return False
+    footnote_pattern = re.compile(r"[\*＊]\s*\d+|注\s*[\*＊]|[\(（][\*＊]\s*\d+[\)）]")
+    return bool(footnote_pattern.search(markdown) or footnote_pattern.search(extracted))
+
+
+def _is_format_symbol_diff(candidate: InspectionCandidate) -> bool:
+    markdown = candidate.normalized_markdown_text
+    extracted = candidate.normalized_extracted_text
+    if markdown == extracted:
+        return False
+    if _is_semantic_symbol_diff(candidate):
+        return False
+    return _layout_normalize(markdown) == _layout_normalize(extracted)
+
+
+def _has_cjk_substitution(markdown: str, extracted: str) -> bool:
+    if markdown == extracted:
+        return False
+    markdown_cjk = _cjk_chars(markdown)
+    extracted_cjk = _cjk_chars(extracted)
+    if not markdown_cjk or not extracted_cjk:
+        return False
+    length_gap = abs(len(markdown_cjk) - len(extracted_cjk))
+    if length_gap > max(4, int(max(len(markdown_cjk), len(extracted_cjk)) * 0.2)):
+        return False
+    return markdown_cjk != extracted_cjk
+
+
+def _has_number_or_footnote_difference(markdown: str, extracted: str) -> bool:
+    if re.findall(r"\d+", markdown) != re.findall(r"\d+", extracted):
+        return True
+    if re.findall(r"[①②③④⑤⑥⑦⑧⑨⑩]", markdown) != re.findall(r"[①②③④⑤⑥⑦⑧⑨⑩]", extracted):
+        return True
+    if _has_footnote_star_diff(markdown, extracted):
+        return True
+    return False
+
+
+def _cjk_chars(text: str) -> str:
+    return "".join(char for char in text if "\u3400" <= char <= "\u9fff")
+
+
+def _layout_normalize(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text)
+    normalized = re.sub(r"[\s　]+", "", normalized)
+    normalized = re.sub(r"[()\[\]{}（）【】「」『』.,．。:：;；、〜～~\-‐‑‒–—―]", "", normalized)
+    return normalized
+
+
+def _with_risk_flag(candidate: InspectionCandidate, risk_flag: str) -> InspectionCandidate:
+    if risk_flag in candidate.risk_flags:
+        return candidate
+    return replace(candidate, risk_flags=tuple(candidate.risk_flags) + (risk_flag,))
+
+
+def _max_priority(current: str, minimum: str) -> str:
+    if PRIORITY_RANK.get(current, 99) <= PRIORITY_RANK.get(minimum, 99):
+        return current
+    return minimum
 
 
 def _priority(score: float, markdown_text: str, extracted_text: str) -> str:

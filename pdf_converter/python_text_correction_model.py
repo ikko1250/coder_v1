@@ -68,6 +68,10 @@ SUPPRESSED_TABLE_CONTEXT = "table_context"
 SUPPRESSED_TOO_MANY_INSPECTION_CANDIDATES = "too_many_inspection_candidates"
 SUPPRESSED_TOO_MANY_CANDIDATES_ON_PAGE = "too_many_candidates_on_page"
 SUPPRESSED_WIDTH_OR_SYMBOL_ONLY = "width_or_symbol_only"
+SUPPRESSED_DUPLICATE_EXTRACTED_TEXT = "duplicate_extracted_text"
+SUPPRESSED_LABEL_VALUE_JOINED = "label_value_joined"
+SUPPRESSED_PARTIAL_SEGMENT_MATCH = "partial_segment_match"
+SUPPRESSED_FORMAT_SYMBOL_DIFF = "format_symbol_diff"
 
 
 @dataclass(frozen=True)
@@ -305,6 +309,9 @@ class InspectionCandidateConfig:
     max_table_inspection_candidates_per_table: int = 20
     max_table_inspection_candidates_per_page: int = 40
     numeric_only_suppressed: bool = True
+    partial_segment_min_shared_ratio: float = 0.70
+    partial_segment_max_extracted_coverage_of_markdown: float = 0.65
+    partial_segment_min_markdown_chars: int = 80
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,10 @@ from pdf_converter.python_text_correction_model import (
     PythonTextCorrectionReportPaths,
     RecommendedBatch,
     ReviewCandidate,
+    SUPPRESSED_DUPLICATE_EXTRACTED_TEXT,
+    SUPPRESSED_FORMAT_SYMBOL_DIFF,
+    SUPPRESSED_LABEL_VALUE_JOINED,
+    SUPPRESSED_PARTIAL_SEGMENT_MATCH,
     SuppressedCandidate,
     SuppressedCandidateRecord,
     TextBlock,
@@ -233,6 +237,32 @@ def _build_inspection_summary(
     for candidate in inspection_candidates:
         for risk_flag in candidate.risk_flags:
             risk_counts[risk_flag] += 1
+    quality_filters = {
+        "duplicateExtractedText": suppressed_counts.get(SUPPRESSED_DUPLICATE_EXTRACTED_TEXT, 0),
+        "labelValueJoined": {
+            "resolved": resolved_match_count,
+            "suppressed": suppressed_counts.get(SUPPRESSED_LABEL_VALUE_JOINED, 0),
+        },
+        "partialSegmentMatch": {
+            "lowPriority": sum(
+                1 for candidate in inspection_candidates
+                if "partial_segment_match" in candidate.risk_flags and candidate.inspection_priority == "low"
+            ),
+            "suppressed": suppressed_counts.get(SUPPRESSED_PARTIAL_SEGMENT_MATCH, 0),
+        },
+        "semanticSymbolDiff": sum(
+            1 for candidate in inspection_candidates
+            if "semantic_symbol_diff" in candidate.risk_flags
+        ),
+        "formatSymbolDiff": suppressed_counts.get(SUPPRESSED_FORMAT_SYMBOL_DIFF, 0),
+    }
+    promotion_hints = {
+        "knownPatternHighPriority": sum(
+            1 for candidate in inspection_candidates
+            if "known_pattern" in candidate.risk_flags and candidate.inspection_priority == "high"
+        ),
+        "semanticSymbolReview": quality_filters["semanticSymbolDiff"],
+    }
     return {
         "schemaVersion": 1,
         "counts": {
@@ -242,6 +272,9 @@ def _build_inspection_summary(
             "resolvedMatches": resolved_match_count,
             "dedupedInspectionCandidates": suppressed_counts.get("duplicate", 0),
         },
+        "qualityFilters": quality_filters,
+        "promotionHints": promotion_hints,
+        "discardReductionEstimate": None,
         "byPriority": dict(sorted(priority_counts.items())),
         "bySourceMethod": dict(sorted(source_counts.items())),
         "byPage": dict(sorted(page_counts.items())),

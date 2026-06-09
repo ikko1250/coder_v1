@@ -83,6 +83,7 @@ def test_write_python_text_correction_reports(tmp_path):
             context_after="",
             reason="unmatched",
             score=0.7,
+            risk_flags=("semantic_symbol_diff",),
         ),
     )
     suppressed_records = (
@@ -98,6 +99,20 @@ def test_write_python_text_correction_reports(tmp_path):
             suggested_text="％",
             diff_span=(1, 2),
             suppressed_reason="width_or_symbol_only",
+            score=0.9,
+        ),
+        SuppressedCandidateRecord(
+            record_id="SC-dup",
+            source_document_id="sample",
+            run_id="run-1",
+            source_method="line_ambiguous",
+            page_index=0,
+            markdown_line_range=(1, 1),
+            extracted_line_range=((0, 1),),
+            old_text="same",
+            suggested_text="same same",
+            diff_span=(0, 0),
+            suppressed_reason="duplicate_extracted_text",
             score=0.9,
         ),
     )
@@ -148,7 +163,7 @@ def test_write_python_text_correction_reports(tmp_path):
     assert manifest["counts"]["tableReviewCandidates"] == 0
     assert manifest["counts"]["suppressedCandidates"] == 0
     assert manifest["counts"]["inspectionCandidates"] == 1
-    assert manifest["counts"]["suppressedCandidateRecords"] == 1
+    assert manifest["counts"]["suppressedCandidateRecords"] == 2
     assert manifest["counts"]["suppressedCandidateEvents"] == 2
     assert manifest["counts"]["resolvedMatches"] == 1
     assert json.loads(candidate_lines[0])["candidate_id"] == "C0001"
@@ -159,6 +174,13 @@ def test_write_python_text_correction_reports(tmp_path):
     assert summary["counts"]["inspectionCandidates"] == 1
     assert inspection_summary["counts"]["inspectionCandidates"] == 1
     assert inspection_summary["counts"]["suppressedCandidateEvents"] == 2
+    assert inspection_summary["counts"]["suppressedCandidateRecords"] == 2
+    assert inspection_summary["qualityFilters"]["duplicateExtractedText"] == 1
+    assert inspection_summary["qualityFilters"]["labelValueJoined"] == {"resolved": 1, "suppressed": 0}
+    assert inspection_summary["qualityFilters"]["semanticSymbolDiff"] == 1
+    assert inspection_summary["qualityFilters"]["formatSymbolDiff"] == 0
+    assert inspection_summary["promotionHints"]["semanticSymbolReview"] == 1
+    assert inspection_summary["discardReductionEstimate"] is None
     assert inspection_summary["recommendedBatches"][0]["candidate_ids"] == ["IC-test"]
     assert report_paths.table_review_candidates_path.exists()
     assert report_paths.table_review_candidates_path.read_text(encoding="utf-8") == ""

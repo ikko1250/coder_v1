@@ -4,6 +4,8 @@ from pdf_converter.ocr_inspection_candidates import (
     stable_inspection_candidate_id,
 )
 from pdf_converter.ocr_suppressed_candidates import SuppressedCandidateCollector
+from dataclasses import replace
+
 from pdf_converter.python_text_correction_model import InspectionCandidate, InspectionCandidateConfig
 
 
@@ -72,3 +74,93 @@ def test_build_recommended_batches_uses_display_index_and_candidate_ids():
     assert len(batches) == 2
     assert batches[0].display_index_start == 1
     assert batches[0].candidate_ids == (first.candidate_id,)
+
+
+def test_apply_inspection_limits_suppresses_duplicate_extracted_text():
+    collector = SuppressedCandidateCollector(source_document_id="doc", run_id="run")
+    candidate = replace(
+        _candidate(1),
+        markdown_text="同じ注記です。",
+        extracted_text="同じ注記です。\n同じ注記です。",
+        normalized_markdown_text="同じ注記です。",
+        normalized_extracted_text="同じ注記です。 同じ注記です。",
+        extracted_line_range=((0, 1), (0, 2)),
+    )
+
+    kept = apply_inspection_limits(
+        (candidate,),
+        existing_ranges=set(),
+        config=InspectionCandidateConfig(),
+        suppressed_collector=collector,
+    )
+
+    assert kept == ()
+    assert collector.records()[0].suppressed_reason == "duplicate_extracted_text"
+
+
+def test_apply_inspection_limits_keeps_semantic_symbol_diff():
+    collector = SuppressedCandidateCollector(source_document_id="doc", run_id="run")
+    candidate = replace(
+        _candidate(1, score=0.9),
+        markdown_text="· 木南代表取締役社長",
+        extracted_text="・木南代表取締役社長",
+        normalized_markdown_text="· 木南代表取締役社長",
+        normalized_extracted_text="・木南代表取締役社長",
+        inspection_priority="low",
+    )
+
+    kept = apply_inspection_limits(
+        (candidate,),
+        existing_ranges=set(),
+        config=InspectionCandidateConfig(),
+        suppressed_collector=collector,
+    )
+
+    assert len(kept) == 1
+    assert kept[0].inspection_priority == "medium"
+    assert "semantic_symbol_diff" in kept[0].risk_flags
+    assert collector.records() == ()
+
+
+def test_apply_inspection_limits_suppresses_format_symbol_diff():
+    collector = SuppressedCandidateCollector(source_document_id="doc", run_id="run")
+    candidate = replace(
+        _candidate(1, score=0.9),
+        markdown_text="9/9回中(100%)",
+        extracted_text="9/9回中（100%）",
+        normalized_markdown_text="9/9回中(100%)",
+        normalized_extracted_text="9/9回中（100%）",
+    )
+
+    kept = apply_inspection_limits(
+        (candidate,),
+        existing_ranges=set(),
+        config=InspectionCandidateConfig(),
+        suppressed_collector=collector,
+    )
+
+    assert kept == ()
+    assert collector.records()[0].suppressed_reason == "format_symbol_diff"
+
+
+def test_apply_inspection_limits_suppresses_partial_segment_without_guard():
+    collector = SuppressedCandidateCollector(source_document_id="doc", run_id="run")
+    markdown_text = "これは長い段落です。" * 12
+    extracted_text = "これは長い段落です。" * 3
+    candidate = replace(
+        _candidate(1, score=0.5),
+        markdown_text=markdown_text,
+        extracted_text=extracted_text,
+        normalized_markdown_text=markdown_text,
+        normalized_extracted_text=extracted_text,
+    )
+
+    kept = apply_inspection_limits(
+        (candidate,),
+        existing_ranges=set(),
+        config=InspectionCandidateConfig(),
+        suppressed_collector=collector,
+    )
+
+    assert kept == ()
+    assert collector.records()[0].suppressed_reason == "partial_segment_match"
