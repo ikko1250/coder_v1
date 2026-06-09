@@ -15,7 +15,13 @@ from pdf_converter.ocr_block_matcher import (
     match_blocks,
 )
 from pdf_converter.ocr_candidate_deduplicator import deduplicate_review_candidates
+from pdf_converter.ocr_contains_matcher import build_contains_value_inspections
 from pdf_converter.ocr_known_patterns import find_known_ocr_pattern_candidates
+from pdf_converter.ocr_inspection_candidates import (
+    build_match_inspection_candidates,
+    build_recommended_batches,
+    stable_inspection_candidate_id,
+)
 from pdf_converter.ocr_line_matcher import (
     build_correction_candidates,
     low_confidence_ratio,
@@ -30,6 +36,7 @@ from pdf_converter.ocr_paths import (
     resolve_ocr_markdown_path,
     resolve_working_directory,
 )
+from pdf_converter.ocr_suppressed_candidates import SuppressedCandidateCollector
 from pdf_converter.ocr_table_candidates import find_table_review_candidates
 from pdf_converter.pdf_input import PdfValidationError, validate_pdf_path
 from pdf_converter.pdf_text_extractor import PdfTextExtractor, PyMuPdfTextExtractor
@@ -40,6 +47,8 @@ from pdf_converter.pdf_text_normalizer import (
 from pdf_converter.python_text_correction_model import (
     CANDIDATE_KIND_REVIEW,
     CANDIDATE_KIND_TABLE_REVIEW,
+    InspectionCandidate,
+    InspectionCandidateConfig,
     LINE_KIND_BODY,
     LineMatchingConfig,
     MATCH_KIND_AMBIGUOUS,
@@ -65,12 +74,15 @@ def run_python_text_correction(
     extractor: PdfTextExtractor | None = None,
     matching_config: LineMatchingConfig | None = None,
     review_config: ReviewCandidateConfig | None = None,
+    inspection_config: InspectionCandidateConfig | None = None,
     report_output_root: Path | None = None,
 ) -> PythonTextCorrectionResult:
     if matching_config is None:
         matching_config = LineMatchingConfig()
     if review_config is None:
         review_config = ReviewCandidateConfig()
+    if inspection_config is None:
+        inspection_config = InspectionCandidateConfig()
     if extractor is None:
         extractor = PyMuPdfTextExtractor()
 
@@ -166,6 +178,37 @@ def run_python_text_correction(
         candidate for candidate in review_candidates
         if candidate.candidate_kind == CANDIDATE_KIND_TABLE_REVIEW
     )
+    suppressed_collector = SuppressedCandidateCollector(
+        source_document_id=source_document_id,
+        run_id=run_id,
+    )
+    for suppressed_candidate in suppressed_candidates:
+        suppressed_collector.add_legacy(suppressed_candidate)
+    contains_inspections, resolved_contains_matches = build_contains_value_inspections(
+        markdown_lines=markdown_lines,
+        extracted_lines=extracted_lines,
+        source_document_id=source_document_id,
+        run_id=run_id,
+        config=inspection_config,
+    )
+    match_inspections = build_match_inspection_candidates(
+        markdown_lines=markdown_lines,
+        extracted_lines=extracted_lines,
+        line_matches=matches,
+        markdown_blocks=markdown_blocks,
+        extracted_blocks=extracted_blocks,
+        block_matches=block_matches,
+        existing_correction_candidates=candidates,
+        existing_review_candidates=body_review_candidates,
+        existing_table_review_candidates=table_review_candidates,
+        source_document_id=source_document_id,
+        run_id=run_id,
+        config=inspection_config,
+        suppressed_collector=suppressed_collector,
+    )
+    inspection_candidates = _reindex_inspection(contains_inspections + match_inspections)
+    recommended_batches = build_recommended_batches(inspection_candidates)
+    suppressed_candidate_records = suppressed_collector.records()
 
     for line in extracted_lines:
         for warning_code in line.warning_codes:
@@ -201,6 +244,11 @@ def run_python_text_correction(
             review_candidates=body_review_candidates,
             table_review_candidates=table_review_candidates,
             suppressed_candidates=suppressed_candidates,
+            inspection_candidates=inspection_candidates,
+            suppressed_candidate_records=suppressed_candidate_records,
+            suppressed_candidate_event_count=suppressed_collector.event_count,
+            resolved_match_count=len(resolved_contains_matches),
+            recommended_batches=recommended_batches,
         )
     except OSError as exc:
         return _failure(f"Report output failed: {exc}")
@@ -211,7 +259,9 @@ def run_python_text_correction(
         f"comparable_lines={comparable_count}, candidates={len(candidates)}, "
         f"review_candidates={len(body_review_candidates)}, "
         f"table_review_candidates={len(table_review_candidates)}, "
-        f"suppressed_candidates={len(suppressed_candidates)}, warnings={len(warnings)}"
+        f"inspection_candidates={len(inspection_candidates)}, "
+        f"suppressed_candidates={len(suppressed_candidates)}, "
+        f"suppressed_records={len(suppressed_candidate_records)}, warnings={len(warnings)}"
     )
     return PythonTextCorrectionResult(
         ok=True,
@@ -223,6 +273,8 @@ def run_python_text_correction(
         review_candidate_count=len(body_review_candidates),
         table_review_candidate_count=len(table_review_candidates),
         suppressed_candidate_count=len(suppressed_candidates),
+        inspection_candidate_count=len(inspection_candidates),
+        suppressed_candidate_record_count=len(suppressed_candidate_records),
         warning_count=len(warnings),
         low_confidence_ratio=ratio,
     )
@@ -237,6 +289,14 @@ def _reindex_display(candidates: Iterable[ReviewCandidate]) -> tuple[ReviewCandi
         replace(candidate, display_index=index)
         for index, candidate in enumerate(candidates, start=1)
     )
+
+
+def _reindex_inspection(candidates: Iterable[InspectionCandidate]) -> tuple[InspectionCandidate, ...]:
+    reindexed: list[InspectionCandidate] = []
+    for index, candidate in enumerate(candidates, start=1):
+        candidate_id = candidate.candidate_id or stable_inspection_candidate_id(candidate)
+        reindexed.append(replace(candidate, candidate_id=candidate_id, display_index=index))
+    return tuple(reindexed)
 
 
 def _prepare_review_candidates(

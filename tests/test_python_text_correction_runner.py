@@ -1,4 +1,5 @@
 import shutil
+import json
 
 import pdf_converter.ocr_paths as ocr_paths
 from pdf_converter.pdf_text_extractor import FakePdfTextExtractor
@@ -59,7 +60,13 @@ def test_run_python_text_correction_generates_reports(tmp_path):
     assert result.table_review_candidate_count == 0
     assert result.report_paths.review_candidates_path.exists()
     assert result.report_paths.table_review_candidates_path.exists()
+    assert result.report_paths.inspection_candidates_path.exists()
+    assert result.report_paths.suppressed_candidates_path.exists()
+    assert result.report_paths.inspection_summary_json_path.exists()
     assert result.report_paths.candidate_summary_json_path.exists()
+    inspection_summary = json.loads(result.report_paths.inspection_summary_json_path.read_text(encoding="utf-8"))
+    assert inspection_summary["counts"]["inspectionCandidates"] == result.inspection_candidate_count
+    assert inspection_summary["counts"]["suppressedCandidateRecords"] == result.suppressed_candidate_record_count
     assert "table_candidate" in result.report_paths.warnings_path.read_text(encoding="utf-8")
     shutil.rmtree(manual_root, ignore_errors=True)
 
@@ -110,6 +117,8 @@ def test_run_python_text_correction_generates_known_and_table_review_candidates(
     assert result.ok is True
     assert result.review_candidate_count >= 1
     assert result.table_review_candidate_count == 1
+    assert result.report_paths.inspection_candidates_path.exists()
+    assert result.report_paths.suppressed_candidates_path.exists()
     assert "議渡" in result.report_paths.review_candidates_path.read_text(encoding="utf-8")
     assert "新林予約権" in result.report_paths.table_review_candidates_path.read_text(encoding="utf-8")
     shutil.rmtree(manual_root, ignore_errors=True)

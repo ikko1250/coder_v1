@@ -33,6 +33,13 @@ CANDIDATE_KIND_TABLE_REVIEW = "table_review"
 SOURCE_METHOD_BLOCK_NEAR = "block_near"
 SOURCE_METHOD_KNOWN_OCR_PATTERN = "known_ocr_pattern"
 SOURCE_METHOD_NGRAM_DIFF = "ngram_diff"
+SOURCE_METHOD_BLOCK_AMBIGUOUS = "block_ambiguous"
+SOURCE_METHOD_BLOCK_UNMATCHED = "block_unmatched"
+SOURCE_METHOD_CONTAINS_VALUE = "contains_value"
+SOURCE_METHOD_LINE_AMBIGUOUS = "line_ambiguous"
+SOURCE_METHOD_LINE_UNMATCHED = "line_unmatched"
+SOURCE_METHOD_SUPPRESSED_DIFF = "suppressed_diff"
+SOURCE_METHOD_TABLE_CELL_DIFF = "table_cell_diff"
 
 PRIORITY_HIGH = "high"
 PRIORITY_MEDIUM = "medium"
@@ -42,10 +49,23 @@ APPLY_POLICY_NEVER_AUTO_APPLY = "never_auto_apply"
 
 REVIEW_STATUS_UNREVIEWED = "unreviewed"
 
+CLASSIFICATION_STATUS_UNREVIEWED = "unreviewed"
+
+REQUIRED_EVIDENCE_NONE = "none"
+REQUIRED_EVIDENCE_ADJACENT_PAGES = "adjacent_pages"
+REQUIRED_EVIDENCE_FULL_TABLE = "full_table"
+REQUIRED_EVIDENCE_ORIGINAL_PDF = "original_pdf"
+REQUIRED_EVIDENCE_PDF_PAGE_IMAGE = "pdf_page_image"
+
 SUPPRESSED_AMBIGUOUS_ANCHOR = "ambiguous_anchor"
+SUPPRESSED_DUPLICATE = "duplicate"
+SUPPRESSED_LARGE_TABLE_CELL = "large_table_cell"
 SUPPRESSED_LARGE_DIFF = "large_diff"
 SUPPRESSED_LOW_SCORE = "low_score"
+SUPPRESSED_NO_TEXT_CHANGE = "no_text_change"
+SUPPRESSED_NUMERIC_ONLY = "numeric_only"
 SUPPRESSED_TABLE_CONTEXT = "table_context"
+SUPPRESSED_TOO_MANY_INSPECTION_CANDIDATES = "too_many_inspection_candidates"
 SUPPRESSED_TOO_MANY_CANDIDATES_ON_PAGE = "too_many_candidates_on_page"
 SUPPRESSED_WIDTH_OR_SYMBOL_ONLY = "width_or_symbol_only"
 
@@ -149,6 +169,78 @@ class SuppressedCandidate:
 
 
 @dataclass(frozen=True)
+class InspectionCandidate:
+    candidate_id: str
+    display_index: int
+    source_document_id: str
+    run_id: str
+    candidate_kind: str
+    source_method: str
+    inspection_priority: str
+    page_index: int | None
+    markdown_line_range: tuple[int, int]
+    extracted_line_range: tuple[tuple[int, int], ...]
+    markdown_text: str
+    extracted_text: str
+    normalized_markdown_text: str
+    normalized_extracted_text: str
+    diff_preview: str
+    context_before: str
+    context_after: str
+    reason: str
+    score: float
+    risk_flags: tuple[str, ...] = ()
+    suppressed_reason: str | None = None
+    classification_status: str = CLASSIFICATION_STATUS_UNREVIEWED
+    classification_decision: str | None = None
+    reviewer_note: str | None = None
+    apply_policy: str = APPLY_POLICY_NEVER_AUTO_APPLY
+    duplicate_of_candidate_id: str | None = None
+    duplicate_of_candidate_file: str | None = None
+    dedupe_reason: str | None = None
+    required_evidence: str = REQUIRED_EVIDENCE_NONE
+    table_id: str | None = None
+    row_index: int | None = None
+    col_index: int | None = None
+    cell_text: str | None = None
+    cell_context: str | None = None
+    table_detection_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class SuppressedCandidateRecord:
+    record_id: str
+    source_document_id: str
+    run_id: str
+    source_method: str
+    page_index: int | None
+    markdown_line_range: tuple[int, int]
+    extracted_line_range: tuple[tuple[int, int], ...]
+    old_text: str
+    suggested_text: str
+    diff_span: tuple[int, int]
+    suppressed_reason: str
+    score: float
+    risk_flags: tuple[str, ...] = ()
+    promoted_to_inspection: bool = False
+    duplicate_of_candidate_id: str | None = None
+    duplicate_of_candidate_file: str | None = None
+    dedupe_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RecommendedBatch:
+    batch_id: str
+    display_index_start: int
+    display_index_end: int
+    candidate_ids: tuple[str, ...]
+    count: int
+    priority: str
+    source_method: str
+    recommended_assignee: str
+
+
+@dataclass(frozen=True)
 class TextBlock:
     block_id: str
     source: str
@@ -197,6 +289,25 @@ class ReviewCandidateConfig:
 
 
 @dataclass(frozen=True)
+class InspectionCandidateConfig:
+    max_inspection_candidates_total: int = 300
+    max_high_priority_inspection_candidates: int = 200
+    max_inspection_candidates_per_page: int = 40
+    max_inspection_candidates_per_source_method: int = 120
+    min_inspection_score: float = 0.45
+    include_percent_width_diff: bool = False
+    include_whitespace_diff: bool = False
+    include_punctuation_diff: bool = False
+    include_ascii_width_diff: bool = False
+    include_no_text_change_inspection: bool = False
+    max_ambiguous_alternatives: int = 3
+    max_inspection_context_chars: int = 80
+    max_table_inspection_candidates_per_table: int = 20
+    max_table_inspection_candidates_per_page: int = 40
+    numeric_only_suppressed: bool = True
+
+
+@dataclass(frozen=True)
 class PdfTextExtractionMetadata:
     extractor_name: str
     extractor_version: str
@@ -226,8 +337,12 @@ class PythonTextCorrectionReportPaths:
     block_matches_path: Path
     review_candidates_path: Path
     table_review_candidates_path: Path
+    inspection_candidates_path: Path
+    suppressed_candidates_path: Path
     candidate_summary_md_path: Path
     candidate_summary_json_path: Path
+    inspection_summary_md_path: Path
+    inspection_summary_json_path: Path
     warnings_path: Path
 
 
@@ -242,6 +357,8 @@ class PythonTextCorrectionResult:
     review_candidate_count: int = 0
     table_review_candidate_count: int = 0
     suppressed_candidate_count: int = 0
+    inspection_candidate_count: int = 0
+    suppressed_candidate_record_count: int = 0
     warning_count: int = 0
     low_confidence_ratio: float = 0.0
 
