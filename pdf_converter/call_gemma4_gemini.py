@@ -100,6 +100,10 @@ from pdf_converter.ocr_correction import (
 from pdf_converter.project_paths import (
     resolve_dotenv_path,
 )
+from pdf_converter.python_text_correction_runner import (
+    PYTHON_TEXT_CORRECTION_TASK,
+    run_python_text_correction,
+)
 
 
 def load_dotenv(dotenv_path: str | Path) -> None:
@@ -265,6 +269,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  uv run call-gemma4-gemini --task ocr-correct --pdf-path path/to/file.pdf\n"
             "  uv run call-gemma4-gemini --task ocr-correct --pdf-path path/to/file.pdf "
             "--markdown-path path/to/file.md\n"
+            "  uv run call-gemma4-gemini --task python-text-correct --pdf-path path/to/file.pdf "
+            "--markdown-path asset/ocr_manual/md/file.md\n"
             "  uv run call-gemma4-gemini --task ocr-correct --working-dir asset/ocr_manual/work\n"
             "\n"
             "If --pdf-path is omitted, only the text prompt is sent (no PDF).\n"
@@ -300,7 +306,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="markdown_path",
         help=(
             "Optional path to an OCR Markdown file. In OCR correction mode, an explicit value "
-            "overrides PDF-based auto matching. The file must live under asset/texts_2nd/manual/md; "
+            "overrides PDF-based auto matching. The standard location is asset/ocr_manual/md; "
+            "legacy asset/texts_2nd/manual/md is still accepted where existing path helpers allow it. "
             "pdf_converter.py output/ is not auto-connected."
         ),
     )
@@ -327,11 +334,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--task",
         default=DEFAULT_TASK,
-        choices=[DEFAULT_TASK, OCR_CORRECTION_TASK],
+        choices=[DEFAULT_TASK, OCR_CORRECTION_TASK, PYTHON_TEXT_CORRECTION_TASK],
         metavar="TASK",
         help=(
             f"Execution mode (default: {DEFAULT_TASK}). "
-            f"Use {OCR_CORRECTION_TASK} for the OCR Markdown correction flow."
+            f"Use {OCR_CORRECTION_TASK} for the OCR Markdown correction flow. "
+            f"Use {PYTHON_TEXT_CORRECTION_TASK} for local Python PDF text comparison reports."
         ),
     )
     parser.add_argument(
@@ -404,11 +412,46 @@ def main() -> int:
         pass
 
     args = parse_args()
+    if args.task == PYTHON_TEXT_CORRECTION_TASK:
+        return run_python_text_correction_mode(args)
     if not hasattr(args, "effective_api_key_env") or not hasattr(args, "effective_model"):
         args = attach_effective_provider_args(args, sys.argv[1:])
     if args.task == OCR_CORRECTION_TASK:
         return run_ocr_correction_mode(args)
     return run_single_shot_mode(args)
+
+
+def run_python_text_correction_mode(args: argparse.Namespace) -> int:
+    pdf_path = (args.pdf_path or "").strip()
+    if not pdf_path:
+        print("Error: --task python-text-correct requires --pdf-path.", file=sys.stderr)
+        return 1
+
+    result = run_python_text_correction(
+        pdf_path=pdf_path,
+        markdown_path=args.markdown_path,
+        working_dir=args.working_dir,
+    )
+    if not result.ok:
+        print(f"Python PDF text correction error: {result.message}", file=sys.stderr)
+        return 1
+
+    print(result.message)
+    if result.working_markdown_path is not None:
+        print(f"Working Markdown: {result.working_markdown_path}")
+    if result.report_paths is not None:
+        print(f"Manifest: {result.report_paths.manifest_path}")
+        print(f"Warnings: {result.report_paths.warnings_path}")
+        print(f"Candidates: {result.report_paths.correction_candidates_path}")
+        print(f"Review candidates: {result.report_paths.review_candidates_path}")
+        print(f"Table review candidates: {result.report_paths.table_review_candidates_path}")
+        print(f"Candidate summary: {result.report_paths.candidate_summary_md_path}")
+    print(f"Safe candidates: {result.candidate_count}")
+    print(f"Review candidates: {result.review_candidate_count}")
+    print(f"Table review candidates: {result.table_review_candidate_count}")
+    print(f"Suppressed candidates: {result.suppressed_candidate_count}")
+    print(f"Low confidence ratio: {result.low_confidence_ratio:.3f}")
+    return 0
 
 
 def run_single_shot_mode(args: argparse.Namespace) -> int:
